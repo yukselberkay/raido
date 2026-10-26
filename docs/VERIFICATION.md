@@ -25,15 +25,25 @@ Date: 2026-10-18. Host: Linux x86_64. Rust 1.99.1.
 
 The README screenshots (`raido.png`, `raido-c-tiles.png`, `raido-markdown.png`,
 `raido-lsp.png`, `raido-theme-picker.png`, `raido-field-guide.png`,
-`raido-dark-themes.png`) are renders of Raido's real UI in the Visual Studio Dark theme
-(the sheet shows every bundled theme): the app's own draw code fills a ratatui test
-buffer, which is converted to HTML in JetBrainsMono Nerd Font and captured with
-headless Chromium at 2×. Shell panes are real PTYs (`bash --norc` with an `raido $`
-prompt) running `cargo run --example beacon` and the `forge.c` build; the LSP image
-is a live clangd session. No editor contents, terminal output or UI labels are
-fabricated for the images.
+`raido-dark-themes.png`) are renders of Raido's real UI, made by
+`scripts/screenshots.sh`. The scenes in `src/shots.rs` (test-only, ignored in normal
+test runs) drive Raido with keys in a fresh clone of this repository named `raido`,
+wait until Git, the language servers and the terminals have answered, and draw the
+frame with Raido's own draw code into a ratatui test buffer. Each frame is written as
+HTML in JetBrainsMono Nerd Font and photographed by headless Chrome at 2×.
 
-The image shows the AI **launcher**, not an authenticated model response.
+Shell panes are real PTYs (`bash --norc` with a `raido $` prompt) running the
+`beacon` example and the `forge.c` build; the LSP image is a live clangd session on
+a small C file. Only the status-line message of each scene is set, to say what the
+picture shows. No editor contents, terminal output or other UI labels are made up,
+and the AI pane shows the launcher, not a model's answer. Config is read from a
+scratch folder, so your own settings never appear and are never written.
+
+Re-render them after a UI change with `scripts/screenshots.sh` (macOS, with Google
+Chrome, clangd and rust-analyzer installed); `scripts/screenshots.sh lsp` re-renders
+one scene.
+
+The follow-up notes below record how earlier versions of these images were captured.
 
 ## Documentation and C tiling follow-up
 

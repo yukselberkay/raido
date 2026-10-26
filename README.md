@@ -191,7 +191,8 @@ guide. The first build downloads dependencies; subsequent builds reuse Cargo's
 cache. `--locked` uses the versions recorded in `Cargo.lock`.
 
 The executable is `target/release/raido`. No Node.js, browser, or Python runtime
-is needed to run the editor. Screenshot tooling is not part of the application.
+is needed to run the editor. The README screenshots come from `scripts/screenshots.sh`
+(test-only code plus headless Chrome); none of it is part of the application.
 
 ### 3. Run without installing
 

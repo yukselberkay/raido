@@ -19,6 +19,8 @@ mod remote;
 mod review;
 mod search;
 mod session;
+#[cfg(test)]
+mod shots;
 mod skill;
 mod sound;
 mod terminal;
