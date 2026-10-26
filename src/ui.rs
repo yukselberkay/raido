@@ -396,9 +396,20 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 let _ = terminal.resize(inner.height, inner.width);
                 if let Ok(parser) = terminal.parser.lock() {
                     let screen = parser.screen();
+                    // A pane smaller than the terminal's minimum shows the rows
+                    // around the cursor, where the prompt is.
+                    let (height, _) = screen.size();
+                    let (cursor_row, _) = screen.cursor_position();
+                    let top = if height > inner.height {
+                        cursor_row
+                            .saturating_sub(inner.height - 1)
+                            .min(height - inner.height)
+                    } else {
+                        0
+                    };
                     for row in 0..inner.height {
                         for col in 0..inner.width {
-                            if let Some(cell) = screen.cell(row, col) {
+                            if let Some(cell) = screen.cell(row + top, col) {
                                 if cell.is_wide_continuation() {
                                     continue;
                                 }
@@ -424,8 +435,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                         && terminal.exited.is_none()
                     {
                         let (row, col) = screen.cursor_position();
-                        if row < inner.height && col < inner.width {
-                            frame.set_cursor_position((inner.x + col, inner.y + row));
+                        if row >= top && row - top < inner.height && col < inner.width {
+                            frame.set_cursor_position((inner.x + col, inner.y + row - top));
                         }
                     }
                     let back = screen.scrollback();

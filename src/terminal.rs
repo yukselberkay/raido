@@ -119,7 +119,7 @@ impl TerminalPane {
         let writer = Arc::new(Mutex::new(pair.master.take_writer()?));
         // Earlier output (a restored session) goes in before the program starts.
         let mut screen = vt100::Parser::new(24, 80, SCROLLBACK);
-        screen.process(history);
+        guarded(&mut screen, |screen| screen.process(history));
         let bells = screen.screen().audible_bell_count();
         let parser = Arc::new(Mutex::new(screen));
         let dirty = Arc::new(AtomicBool::new(true));
@@ -141,14 +141,18 @@ impl TerminalPane {
                         let replies = if let Ok(mut parser) = parser_clone.lock() {
                             // Process in stream order so cursor reports describe the query location.
                             let mut replies = Vec::new();
-                            for byte in &bytes[..count] {
-                                parser.process(&[*byte]);
-                                if let Some(reply) =
-                                    queries.feed(*byte, parser.screen().cursor_position(), colors)
-                                {
-                                    replies.extend_from_slice(reply.as_bytes());
+                            guarded(&mut parser, |parser| {
+                                for byte in &bytes[..count] {
+                                    parser.process(&[*byte]);
+                                    if let Some(reply) = queries.feed(
+                                        *byte,
+                                        parser.screen().cursor_position(),
+                                        colors,
+                                    ) {
+                                        replies.extend_from_slice(reply.as_bytes());
+                                    }
                                 }
-                            }
+                            });
                             replies
                         } else {
                             break;
@@ -243,8 +247,11 @@ impl TerminalPane {
     pub fn set_theme(&mut self, theme: &Theme) {
         *self.colors.lock().unwrap_or_else(|e| e.into_inner()) = terminal_colors(theme);
     }
+    /// Resize to the pane's inside. The terminal itself never gets smaller than
+    /// [`MIN_ROWS`] × [`MIN_COLS`] (vt100 trips over itself below that); a pane
+    /// drawn smaller shows the part around the cursor.
     pub fn resize(&mut self, rows: u16, cols: u16) -> Result<()> {
-        let size = (rows.max(1), cols.max(1));
+        let size = (rows.max(MIN_ROWS), cols.max(MIN_COLS));
         if self.size != size {
             // Reflow before the PTY resize so the program's SIGWINCH redraw lands on
             // the new layout.
@@ -462,13 +469,53 @@ fn owns_scrolling(screen: &vt100::Screen) -> bool {
 /// redraw themselves on SIGWINCH, so they keep the plain resize.
 fn reflow(parser: &mut vt100::Parser, rows: u16, cols: u16) {
     if parser.screen().alternate_screen() {
-        parser.set_size(rows, cols);
+        if !guarded(parser, |parser| parser.set_size(rows, cols)) {
+            *parser = vt100::Parser::new(rows, cols, SCROLLBACK);
+        }
         return;
     }
     let replay = replay(parser, true);
     let mut fresh = vt100::Parser::new(rows, cols, SCROLLBACK);
-    fresh.process(&replay);
+    guarded(&mut fresh, |fresh| fresh.process(&replay));
     *parser = fresh;
+}
+
+/// The smallest terminal a pane gets: vt100 0.15 panics on ordinary output (a line
+/// wrapping, a shell prompt) in terminals of one row or a few columns.
+pub const MIN_ROWS: u16 = 3;
+pub const MIN_COLS: u16 = 10;
+
+thread_local! {
+    /// A guarded vt100 call is running on this thread: its panic is expected.
+    static GUARDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` on a pane's parser. vt100 0.15 can panic on some output (a cursor left
+/// outside a shrunken screen); then this pane's screen starts afresh at the same
+/// size, and the program draws on it again, instead of Odin crashing. Returns
+/// whether `f` finished. The panic stays inside the lock, so it isn't poisoned.
+fn guarded(parser: &mut vt100::Parser, f: impl FnOnce(&mut vt100::Parser)) -> bool {
+    GUARDED.with(|g| g.set(true));
+    let finished =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&mut *parser))).is_ok();
+    GUARDED.with(|g| g.set(false));
+    if !finished {
+        let (rows, cols) = parser.screen().size();
+        *parser = vt100::Parser::new(rows.max(1), cols.max(1), SCROLLBACK);
+    }
+    finished
+}
+
+/// Keep a guarded vt100 panic quiet: no message over the screen, and the panic
+/// handler installed before (which restores your terminal and quits) doesn't run.
+/// Install after that handler.
+pub fn quiet_parser_panics() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if !GUARDED.with(|g| g.get()) {
+            previous(info);
+        }
+    }));
 }
 
 /// The screen and scrollback as a byte stream that redraws them in any parser:
@@ -743,6 +790,79 @@ pub fn encode_key(key: KeyEvent, application: bool) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tiny_panes_and_odd_output_never_crash_odin() {
+        quiet_parser_panics();
+        // Shell prompts, wide text, full-screen programs, scroll regions and cursor
+        // jumps, mixed with resizes down to one cell: what crashed vt100 0.15.
+        let pieces: &[&[u8]] = &[
+            "➜  helios git:(dev) ✗ ".as_bytes(),
+            "日本語🎉".as_bytes(),
+            b"text text text ",
+            b"\r\n",
+            b"\x1b[?1049h",
+            b"\x1b[?1049l",
+            b"\x1b[20;70H",
+            b"\x1b[2;5r",
+            b"\x1b[r",
+            b"\x1b[2J",
+            b"\x1b[5A",
+            b"\x1b[999C",
+            b"\x1b[L",
+            b"\x1b[M",
+            b"\x1b7",
+            b"\x1b8",
+            b"\x1bM",
+            b"\t",
+            b"\x1b[4h",
+            b"\x1b[1;24r",
+            b"\x1b[24;1H",
+            b"\x1b[@",
+            b"\x1b[S",
+        ];
+        let mut seed: u64 = 12345;
+        let mut next = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as usize
+        };
+        for _ in 0..3000 {
+            let mut parser = vt100::Parser::new(24, 80, SCROLLBACK);
+            for _ in 0..12 {
+                match next(3) {
+                    0 => reflow(&mut parser, 1 + next(5) as u16, 1 + next(8) as u16),
+                    1 => reflow(&mut parser, 24, 80),
+                    _ => {
+                        let piece = pieces[next(pieces.len())];
+                        guarded(&mut parser, |p| p.process(piece));
+                    }
+                }
+            }
+            // Still a working screen afterwards.
+            guarded(&mut parser, |p| p.process(b"ok"));
+            let _ = parser.screen().contents();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pane_smaller_than_the_minimum_keeps_a_usable_terminal() {
+        let mut pane = TerminalPane::spawn(
+            "/bin/sh",
+            &["-c".into(), "exec sleep 30".into()],
+            &[],
+            Path::new("."),
+            "sh",
+            &Theme::default(),
+            b"",
+        )
+        .unwrap();
+        pane.resize(1, 1).unwrap();
+        let size = pane.parser.lock().unwrap().screen().size();
+        assert_eq!(size, (MIN_ROWS, MIN_COLS));
+    }
+
     #[test]
     fn key_encoding_preserves_cli_controls() {
         assert_eq!(

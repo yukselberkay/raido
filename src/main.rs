@@ -212,6 +212,8 @@ fn main() -> Result<()> {
         );
         old_hook(info);
     }));
+    // A terminal pane whose screen vt100 can't handle starts afresh instead.
+    terminal::quiet_parser_panics();
     enable_raw_mode()?;
     let _guard = TerminalGuard;
     execute!(
