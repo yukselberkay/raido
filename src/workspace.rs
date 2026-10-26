@@ -526,7 +526,12 @@ mod tests {
         let root = dir.path();
         let run = |args: &[&str]| {
             let ok = Command::new("git")
-                .args(["-c", "user.name=Odin", "-c", "user.email=odin@example.com"])
+                .args([
+                    "-c",
+                    "user.name=Raido",
+                    "-c",
+                    "user.email=raido@example.com",
+                ])
                 .arg("-C")
                 .arg(root)
                 .args(args)

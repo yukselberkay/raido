@@ -1,37 +1,37 @@
-# Odin dark themes
+# Raido dark themes
 
 Eleven coordinated, built-in dark palettes, plus any theme you drop into your
-themes directory (Odin TOML or VS Code JSON — no rebuild), for editor panes, the sidebar, Git view,
-AI launcher, syntax highlighting, and embedded terminals. Phosphor remains Odin's
+themes directory (Raido TOML or VS Code JSON — no rebuild), for editor panes, the sidebar, Git view,
+AI launcher, syntax highlighting, and embedded terminals. Phosphor remains Raido's
 default; Amber and the external Ice example remain compatible.
 
-[Compare the themes in the live UI preview](../docs/odin-dark-themes.png).
-The preview shows actual Odin terminal output with C, Rust, and a running shell.
+[Compare the themes in the live UI preview](../docs/raido-dark-themes.png).
+The preview shows actual Raido terminal output with C, Rust, and a running shell.
 
 ## Select a theme
 
-Build/install the updated Odin from the repository root:
+Build/install the updated Raido from the repository root:
 
 ```sh
 cargo install --path . --locked --force
-odin .
+raido .
 ```
 
 Press **Esc** in an editor, type `:theme visual-studio-dark`, and press **Enter**.
-In an embedded terminal or AI pane, use **Ctrl-b**, then **:** to enter Odin's
+In an embedded terminal or AI pane, use **Ctrl-b**, then **:** to enter Raido's
 command prompt; type `theme visual-studio-dark` without a leading colon.
 Switching themes does not restart shells, close panes, or modify buffers.
 
 The choice persists: `:theme` saves `theme = "visual-studio-dark"` as the top-level
-line of `~/.config/odin/config.toml` (or `$XDG_CONFIG_HOME/odin/config.toml`),
+line of `~/.config/raido/config.toml` (or `$XDG_CONFIG_HOME/raido/config.toml`),
 creating the file if needed and changing nothing else in it.
 
 ## Catalogue and inspiration
 
-These are Odin-specific adaptations of familiar palette families, not official
+These are Raido-specific adaptations of familiar palette families, not official
 ports or pixel-identical reproductions. Syntax uses TextMate scopes, not an LSP's
 semantic tokens. Some muted/comment colors are lightened for terminal readability.
-Names identify their inspiration; Odin is not affiliated with the original projects.
+Names identify their inspiration; Raido is not affiliated with the original projects.
 
 | Built-in name / editable source | Inspiration | Background | Accent |
 | --- | --- | --- | --- |
@@ -52,18 +52,18 @@ Names identify their inspiration; Odin is not affiliated with the original proje
 Copy a palette under a **new** name, for example:
 
 ```sh
-mkdir -p "$HOME/.config/odin/themes"
-cp -i themes/dracula.toml "$HOME/.config/odin/themes/my-night.toml"
+mkdir -p "$HOME/.config/raido/themes"
+cp -i themes/dracula.toml "$HOME/.config/raido/themes/my-night.toml"
 ```
 
 Edit that file, then run `:theme my-night`. Use your XDG directory instead if set.
-While a theme file is active, saving it re-themes Odin within two seconds.
+While a theme file is active, saving it re-themes Raido within two seconds.
 A user file with a built-in name (e.g. `dracula.toml`) **overrides** the bundled
 theme. Files in the current project are never automatically loaded.
 
 ### Omarchy themes
 
-On Omarchy, Odin reads each theme's `colors.toml` from `~/.config/omarchy/themes/`
+On Omarchy, Raido reads each theme's `colors.toml` from `~/.config/omarchy/themes/`
 (preferred) and the system install (`$OMARCHY_PATH/themes`, `/usr/share/omarchy/themes`).
 They are listed as `omarchy-<name>`; `omarchy` tracks the active desktop theme
 (`~/.local/state/omarchy/current/theme`) and reloads when it changes. Mapping:
@@ -75,8 +75,8 @@ named and `bright_*` colors fill the terminal's 16 ANSI colors.
 ### VS Code themes
 
 Any VS Code color theme works as a plugin: save its `.json` as
-`~/.config/odin/themes/<name>.json` and run `:theme <name>`. Comments and trailing
-commas are accepted. Odin reads `editor.background`/`foreground`, `focusBorder`
+`~/.config/raido/themes/<name>.json` and run `:theme <name>`. Comments and trailing
+commas are accepted. Raido reads `editor.background`/`foreground`, `focusBorder`
 (accent), `textLink.foreground`, `descriptionForeground`, borders, the line
 highlight, `editorLineNumber.foreground`, `terminal.ansi*` (VS Code defaults fill
 gaps) and resolves `tokenColors` with TextMate specificity for comments, keywords,
@@ -119,5 +119,5 @@ queries may need a redraw or restart after a theme change.
 
 Legacy themes without `ansi` retain the host terminal's indexed-color behavior.
 Use a truecolor-capable terminal with `COLORTERM=truecolor` for the intended look.
-If `NO_COLOR` is inherited, run `env -u NO_COLOR odin .` to opt into colors for
+If `NO_COLOR` is inherited, run `env -u NO_COLOR raido .` to opt into colors for
 that launch. No extra runtime packages or model/API calls are needed.

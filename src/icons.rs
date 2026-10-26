@@ -247,7 +247,7 @@ mod tests {
             "only font files count"
         );
         assert!(!font_installed(""));
-        assert!(!font_installed("No Such Font Odin Test"));
+        assert!(!font_installed("No Such Font Raido Test"));
     }
 
     #[test]

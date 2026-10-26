@@ -1,12 +1,12 @@
 ---
 title: Markdown tour
-purpose: Exercise every construct Odin's preview renders
+purpose: Exercise every construct Raido's preview renders
 ---
 
 # Markdown tour
 
-This file exercises **every construct** Odin's Markdown preview renders. Open it
-with `odin examples/markdown-tour.md`, scroll with `j`/`k`, jump between headings
+This file exercises **every construct** Raido's Markdown preview renders. Open it
+with `raido examples/markdown-tour.md`, scroll with `j`/`k`, jump between headings
 with `]` and `[`, and press `e` to see the source of whatever you are reading.
 
 ## Inline formatting
@@ -155,7 +155,7 @@ Shell, then a fence with no language:
 
 ```sh
 cargo install --path . --locked --force
-odin examples/markdown-tour.md
+raido examples/markdown-tour.md
 ```
 
 ```
@@ -197,10 +197,10 @@ A table too wide for narrow panes shrinks its widest columns and truncates cells
 
 ## Images and HTML
 
-![Odin running with Rust source, an AI launcher, shell, and Git tree](../docs/odin.png)
+![Raido running with Rust source, an AI launcher, shell, and Git tree](../docs/raido.png)
 
 <p align="center">
-  <img src="../docs/odin.png" alt="Centered logo from an HTML block">
+  <img src="../docs/raido.png" alt="Centered logo from an HTML block">
 </p>
 
 <!-- This HTML comment should not appear in the preview. -->
@@ -209,7 +209,7 @@ Inline HTML tags such as <kbd>Ctrl</kbd>+<kbd>S</kbd> keep their text, and a<br>
 
 ## Footnotes
 
-Odin renders footnote references[^speed] and their definitions[^long].
+Raido renders footnote references[^speed] and their definitions[^long].
 
 [^speed]: Rendering is cached and redone only when the text or pane width changes.
 [^long]: A longer footnote that wraps onto a second line to check that its

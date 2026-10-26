@@ -1,4 +1,4 @@
-//! The sound Odin plays when an AI pane finishes a prompt (config `ai_sound`).
+//! The sound Raido plays when an AI pane finishes a prompt (config `ai_sound`).
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -96,9 +96,9 @@ fn players(file: &Path) -> Vec<Command> {
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                "(New-Object Media.SoundPlayer $env:ODIN_SOUND).PlaySync()",
+                "(New-Object Media.SoundPlayer $env:RAIDO_SOUND).PlaySync()",
             ])
-            .env("ODIN_SOUND", file);
+            .env("RAIDO_SOUND", file);
         vec![command]
     } else {
         vec![

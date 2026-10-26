@@ -946,12 +946,12 @@ mod tests {
 
     #[test]
     fn renders_common_markdown_blocks() {
-        let source = "# Odin\n\nSome **bold** and `code` with [a link](https://example.com).\n\n\
+        let source = "# Raido\n\nSome **bold** and `code` with [a link](https://example.com).\n\n\
 ## Lists\n\n- one\n  - nested\n- [x] done\n- [ ] todo\n\n1. first\n2. second\n\n\
 > quoted\n\n> [!WARNING]\n> careful\n\n```rust\nfn main() {}\n```\n\n---\n\n\
 | Name | Size |\n|:-----|-----:|\n| a | 1 |\n";
         let (doc, text) = render_plain(source, 60);
-        assert_eq!(text[0], " Odin ");
+        assert_eq!(text[0], " Raido ");
         assert!(text
             .iter()
             .any(|l| l.contains("bold") && l.contains("(example.com)")));

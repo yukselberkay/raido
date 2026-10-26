@@ -1,11 +1,11 @@
 //! Review what AI agents change, like VS Code's chat edits. While AI panes are open,
-//! Odin snapshots the project with Git into its own index and object store (your
+//! Raido snapshots the project with Git into its own index and object store (your
 //! repository, index and stash are never written): every couple of seconds while
 //! an agent works, every few seconds while they wait. A file that changes between
 //! two snapshots while an agent worked is remembered as it was before, so the review
 //! shows everything the agents changed since you last looked, and each change can be
 //! kept or undone: one hunk, one file or all. Files that change while no agent
-//! works, or that you save from Odin's editor, are yours and stay out of it.
+//! works, or that you save from Raido's editor, are yours and stay out of it.
 use similar::{capture_diff_slices_deadline, group_diff_ops, Algorithm};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -36,15 +36,15 @@ const MAX_TEXT: usize = 2 * 1024 * 1024;
 const CONTEXT: usize = 3;
 /// A snapshot of a large project gets this long.
 const TIMEOUT: Duration = Duration::from_secs(30);
-/// Stores left behind by an Odin that didn't quit cleanly are cleared after this.
+/// Stores left behind by a Raido that didn't quit cleanly are cleared after this.
 const STALE: Duration = Duration::from_secs(7 * 24 * 3600);
 
-/// Git, pointed at the project but with Odin's own index and object store. Objects
+/// Git, pointed at the project but with Raido's own index and object store. Objects
 /// the repository already has are read from it (an alternate), never written to it.
 struct Store {
     /// The repository's top level: Git's paths are relative to it.
     top: PathBuf,
-    /// Odin's project folder, `top` or inside it.
+    /// Raido's project folder, `top` or inside it.
     root: PathBuf,
     dir: PathBuf,
     /// The repository's own object store.
@@ -119,13 +119,20 @@ impl Store {
     /// Every file of the project as it is now (`.gitignore` applies), as a tree.
     fn snapshot(&self) -> Result<String, String> {
         let take = || {
-            // Only Odin uses this index, one snapshot at a time: a lock is left over
+            // Only Raido uses this index, one snapshot at a time: a lock is left over
             // from a git that took too long and was stopped.
             let _ = fs::remove_file(self.dir.join("index.lock"));
             // A file that can't be read is left as it was; the rest still counts.
             let _ = self.git(
                 &self.root,
-                &["add", "-A", "--ignore-errors", "--", ".", ":(exclude).odin"],
+                &[
+                    "add",
+                    "-A",
+                    "--ignore-errors",
+                    "--",
+                    ".",
+                    ":(exclude).raido",
+                ],
                 None,
             );
             self.git(&self.top, &["write-tree"], None)
@@ -272,7 +279,7 @@ fn run(command: &mut Command, input: Option<&[u8]>) -> Result<Vec<u8>, String> {
     }
 }
 
-/// Remove stores of other Odins that are long gone.
+/// Remove stores of other Raidos that are long gone.
 fn clear_stale(dir: &Path) {
     let Some(parent) = dir.parent() else {
         return;
@@ -361,7 +368,7 @@ pub enum Body {
 pub struct FileDiff {
     /// Git's path, relative to the repository's top level.
     pub path: String,
-    /// The path shown: relative to Odin's project folder.
+    /// The path shown: relative to Raido's project folder.
     pub name: String,
     pub absolute: PathBuf,
     pub status: Status,
@@ -514,7 +521,7 @@ fn diffs(store: &Store, pending: &BTreeMap<String, Base>) -> Result<Vec<FileDiff
 struct Outcome {
     store: Arc<Store>,
     tree: String,
-    /// Files that changed since the last snapshot (not counting Odin's own writes),
+    /// Files that changed since the last snapshot (not counting Raido's own writes),
     /// as they were before; whose they are is decided when it's back.
     changed: Vec<(String, Base)>,
     /// The diff of every file under review, the ones above included.
@@ -527,7 +534,7 @@ struct Job {
     dir: PathBuf,
     from: Option<String>,
     pending: BTreeMap<String, Base>,
-    /// Files Odin wrote itself (saved, undone), by their fingerprint.
+    /// Files Raido wrote itself (saved, undone), by their fingerprint.
     written: HashMap<String, Option<u64>>,
 }
 
@@ -620,7 +627,7 @@ impl Changes {
             .map(|d| d.cache_dir().to_path_buf())
             .unwrap_or_else(std::env::temp_dir);
         let dir = base
-            .join("odin")
+            .join("raido")
             .join("changes")
             .join(std::process::id().to_string());
         Self::with_store(root, dir)
@@ -791,7 +798,7 @@ impl Changes {
         Some(path.to_string_lossy().replace('\\', "/"))
     }
 
-    /// Odin saved `absolute`: that change is yours, even while an agent works.
+    /// Raido saved `absolute`: that change is yours, even while an agent works.
     pub fn saved(&mut self, absolute: &Path) {
         if let Some(path) = self.relative(absolute) {
             if !self.pending.contains_key(&path) {
@@ -1200,7 +1207,12 @@ mod tests {
 
     fn git(root: &Path, args: &[&str]) {
         let ok = Command::new("git")
-            .args(["-c", "user.name=Odin", "-c", "user.email=odin@example.com"])
+            .args([
+                "-c",
+                "user.name=Raido",
+                "-c",
+                "user.email=raido@example.com",
+            ])
             .args(["-c", "commit.gpgsign=false"])
             .current_dir(root)
             .args(args)
@@ -1334,10 +1346,10 @@ mod tests {
     }
 
     #[test]
-    fn saving_from_odin_while_an_agent_works_stays_yours() {
+    fn saving_from_raido_while_an_agent_works_stays_yours() {
         let (_dir, root, mut changes) = project();
         turn(&mut changes, "Claude", |changes| {
-            fs::write(root.join("mine.txt"), "saved in odin\n").unwrap();
+            fs::write(root.join("mine.txt"), "saved in raido\n").unwrap();
             changes.saved(&root.join("mine.txt"));
             fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
         });
@@ -1391,7 +1403,7 @@ mod tests {
         assert!(changes.files.is_empty());
         assert!(root.join("new.txt").exists());
 
-        // Odin's own undo, seen by the next snapshot, isn't the agent's change.
+        // Raido's own undo, seen by the next snapshot, isn't the agent's change.
         changes.last = Instant::now() - BUSY;
         let busy = vec!["Codex".to_string()];
         changes.tick(&busy, true, false);

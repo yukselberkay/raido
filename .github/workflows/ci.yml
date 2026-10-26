@@ -19,4 +19,4 @@ jobs:
       - run: cargo build --locked --release
       # The smoke test drives a Unix pseudo-terminal.
       - if: runner.os != 'Windows'
-        run: python3 scripts/pty_smoke.py target/release/odin
+        run: python3 scripts/pty_smoke.py target/release/raido

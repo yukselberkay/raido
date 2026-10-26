@@ -131,23 +131,23 @@ pub struct Config {
     pub show_hidden: bool,
     /// Open the Git pane (branches and commit graph) at startup.
     pub git_pane: bool,
-    /// Save each project's panes, buffers and terminals to `.odin/` and reopen them.
+    /// Save each project's panes, buffers and terminals to `.raido/` and reopen them.
     pub restore_session: bool,
-    /// Font for Odin's terminal window while Odin runs; `""` keeps the terminal's.
+    /// Font for Raido's terminal window while Raido runs; `""` keeps the terminal's.
     /// Applied in Terminal.app when installed (see `textsize::WindowFont`).
     pub font: String,
     /// Font size in points, with `font`.
     pub font_size: f32,
     /// Where new AI panes open: "right" (side by side) or "below" (stacked).
     pub ai_split: String,
-    /// Install the Odin skill (interactive docs) for AI agents when one is launched.
+    /// Install the Raido skill (interactive docs) for AI agents when one is launched.
     pub ai_skill: bool,
     /// Sound when an AI pane finishes a prompt: "default", "off", "bell", a macOS
     /// sound name ("Glass", "Hero"…) or a sound file (see `sound::play`).
     pub ai_sound: String,
     /// Track the files AI panes change, to review, keep or undo (Ctrl-b v).
     pub review_changes: bool,
-    /// Mouse wheel scrolls what's under the pointer and a click focuses it. Odin then
+    /// Mouse wheel scrolls what's under the pointer and a click focuses it. Raido then
     /// owns the mouse: copy view (Ctrl-b Z) gives it back for selecting text.
     pub mouse: bool,
     /// Your own AI launchers: `[ai.<name>] program = "…" args = […] env = {…}`.
@@ -233,14 +233,27 @@ impl<'de> Deserialize<'de> for Icons {
 pub fn config_dir() -> PathBuf {
     // XDG on Linux and macOS, %APPDATA% on Windows. Config is user-owned, never
     // project-owned.
-    crate::platform::config_base().join("odin")
+    crate::platform::config_base().join("raido")
+}
+
+/// Raido was called Odin: its config folder (settings, themes) moves to the new
+/// name the first time Raido starts.
+pub fn adopt_odin_config() {
+    adopt_odin(&crate::platform::config_base().join("odin"), &config_dir());
+}
+
+/// Move Odin's `old` folder to `new` when there's no `new` yet. Only a folder with
+/// Odin's files (`config.toml`, `themes/`) moves, never someone else's `odin`.
+fn adopt_odin(old: &Path, new: &Path) -> bool {
+    let odins = old.join("config.toml").is_file() || old.join("themes").is_dir();
+    odins && !new.exists() && fs::rename(old, new).is_ok()
 }
 
 impl Config {
     pub fn load() -> Result<Self> {
         let path = config_dir().join("config.toml");
         let mut config: Self = if path.exists() {
-            toml::from_str(&fs::read_to_string(&path)?).context("Invalid Odin config")?
+            toml::from_str(&fs::read_to_string(&path)?).context("Invalid Raido config")?
         } else {
             Self::default()
         };
@@ -295,7 +308,7 @@ fn save_theme_in(path: &Path, name: &str) -> Result<()> {
     }
     let mut text = lines.join("\n");
     text.push('\n');
-    // Never write a config Odin itself could not load back.
+    // Never write a config Raido itself could not load back.
     let check: Config = toml::from_str(&text).context("Config would become invalid")?;
     if check.theme != name {
         bail!("Could not update the theme setting in {}", path.display());
@@ -377,7 +390,7 @@ pub fn available_themes() -> Vec<String> {
 }
 
 /// Load a theme. Files in the user themes directory win over built-ins, so any
-/// theme can be added or customized without rebuilding Odin.
+/// theme can be added or customized without rebuilding Raido.
 pub fn load_theme(name: &str) -> Result<Theme> {
     load_theme_from(name, Some(&themes_dir()))
 }
@@ -486,7 +499,7 @@ mod tests {
     #[test]
     fn saving_a_theme_edits_only_the_theme_line() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("odin/config.toml");
+        let path = dir.path().join("raido/config.toml");
         save_theme_in(&path, "dracula").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "theme = \"dracula\"\n");
         let original = "# my settings\ntab_width = 2\ntheme = \"nord\" # old\n\n[plugins.test]\nprogram = \"cargo\"\n";
@@ -565,5 +578,22 @@ mod tests {
         assert!(validate_theme(&theme).is_err());
         assert!(toml::from_str::<Theme>("ansi = ['#000000']").is_err());
         assert!(toml::from_str::<Theme>("[syntax_colors]\ncomment = '#000000'").is_err());
+    }
+
+    #[test]
+    fn odins_config_folder_moves_to_raido_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (old, new) = (dir.path().join("odin"), dir.path().join("raido"));
+        fs::create_dir_all(old.join("themes")).unwrap();
+        fs::write(old.join("config.toml"), "theme = \"nord\"\n").unwrap();
+        assert!(adopt_odin(&old, &new));
+        assert!(new.join("config.toml").is_file() && new.join("themes").is_dir());
+        assert!(!old.exists());
+        // An unrelated `odin` folder, or one when Raido's exists, is left alone.
+        fs::create_dir_all(old.join("cache")).unwrap();
+        assert!(!adopt_odin(&old, &new));
+        fs::write(old.join("config.toml"), "").unwrap();
+        assert!(!adopt_odin(&old, &new));
+        assert!(old.exists());
     }
 }

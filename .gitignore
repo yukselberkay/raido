@@ -6,7 +6,7 @@
 **/*.rs.bk
 # Windows debug symbols.
 *.pdb
-# Cargo.lock is committed on purpose: Odin is a binary, and `--locked`
+# Cargo.lock is committed on purpose: Raido is a binary, and `--locked`
 # builds must reproduce the exact dependency versions.
 
 # ── Profiling, coverage and test leftovers ─────────────────────

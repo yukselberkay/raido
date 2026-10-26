@@ -83,7 +83,7 @@ pub fn local(
     bail!("No local LLM found · {HELP}")
 }
 
-/// Model names from `ollama list`, bounded so a stuck server cannot freeze Odin.
+/// Model names from `ollama list`, bounded so a stuck server cannot freeze Raido.
 pub fn ollama_models() -> Result<Vec<String>> {
     let mut child = Command::new("ollama")
         .arg("list")

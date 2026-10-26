@@ -100,7 +100,7 @@ struct Language {
     id: &'static str,
 }
 
-/// The language key (`go`, `rust`, `python`, `c`) of a file Odin has a server for.
+/// The language key (`go`, `rust`, `python`, `c`) of a file Raido has a server for.
 pub fn language_key(path: &Path) -> Option<&'static str> {
     language(path).map(|l| l.key)
 }
@@ -456,7 +456,7 @@ impl Lsp {
                     .unwrap_or_else(|| "workspace".into());
                 let params = json!({
                     "processId": std::process::id(),
-                    "clientInfo": { "name": "odin", "version": env!("CARGO_PKG_VERSION") },
+                    "clientInfo": { "name": "raido", "version": env!("CARGO_PKG_VERSION") },
                     "rootUri": root,
                     "rootPath": self.root,
                     "workspaceFolders": [{ "uri": root, "name": name }],

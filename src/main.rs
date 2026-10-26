@@ -43,7 +43,7 @@ use std::{
 
 /// Point the terminal's own default background/foreground (OSC 11/10) at the theme,
 /// so a light terminal profile can't show through the window padding or any cell
-/// Odin leaves at the default color. Terminals without OSC 10/11 ignore it.
+/// Raido leaves at the default color. Terminals without OSC 10/11 ignore it.
 fn set_terminal_colors(theme: &config::Theme) -> io::Result<()> {
     let hex = |value: &str| match config::color(value) {
         ratatui::style::Color::Rgb(r, g, b) => Some(format!("#{r:02x}{g:02x}{b:02x}")),
@@ -92,11 +92,11 @@ fn main() -> Result<()> {
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "-h" | "--help" => {
-                println!("Odin — all systems in view\n\nUsage: odin [FILE|DIRECTORY] [--demo] [--fresh]\n\n  --demo     Open an editor, AI launcher and shell\n  --fresh    Start without reopening the project's last session\n  --nested   Inside an Odin terminal, start a separate Odin instead of opening FILE there\n  --install-skill  Teach your AI agents about Odin (Agent Skills; also automatic)\n  --remove-skill   Remove that skill again\n  --keys     Show the keys your terminal sends to Odin (to check shortcuts)\n  --version  Print version\n\nKeys: F1 help · Ctrl-e files · Ctrl-b panes · Ctrl-s save · Ctrl-q quit\nConfig: {}",config::config_dir().display());
+                println!("Raido — all systems in view\n\nUsage: raido [FILE|DIRECTORY] [--demo] [--fresh]\n\n  --demo     Open an editor, AI launcher and shell\n  --fresh    Start without reopening the project's last session\n  --nested   Inside a Raido terminal, start a separate Raido instead of opening FILE there\n  --install-skill  Teach your AI agents about Raido (Agent Skills; also automatic)\n  --remove-skill   Remove that skill again\n  --keys     Show the keys your terminal sends to Raido (to check shortcuts)\n  --version  Print version\n\nKeys: F1 help · Ctrl-e files · Ctrl-b panes · Ctrl-s save · Ctrl-q quit\nConfig: {}",config::config_dir().display());
                 return Ok(());
             }
             "-V" | "--version" => {
-                println!("odin {}", env!("CARGO_PKG_VERSION"));
+                println!("raido {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());
             }
             "--demo" => demo = true,
@@ -105,13 +105,13 @@ fn main() -> Result<()> {
                     println!("{}", place.display());
                 }
                 println!(
-                    "Odin skill installed for your AI agents (from {})",
+                    "Raido skill installed for your AI agents (from {})",
                     skill::source().display()
                 );
                 return Ok(());
             }
             "--remove-skill" => {
-                println!("Removed the Odin skill from {} place(s)", skill::remove()?);
+                println!("Removed the Raido skill from {} place(s)", skill::remove()?);
                 return Ok(());
             }
             "--keys" => return show_keys(),
@@ -127,7 +127,7 @@ fn main() -> Result<()> {
         }
     }
     let cwd = std::env::current_dir()?;
-    // Typed in one of Odin's own terminals: open it in that Odin, don't nest one.
+    // Typed in one of Raido's own terminals: open it in that Raido, don't nest one.
     if let (Some(socket), false) = (std::env::var_os(remote::VAR), nested || demo) {
         let target = match &path {
             Some(p) if p.is_absolute() => p.clone(),
@@ -140,12 +140,12 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             Ok(remote::Reply::Failed(error)) => bail!("{error}"),
-            // Another project, or that Odin is gone: start here as usual.
+            // Another project, or that Raido is gone: start here as usual.
             Ok(remote::Reply::Elsewhere) | Err(_) => {}
         }
     }
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        bail!("Odin needs an interactive terminal. Run `odin` in your terminal.");
+        bail!("Raido needs an interactive terminal. Run `raido` in your terminal.");
     }
     let path = path
         .map(|p| if p.is_absolute() { p } else { cwd.join(p) })
@@ -175,9 +175,11 @@ fn main() -> Result<()> {
             .to_path_buf();
         (root, Some(path))
     };
+    // Settings and themes saved under Raido's old name, Odin, carry over.
+    config::adopt_odin_config();
     // A saved session reopens first; a file named on the command line opens on top.
     let restore = !demo && !fresh;
-    // Listen before any terminal pane starts, so every pane knows where Odin is.
+    // Listen before any terminal pane starts, so every pane knows where Raido is.
     let server = remote::listen().ok();
     let mut app = app::App::new(root, if restore { None } else { initial.clone() }, demo)?;
     app.remote = server;
@@ -187,8 +189,8 @@ fn main() -> Result<()> {
             app.open(path)?;
         }
     }
-    // Keep the Odin skill current for the AI agents installed here (Claude Code or
-    // Codex installed after Odin, or a newer Odin), without waiting for Odin's
+    // Keep the Raido skill current for the AI agents installed here (Claude Code or
+    // Codex installed after Raido, or a newer Raido), without waiting for Raido's
     // launcher. Machines without an agent are left alone.
     if app.config.ai_skill {
         std::thread::spawn(|| {
@@ -197,7 +199,7 @@ fn main() -> Result<()> {
             }
         });
     }
-    // Odin's own font for this window while it runs; the terminal's comes back on exit.
+    // Raido's own font for this window while it runs; the terminal's comes back on exit.
     let _font = textsize::WindowFont::apply(&app.config.font, app.config.font_size);
     // Restore the user's terminal even on panic; no shell or raw escape output survives.
     let old_hook = std::panic::take_hook();
@@ -234,7 +236,7 @@ fn main() -> Result<()> {
             set_terminal_colors(&app.theme)?;
             applied_colors = Some(colors);
         }
-        // The mouse is Odin's (wheel, clicks) except in copy view, where the
+        // The mouse is Raido's (wheel, clicks) except in copy view, where the
         // terminal's own selection needs it.
         if app.mouse_wanted() != mouse {
             mouse = !mouse;
@@ -253,11 +255,11 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// `odin --keys`: print every key as Odin receives it. A combination that prints
-/// nothing is kept by the terminal (or the OS) and never reaches Odin.
+/// `raido --keys`: print every key as Raido receives it. A combination that prints
+/// nothing is kept by the terminal (or the OS) and never reaches Raido.
 fn show_keys() -> Result<()> {
     use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
-    println!("Press keys to see what reaches Odin; Ctrl-c twice to stop.");
+    println!("Press keys to see what reaches Raido; Ctrl-c twice to stop.");
     enable_raw_mode()?;
     let mut last_ctrl_c = false;
     let result = (|| -> Result<()> {

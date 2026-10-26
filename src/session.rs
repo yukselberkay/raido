@@ -1,7 +1,7 @@
 //! Per-project sessions: the pane layout, open buffers (with unsaved text), terminal
 //! transcripts and working directories, AI panes and the Git pane, saved to
-//! `<project>/.odin/session.json` and restored the next time Odin opens the project.
-//! The `.odin` directory ignores itself in Git, since transcripts and unsaved text
+//! `<project>/.raido/session.json` and restored the next time Raido opens the project.
+//! The `.raido` directory ignores itself in Git, since transcripts and unsaved text
 //! may hold anything you typed.
 use crate::{layout::Tile, terminal::Launch};
 use anyhow::{bail, Context, Result};
@@ -12,7 +12,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const DIR: &str = ".odin";
+pub const DIR: &str = ".raido";
 const FILE: &str = "session.json";
 const VERSION: u32 = 1;
 
@@ -107,13 +107,29 @@ pub fn file(root: &Path) -> PathBuf {
     root.join(DIR).join(FILE)
 }
 
-/// Sessions save automatically in Git repositories and wherever `.odin` exists
-/// (`:session save` creates it), so opening Odin in any directory leaves no trace.
+/// Where sessions were saved when Raido was called Odin.
+const ODIN_DIR: &str = ".odin";
+
+/// A project Odin saved keeps its session: its `.odin` folder becomes `.raido`.
+fn adopt_odin(root: &Path) {
+    let old = root.join(ODIN_DIR);
+    let new = root.join(DIR);
+    if old.join(FILE).is_file() && !new.exists() && fs::rename(&old, &new).is_ok() {
+        let _ = fs::write(new.join(".gitignore"), IGNORE);
+    }
+}
+
+const IGNORE: &str = "# Raido session state: never commit it.\n*\n";
+
+/// Sessions save automatically in Git repositories and wherever `.raido` exists
+/// (`:session save` creates it), so opening Raido in any directory leaves no trace.
 pub fn wanted(root: &Path) -> bool {
+    adopt_odin(root);
     root.join(DIR).is_dir() || root.join(".git").exists()
 }
 
 pub fn load(root: &Path) -> Result<Option<Session>> {
+    adopt_odin(root);
     let path = file(root);
     let text = match fs::read_to_string(&path) {
         Ok(text) => text,
@@ -132,7 +148,7 @@ pub fn save(root: &Path, json: &str) -> Result<()> {
     fs::create_dir_all(&dir).with_context(|| format!("Create {}", dir.display()))?;
     let ignore = dir.join(".gitignore");
     if !ignore.exists() {
-        fs::write(&ignore, "# Odin session state: never commit it.\n*\n")?;
+        fs::write(&ignore, IGNORE)?;
     }
     let path = file(root);
     let temporary = dir.join(format!("{FILE}.tmp"));
@@ -195,7 +211,7 @@ mod tests {
         );
         save(dir.path(), &serde_json::to_string(&session).unwrap()).unwrap();
         assert!(wanted(dir.path()));
-        let ignore = fs::read_to_string(dir.path().join(".odin/.gitignore")).unwrap();
+        let ignore = fs::read_to_string(dir.path().join(".raido/.gitignore")).unwrap();
         assert!(ignore.lines().any(|l| l == "*"));
         let loaded = load(dir.path()).unwrap().unwrap();
         assert_eq!(loaded.focused, 3);
@@ -218,5 +234,23 @@ mod tests {
     fn mismatched_layouts_are_rejected() {
         let session = Session::new(Tile::Leaf(1), 1, false, true, Vec::new(), Vec::new());
         assert!(session.check().is_err());
+    }
+
+    #[test]
+    fn a_session_saved_by_odin_reopens_in_raido() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join(".odin");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join(FILE), "not json").unwrap();
+        assert!(wanted(dir.path()));
+        assert!(!old.exists());
+        assert!(file(dir.path()).is_file());
+        let ignore = fs::read_to_string(dir.path().join(DIR).join(".gitignore")).unwrap();
+        assert!(ignore.contains("Raido"));
+        // A `.odin` folder without a session (someone else's) stays put.
+        let other = tempfile::tempdir().unwrap();
+        fs::create_dir_all(other.path().join(".odin")).unwrap();
+        assert!(!wanted(other.path()));
+        assert!(other.path().join(".odin").is_dir());
     }
 }

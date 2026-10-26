@@ -1,4 +1,4 @@
-//! Fonts belong to the terminal Odin runs in, so `:font` works through it: it saves
+//! Fonts belong to the terminal Raido runs in, so `:font` works through it: it saves
 //! a size or family into the terminal's config file (foot, Ghostty, Kitty,
 //! Alacritty), uses `omarchy font set` on Omarchy, and otherwise explains where the
 //! setting lives. Live zoom is `textsize` (Ctrl-b + / - / 0).
@@ -36,7 +36,7 @@ impl Emulator {
             Emulator::Unknown => "your terminal",
         }
     }
-    /// The config file Odin can edit for a lasting change.
+    /// The config file Raido can edit for a lasting change.
     fn config(self) -> Option<PathBuf> {
         let base = crate::platform::config_base();
         match self {
@@ -68,7 +68,7 @@ impl Emulator {
     }
 }
 
-/// Which terminal Odin is running in: environment hints first, then (Linux) the
+/// Which terminal Raido is running in: environment hints first, then (Linux) the
 /// name of the closest ancestor process that is a known terminal.
 pub fn detect() -> Emulator {
     let env = |k: &str| std::env::var(k).unwrap_or_default();
@@ -191,7 +191,7 @@ pub fn set_size(term: Emulator, size: f32) -> Result<String> {
     }
     let Some(path) = term.config() else {
         bail!(
-            "Odin can't change {}'s font for you: {} · Ctrl-b + / - zooms now",
+            "Raido can't change {}'s font for you: {} · Ctrl-b + / - zooms now",
             term.name(),
             term.manual()
         );
@@ -228,7 +228,7 @@ pub fn set_family(term: Emulator, family: &str) -> Result<String> {
     }
     let Some(path) = term.config() else {
         bail!(
-            "Odin can't change {}'s font for you: {}",
+            "Raido can't change {}'s font for you: {}",
             term.name(),
             term.manual()
         );
@@ -273,7 +273,7 @@ fn edit(path: &Path, change: impl Fn(&str) -> String) -> Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
-    let temporary = path.with_extension("odin-tmp");
+    let temporary = path.with_extension("raido-tmp");
     fs::write(&temporary, new)?;
     fs::rename(&temporary, path).with_context(|| format!("Write {}", path.display()))?;
     Ok(())

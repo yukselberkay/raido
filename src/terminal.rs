@@ -94,13 +94,13 @@ impl TerminalPane {
         command.cwd(root);
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
-        command.env("ODIN", "1");
-        // Any agent can read Odin's manual here, with or without skill support.
+        command.env("RAIDO", "1");
+        // Any agent can read Raido's manual here, with or without skill support.
         let docs = crate::skill::manual();
         if docs.is_file() {
-            command.env("ODIN_DOCS", docs);
+            command.env("RAIDO_DOCS", docs);
         }
-        // `odin FILE` typed here opens FILE in this Odin.
+        // `raido FILE` typed here opens FILE in this Raido.
         match crate::remote::address() {
             Some(socket) => command.env(crate::remote::VAR, socket),
             None => command.env_remove(crate::remote::VAR),
@@ -492,7 +492,7 @@ thread_local! {
 
 /// Run `f` on a pane's parser. vt100 0.15 can panic on some output (a cursor left
 /// outside a shrunken screen); then this pane's screen starts afresh at the same
-/// size, and the program draws on it again, instead of Odin crashing. Returns
+/// size, and the program draws on it again, instead of Raido crashing. Returns
 /// whether `f` finished. The panic stays inside the lock, so it isn't poisoned.
 fn guarded(parser: &mut vt100::Parser, f: impl FnOnce(&mut vt100::Parser)) -> bool {
     GUARDED.with(|g| g.set(true));
@@ -791,7 +791,7 @@ pub fn encode_key(key: KeyEvent, application: bool) -> Vec<u8> {
 mod tests {
     use super::*;
     #[test]
-    fn tiny_panes_and_odd_output_never_crash_odin() {
+    fn tiny_panes_and_odd_output_never_crash_raido() {
         quiet_parser_panics();
         // Shell prompts, wide text, full-screen programs, scroll regions and cursor
         // jumps, mixed with resizes down to one cell: what crashed vt100 0.15.

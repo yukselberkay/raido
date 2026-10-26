@@ -1,4 +1,4 @@
-# Install as ~/.config/odin/themes/ice.toml, then :theme ice.
+# Install as ~/.config/raido/themes/ice.toml, then :theme ice.
 background = "#10141d"
 foreground = "#d3dce5"
 muted = "#73859b"

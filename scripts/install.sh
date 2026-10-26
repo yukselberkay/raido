@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# Build and install Odin with everything it needs on this machine (macOS or Linux):
+# Build and install Raido with everything it needs on this machine (macOS or Linux):
 # a C compiler and linker, Git, curl, Rust (via rustup), rust-analyzer,
-# JetBrains Mono Nerd Font, Odin itself (~/.cargo/bin/odin, made runnable by name
-# from PATH), and the Odin skill that teaches AI agents how to use Odin.
+# JetBrains Mono Nerd Font, Raido itself (~/.cargo/bin/raido, made runnable by name
+# from PATH), and the Raido skill that teaches AI agents how to use Raido.
 # Windows: scripts/install.ps1.
 #
 # Run it from a checkout (scripts/install.sh) or piped from GitHub
-# (curl -fsSL …/scripts/install.sh | bash); outside a checkout it clones Odin
+# (curl -fsSL …/scripts/install.sh | bash); outside a checkout it clones Raido
 # first. Safe to run again: anything already installed is kept as is.
 set -euo pipefail
 
 usage="Usage: install.sh [--no-font] [--no-lsp] [--no-skill]
 Installs a C compiler, Git, curl, Rust, rust-analyzer, JetBrains Mono Nerd Font,
-Odin and its AI agent skill on macOS or Linux.
+Raido and its AI agent skill on macOS or Linux.
   --no-font   skip JetBrains Mono Nerd Font
   --no-lsp    skip rust-analyzer
-  --no-skill  skip the Odin skill for AI agents"
+  --no-skill  skip the Raido skill for AI agents"
 
-REPO_URL="https://github.com/yukselberkay/odin.git"
+REPO_URL="https://github.com/yukselberkay/raido.git"
 FONT_URL="https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.tar.xz"
 FONT_FAMILY="JetBrainsMono Nerd Font"
 MIN_RUST="1.88"
@@ -56,7 +56,7 @@ die() {
 have() { command -v "$1" >/dev/null 2>&1; }
 
 if [ "$(id -u)" -eq 0 ]; then
-    die "Run this as your own user, not root: Odin installs into your home directory and the script asks for sudo only for system packages."
+    die "Run this as your own user, not root: Raido installs into your home directory and the script asks for sudo only for system packages."
 fi
 
 os="$(uname -s)"
@@ -67,7 +67,7 @@ esac
 
 # Where `cargo install` puts programs.
 cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
-# Your terminal's PATH, before this script adds Cargo to its own: what `odin` has
+# Your terminal's PATH, before this script adds Cargo to its own: what `raido` has
 # to be found on.
 user_path="$PATH"
 
@@ -162,11 +162,11 @@ install_rust() {
     fi
     ok "rustc $version"
     if [ "$with_lsp" -eq 1 ] && have rustup; then
-        # Rust language support in Odin's editor (diagnostics, hover, completion).
+        # Rust language support in Raido's editor (diagnostics, hover, completion).
         if rustup component add rust-analyzer >/dev/null 2>&1; then
             ok "rust-analyzer"
         else
-            note "rust-analyzer could not be added; Odin works without it"
+            note "rust-analyzer could not be added; Raido works without it"
         fi
     fi
 }
@@ -182,12 +182,12 @@ font_installed() {
     fi
 }
 
-# The font also carries the Nerd Font icons Odin's explorer shows by default
+# The font also carries the Nerd Font icons Raido's explorer shows by default
 # (icons = true picks them as soon as a Nerd Font is installed).
 install_font() {
     step "$FONT_FAMILY (text and explorer icons)"
     if font_installed; then
-        ok "already installed; Odin's explorer uses its Nerd Font icons"
+        ok "already installed; Raido's explorer uses its Nerd Font icons"
         return
     fi
     if [ "$os" = Darwin ] && have brew; then
@@ -210,13 +210,13 @@ install_font() {
         fi
     fi
     if font_installed; then
-        ok "installed; Odin's explorer uses its Nerd Font icons"
+        ok "installed; Raido's explorer uses its Nerd Font icons"
     else
         note "installed, but not visible yet; log out and back in if your terminal doesn't list it"
     fi
 }
 
-# --- Odin ---
+# --- Raido ---
 
 source_dir() {
     # The checkout holding this script, else the current directory, else a fresh clone.
@@ -226,27 +226,42 @@ source_dir() {
     fi
     candidates+=("$PWD")
     for dir in "${candidates[@]}"; do
-        if grep -qs '^name = "odin-editor"' "$dir/Cargo.toml"; then
+        if grep -qs '^name = "raido"' "$dir/Cargo.toml"; then
             printf '%s\n' "$dir"
             return
         fi
     done
-    git clone --quiet --depth 1 "$REPO_URL" "$scratch/odin" >&2
-    printf '%s\n' "$scratch/odin"
+    git clone --quiet --depth 1 "$REPO_URL" "$scratch/raido" >&2
+    printf '%s\n' "$scratch/raido"
 }
 
-install_odin() {
-    step "Odin"
+install_raido() {
+    step "Raido"
     local src
     src="$(source_dir)"
     note "building from $src (the first build takes a few minutes)"
     cargo install --path "$src" --locked --force
-    local bin="$cargo_bin/odin"
+    local bin="$cargo_bin/raido"
     [ -x "$bin" ] || die "cargo finished but $bin is missing"
     ok "$("$bin" --version) at $bin"
 }
 
-# The real file behind a path (symlinks followed), for comparing two `odin`s.
+# Raido was called Odin: an install under that name (its `odin` command and the
+# link this script made to it) goes, so only Raido stays.
+retire_odin() {
+    if cargo install --list 2>/dev/null | grep -q '^odin-editor '; then
+        cargo uninstall odin-editor >/dev/null 2>&1 &&
+            ok "removed the old odin command (Raido replaces it)"
+    fi
+    local dir
+    for dir in "$HOME/.local/bin" "$HOME/bin" /opt/homebrew/bin /usr/local/bin; do
+        if [ -L "$dir/odin" ] && [ "$(readlink "$dir/odin")" = "$cargo_bin/odin" ]; then
+            rm -f "$dir/odin" && ok "removed the old link $dir/odin"
+        fi
+    done
+}
+
+# The real file behind a path (symlinks followed), for comparing two `raido`s.
 real_path() {
     local path="$1" link
     while link="$(readlink "$path")"; do
@@ -258,19 +273,19 @@ real_path() {
     printf '%s/%s\n' "$(cd "$(dirname "$path")" 2>/dev/null && pwd -P)" "$(basename "$path")"
 }
 
-# Make `odin` runnable by name: right away in this terminal when a folder already on
+# Make `raido` runnable by name: right away in this terminal when a folder already on
 # PATH can take a link to it, and in every new terminal either way.
 put_on_path() {
-    step "odin on your PATH"
-    local bin="$cargo_bin/odin" found dir
-    found="$(PATH="$user_path" command -v odin 2>/dev/null || true)"
+    step "raido on your PATH"
+    local bin="$cargo_bin/raido" found dir
+    found="$(PATH="$user_path" command -v raido 2>/dev/null || true)"
     if [ -n "$found" ] && [ "$(real_path "$found")" = "$(real_path "$bin")" ]; then
-        ok "ready: odin runs from $found"
+        ok "ready: raido runs from $found"
         return
     fi
     if [ -n "$found" ]; then
-        note "another odin comes first on PATH: $found (perhaps the Odin programming language)"
-        note "run this Odin as $bin, or put $cargo_bin before that folder in PATH"
+        note "another raido comes first on PATH: $found"
+        note "run this Raido as $bin, or put $cargo_bin before that folder in PATH"
         return
     fi
     # A folder already on PATH that we may write to without sudo.
@@ -281,11 +296,11 @@ put_on_path() {
         esac
         [ -d "$dir" ] && [ -w "$dir" ] || continue
         # Never replace a file that isn't our own link.
-        if [ -e "$dir/odin" ] && [ ! -L "$dir/odin" ]; then
+        if [ -e "$dir/raido" ] && [ ! -L "$dir/raido" ]; then
             continue
         fi
-        ln -sf "$bin" "$dir/odin"
-        ok "linked $dir/odin → $bin; odin runs in this terminal now"
+        ln -sf "$bin" "$dir/raido"
+        ok "linked $dir/raido → $bin; raido runs in this terminal now"
         return
     done
     add_to_profile
@@ -294,7 +309,7 @@ put_on_path() {
 # Put Cargo's bin folder on PATH for new terminals, in the startup file of your
 # shell; once, marked so a second run doesn't add it again.
 add_to_profile() {
-    local marker="# Added by Odin's installer: programs installed with cargo"
+    local marker="# Added by Raido's installer: programs installed with cargo"
     local line="export PATH=\"$cargo_bin:\$PATH\""
     local shell_name files=() file candidate
     shell_name="$(basename "${SHELL:-sh}")"
@@ -318,11 +333,11 @@ add_to_profile() {
             fi
             ;;
         fish)
-            file="${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/odin.fish"
+            file="${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/raido.fish"
             mkdir -p "$(dirname "$file")"
             printf '%s\nfish_add_path -g %s\n' "$marker" "$cargo_bin" >"$file"
             ok "added $cargo_bin to fish's PATH ($file)"
-            note "open a new terminal to run odin by name (or run $bin now)"
+            note "open a new terminal to run raido by name (or run $bin now)"
             return
             ;;
         *) files=("$HOME/.profile") ;;
@@ -336,31 +351,31 @@ add_to_profile() {
             ok "added $cargo_bin to PATH in $file"
         fi
     done
-    note "open a new terminal to run odin by name, or run now: export PATH=\"$cargo_bin:\$PATH\""
+    note "open a new terminal to run raido by name, or run now: export PATH=\"$cargo_bin:\$PATH\""
 }
 
-# Odin's docs as an Agent Skills skill, so Claude Code, Codex, Gemini CLI and others
-# can answer "how do I … in Odin?" in any project. Optional: Odin works without it,
+# Raido's docs as an Agent Skills skill, so Claude Code, Codex, Gemini CLI and others
+# can answer "how do I … in Raido?" in any project. Optional: Raido works without it,
 # and a failure here never fails the install.
 install_skill() {
-    step "Odin skill for AI agents"
+    step "Raido skill for AI agents"
     local log="$scratch/skill.log"
-    if "$cargo_bin/odin" --install-skill >"$log" 2>&1; then
-        ok "installed for this user (every project): $(grep -c '/odin$' "$log") place(s)"
+    if "$cargo_bin/raido" --install-skill >"$log" 2>&1; then
+        ok "installed for this user (every project): $(grep -c '/raido$' "$log") place(s)"
     else
-        note "skipped ($(tail -n 1 "$log")); run odin --install-skill later"
+        note "skipped ($(tail -n 1 "$log")); run raido --install-skill later"
     fi
 }
 
 summary() {
     step "Done"
-    echo "  Start Odin in any project:  odin ~/path/to/project"
+    echo "  Start Raido in any project:  raido ~/path/to/project"
     if [ "$with_font" -eq 1 ]; then
         if [ "$os" = Darwin ] && [ "${TERM_PROGRAM:-}" = Apple_Terminal ]; then
-            echo "  macOS Terminal: Odin switches its tab to $FONT_FAMILY Mono at 14 pt while it runs."
+            echo "  macOS Terminal: Raido switches its tab to $FONT_FAMILY Mono at 14 pt while it runs."
         else
             echo "  Font: make \"$FONT_FAMILY Mono\" your terminal's font in its settings,"
-            echo "  or inside Odin run :font family \"$FONT_FAMILY Mono\" (foot, Ghostty, Kitty, Alacritty)."
+            echo "  or inside Raido run :font family \"$FONT_FAMILY Mono\" (foot, Ghostty, Kitty, Alacritty)."
         fi
     fi
 }
@@ -374,7 +389,8 @@ install_rust
 if [ "$with_font" -eq 1 ]; then
     install_font
 fi
-install_odin
+install_raido
+retire_odin
 put_on_path
 if [ "$with_skill" -eq 1 ]; then
     install_skill

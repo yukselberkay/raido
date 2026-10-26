@@ -94,7 +94,7 @@ impl Buffer {
                 bail!("Binary files are not editable");
             }
             let source =
-                std::str::from_utf8(&bytes).context("Odin currently edits UTF-8 files only")?;
+                std::str::from_utf8(&bytes).context("Raido currently edits UTF-8 files only")?;
             buffer.crlf = source.contains("\r\n");
             buffer.text = Rope::from_str(source);
             buffer.saved = buffer.text.clone();
@@ -549,7 +549,7 @@ impl Buffer {
         }
         let parent = path.parent().context("Missing parent directory")?;
         let serial = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let temp = parent.join(format!(".odin-{}-{serial}.tmp", std::process::id()));
+        let temp = parent.join(format!(".raido-{}-{serial}.tmp", std::process::id()));
         let result = (|| -> Result<()> {
             let mut options = OpenOptions::new();
             options.create_new(true).write(true);

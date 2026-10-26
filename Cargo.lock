@@ -489,27 +489,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "521739c6d2bac4aa25192232afe6841231376b2b26d4d9fae5ecf8ca5772e441"
 
 [[package]]
-name = "odin-editor"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "crossterm",
- "directories",
- "portable-pty",
- "pulldown-cmark",
- "ratatui",
- "ropey",
- "serde",
- "serde_json",
- "similar",
- "syntect",
- "tempfile",
- "toml",
- "unicode-width 0.2.0",
- "vt100",
-]
-
-[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -633,6 +612,27 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "raido"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "directories",
+ "portable-pty",
+ "pulldown-cmark",
+ "ratatui",
+ "ropey",
+ "serde",
+ "serde_json",
+ "similar",
+ "syntect",
+ "tempfile",
+ "toml",
+ "unicode-width 0.2.0",
+ "vt100",
+]
 
 [[package]]
 name = "ratatui"

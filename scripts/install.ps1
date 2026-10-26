@@ -1,17 +1,17 @@
 <#
 .SYNOPSIS
-Build and install Odin on Windows with everything it needs: Git, the Visual Studio
+Build and install Raido on Windows with everything it needs: Git, the Visual Studio
 C++ build tools (Rust's linker), Rust (via rustup), rust-analyzer, JetBrains Mono
-Nerd Font, Odin itself (%USERPROFILE%\.cargo\bin\odin.exe, put on your PATH), and
-the Odin skill that teaches AI agents how to use Odin.
+Nerd Font, Raido itself (%USERPROFILE%\.cargo\bin\raido.exe, put on your PATH), and
+the Raido skill that teaches AI agents how to use Raido.
 
 .DESCRIPTION
 Run it from a checkout:
     powershell -ExecutionPolicy Bypass -File scripts\install.ps1
-or straight from GitHub (outside a checkout it clones Odin first):
-    irm https://raw.githubusercontent.com/yukselberkay/odin/main/scripts/install.ps1 | iex
+or straight from GitHub (outside a checkout it clones Raido first):
+    irm https://raw.githubusercontent.com/yukselberkay/raido/main/scripts/install.ps1 | iex
 With options from GitHub:
-    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/yukselberkay/odin/main/scripts/install.ps1))) -NoFont
+    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/yukselberkay/raido/main/scripts/install.ps1))) -NoFont
 Safe to run again: anything already installed is kept as is. Programs come from
 winget (App Installer, built into Windows 10 and 11).
 
@@ -20,7 +20,7 @@ Skip JetBrains Mono Nerd Font.
 .PARAMETER NoLsp
 Skip rust-analyzer.
 .PARAMETER NoSkill
-Skip the Odin skill for AI agents.
+Skip the Raido skill for AI agents.
 #>
 param(
     [switch]$NoFont,
@@ -33,13 +33,13 @@ $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 $ProgressPreference = 'SilentlyContinue'
 
-$RepoUrl = 'https://github.com/yukselberkay/odin.git'
+$RepoUrl = 'https://github.com/yukselberkay/raido.git'
 $FontUrl = 'https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.zip'
 $FontFamily = 'JetBrainsMono Nerd Font'
 $MinRust = [version]'1.88'
 $CargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE '.cargo' }
 $CargoBin = Join-Path $CargoHome 'bin'
-$Scratch = Join-Path ([IO.Path]::GetTempPath()) ("odin-install-" + [guid]::NewGuid().ToString('N'))
+$Scratch = Join-Path ([IO.Path]::GetTempPath()) ("raido-install-" + [guid]::NewGuid().ToString('N'))
 
 function Step([string]$Text) { Write-Host ''; Write-Host "==> $Text" -ForegroundColor White }
 function Ok([string]$Text) { Write-Host "  $([char]0x2713) $Text" -ForegroundColor Green }
@@ -133,10 +133,10 @@ function Install-Rust {
     }
     Ok "rustc $version"
     if (-not $NoLsp -and (Have 'rustup')) {
-        # Rust language support in Odin's editor (diagnostics, hover, completion).
+        # Rust language support in Raido's editor (diagnostics, hover, completion).
         # Quietly; Windows PowerShell 5.1 would stop on its progress lines otherwise.
         & { $ErrorActionPreference = 'Continue'; & rustup component add rust-analyzer *> $null }
-        if ($LASTEXITCODE -eq 0) { Ok 'rust-analyzer' } else { Note "rust-analyzer could not be added; Odin works without it" }
+        if ($LASTEXITCODE -eq 0) { Ok 'rust-analyzer' } else { Note "rust-analyzer could not be added; Raido works without it" }
     }
 }
 
@@ -153,7 +153,7 @@ function Test-Font {
 
 function Install-Font {
     Step "$FontFamily (text and explorer icons)"
-    if (Test-Font) { Ok "already installed; Odin's explorer uses its Nerd Font icons"; return }
+    if (Test-Font) { Ok "already installed; Raido's explorer uses its Nerd Font icons"; return }
     Note 'downloading the latest Nerd Fonts release'
     $zip = Join-Path $Scratch 'font.zip'
     $unpacked = Join-Path $Scratch 'font'
@@ -173,7 +173,7 @@ function Install-Font {
     Ok 'installed; set "JetBrainsMono Nerd Font Mono" as your terminal font (see below)'
 }
 
-# --- Odin ---
+# --- Raido ---
 
 function Get-SourceDir {
     # The checkout holding this script, else the current directory, else a fresh clone.
@@ -182,32 +182,42 @@ function Get-SourceDir {
     $candidates += (Get-Location).Path
     foreach ($dir in $candidates) {
         $manifest = Join-Path $dir 'Cargo.toml'
-        if ((Test-Path $manifest) -and (Select-String -Path $manifest -Pattern '^name = "odin-editor"' -Quiet)) {
+        if ((Test-Path $manifest) -and (Select-String -Path $manifest -Pattern '^name = "raido"' -Quiet)) {
             return $dir
         }
     }
-    $clone = Join-Path $Scratch 'odin'
+    $clone = Join-Path $Scratch 'raido'
     & git clone --quiet --depth 1 $RepoUrl $clone
     if ($LASTEXITCODE -ne 0) { throw "git could not clone $RepoUrl" }
     return $clone
 }
 
-function Install-Odin {
-    Step 'Odin'
+function Install-Raido {
+    Step 'Raido'
     $src = Get-SourceDir
     Note "building from $src (the first build takes a few minutes)"
     & cargo install --path $src --locked --force
-    if ($LASTEXITCODE -ne 0) { throw 'cargo could not build Odin' }
-    $exe = Join-Path $CargoBin 'odin.exe'
+    if ($LASTEXITCODE -ne 0) { throw 'cargo could not build Raido' }
+    $exe = Join-Path $CargoBin 'raido.exe'
     if (-not (Test-Path $exe)) { throw "cargo finished but $exe is missing" }
     Ok "$(& $exe --version) at $exe"
 }
 
-# Make `odin` runnable by name: in this window now, and in every new one through
+# Raido was called Odin: an install under that name (odin.exe) goes, so only Raido
+# stays.
+function Remove-Odin {
+    $list = & cargo install --list | Out-String
+    if ($list -match '(?m)^odin-editor ') {
+        & cargo uninstall odin-editor | Out-Null
+        if ($LASTEXITCODE -eq 0) { Ok 'removed the old odin command (Raido replaces it)' }
+    }
+}
+
+# Make `raido` runnable by name: in this window now, and in every new one through
 # your user PATH. The registry value is edited as stored, so %VARIABLES% in other
 # entries stay as they are.
-function Set-OdinPath {
-    Step 'odin on your PATH'
+function Set-RaidoPath {
+    Step 'raido on your PATH'
     $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
     try {
         $raw = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
@@ -218,43 +228,43 @@ function Set-OdinPath {
         } else {
             $key.SetValue('Path', ((@($CargoBin) + $entries) -join ';'), [Microsoft.Win32.RegistryValueKind]::ExpandString)
             # Tell Windows the environment changed, so new windows see it.
-            [Environment]::SetEnvironmentVariable('ODIN_INSTALL_REFRESH', '1', 'User')
-            [Environment]::SetEnvironmentVariable('ODIN_INSTALL_REFRESH', $null, 'User')
+            [Environment]::SetEnvironmentVariable('RAIDO_INSTALL_REFRESH', '1', 'User')
+            [Environment]::SetEnvironmentVariable('RAIDO_INSTALL_REFRESH', $null, 'User')
             Ok "added $CargoBin to your PATH"
         }
     } finally {
         $key.Close()
     }
     if (-not (($env:Path -split ';') -contains $CargoBin)) { $env:Path = "$CargoBin;$env:Path" }
-    $found = Get-Command odin -ErrorAction SilentlyContinue | Select-Object -First 1
-    $ours = Join-Path $CargoBin 'odin.exe'
+    $found = Get-Command raido -ErrorAction SilentlyContinue | Select-Object -First 1
+    $ours = Join-Path $CargoBin 'raido.exe'
     if ($found -and $found.Source -and ($found.Source -ne $ours)) {
-        Note "another odin comes first on PATH: $($found.Source) (perhaps the Odin programming language)"
-        Note "run this Odin as $ours, or move $CargoBin before that folder in PATH"
+        Note "another raido comes first on PATH: $($found.Source)"
+        Note "run this Raido as $ours, or move $CargoBin before that folder in PATH"
     } else {
-        Ok 'odin runs in this window now, and in every new terminal'
+        Ok 'raido runs in this window now, and in every new terminal'
     }
 }
 
-# Odin's docs as an Agent Skills skill, so Claude Code, Codex, Gemini CLI and others
-# can answer "how do I ... in Odin?" in any project. Optional: Odin works without it,
+# Raido's docs as an Agent Skills skill, so Claude Code, Codex, Gemini CLI and others
+# can answer "how do I ... in Raido?" in any project. Optional: Raido works without it,
 # and a failure here never fails the install.
 function Install-Skill {
-    Step 'Odin skill for AI agents'
+    Step 'Raido skill for AI agents'
     # Its messages are captured, not errors (see Install-Rust).
     $ErrorActionPreference = 'Continue'
-    $output = & (Join-Path $CargoBin 'odin.exe') --install-skill 2>&1 | Out-String
+    $output = & (Join-Path $CargoBin 'raido.exe') --install-skill 2>&1 | Out-String
     if ($LASTEXITCODE -eq 0) {
-        $places = @($output -split "`n" | Where-Object { $_ -match '[\\/]odin\s*$' }).Count
+        $places = @($output -split "`n" | Where-Object { $_ -match '[\\/]raido\s*$' }).Count
         Ok "installed for this user (every project): $places place(s)"
     } else {
-        Note "skipped ($($output.Trim())); run odin --install-skill later"
+        Note "skipped ($($output.Trim())); run raido --install-skill later"
     }
 }
 
 function Show-Summary {
     Step 'Done'
-    Write-Host '  Start Odin in any project:  odin C:\path\to\project'
+    Write-Host '  Start Raido in any project:  raido C:\path\to\project'
     Write-Host '  Use Windows Terminal for full color and keys.'
     if (-not $NoFont) {
         Write-Host "  Font: Windows Terminal > Settings > Profiles > Defaults > Appearance >"
@@ -272,8 +282,9 @@ try {
     Install-BuildTools
     Install-Rust
     if (-not $NoFont) { Install-Font }
-    Install-Odin
-    Set-OdinPath
+    Install-Raido
+    Remove-Odin
+    Set-RaidoPath
     if (-not $NoSkill) { Install-Skill }
     Show-Summary
 } catch {

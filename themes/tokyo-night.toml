@@ -1,4 +1,4 @@
-# Tokyo Night — Odin adaptation. See themes/README.md for palette credits.
+# Tokyo Night — Raido adaptation. See themes/README.md for palette credits.
 # Built in: :theme tokyo-night. Copy under a new name to customize.
 background = "#1a1b26"
 foreground = "#c0caf5"

@@ -1,10 +1,10 @@
-# Copy to ~/.config/odin/config.toml (Linux and macOS).
-# Or set XDG_CONFIG_HOME and use $XDG_CONFIG_HOME/odin/config.toml.
+# Copy to ~/.config/raido/config.toml (Linux and macOS).
+# Or set XDG_CONFIG_HOME and use $XDG_CONFIG_HOME/raido/config.toml.
 theme = "phosphor"
 # Also: visual-studio-dark, vscode-dark-2026, dracula, nord, one-dark, gruvbox-dark,
 # tokyo-night, catppuccin-mocha, solarized-dark, monokai, github-dark, amber.
 # Runtime switch: :theme dracula; :themes lists all. Drop NAME.toml or a VS Code
-# NAME.json into ~/.config/odin/themes/ to add a theme without rebuilding.
+# NAME.json into ~/.config/raido/themes/ to add a theme without rebuilding.
 sidebar_width = 29
 tab_width = 4
 # Language-aware typing: Enter indents after `def f():` / `{` / `then`, dedents
@@ -24,9 +24,9 @@ icons = true
 # Ctrl-b G opens it any time.
 git_pane = false
 # Reopen each project as you left it: panes, unsaved text, terminal output, AI
-# conversations. Saved in <project>/.odin/ (Git repositories, or :session save).
+# conversations. Saved in <project>/.raido/ (Git repositories, or :session save).
 restore_session = true
-# Odin's font while it runs, put back when it exits. macOS Terminal switches Odin's
+# Raido's font while it runs, put back when it exits. macOS Terminal switches Raido's
 # tab to it when it's installed; other terminals, or a missing font, keep the
 # terminal's own (set it there, or with :font family). "" always keeps it.
 # scripts/install.sh installs JetBrains Mono Nerd Font.
@@ -34,7 +34,7 @@ font = "JetBrainsMono Nerd Font Mono"
 font_size = 14
 # Where AI panes open: "right" (side by side) or "below" (stacked).
 ai_split = "right"
-# Teach your AI agents about Odin (an Agent Skills skill for every project; kept
+# Teach your AI agents about Raido (an Agent Skills skill for every project; kept
 # current at startup when an AI agent is installed, and when you launch one).
 ai_skill = true
 # A sound when an AI pane finishes a prompt (or stops to ask you something):
@@ -43,12 +43,12 @@ ai_skill = true
 # "Ping"…; Windows "Windows Ding", "chimes"…) or a sound file. :sound plays it.
 ai_sound = "default"
 # Ctrl-b v reviews what AI panes changed, like VS Code's agent edits: keep or undo
-# each change. Odin snapshots the project with Git into its own store while agents
+# each change. Raido snapshots the project with Git into its own store while agents
 # run (never your repository). false turns it off.
 review_changes = true
 # Mouse wheel scrolls the pane (or explorer, guide) under the pointer; a click
 # focuses a pane, puts the editor cursor there, or opens an explorer entry. While
-# Odin has the mouse, Ctrl-b y hands it to the terminal for selecting and copying
+# Raido has the mouse, Ctrl-b y hands it to the terminal for selecting and copying
 # (again to take it back), as does copy view (Ctrl-b Z); or hold your terminal's
 # bypass key (Option in iTerm2, Shift in most Linux terminals).
 mouse = true
@@ -66,7 +66,7 @@ format_on_save = ["go"]
 
 # Bring your own AI / local LLM: each [ai.NAME] appears in the AI launcher
 # (Ctrl-b a, keys 6–9) and as :ai NAME [model]. [ai.local] backs key 5 and
-# :ai local; without it Odin uses Ollama or LM Studio if installed.
+# :ai local; without it Raido uses Ollama or LM Studio if installed.
 # [ai.local]
 # program = "ollama"
 # args = ["launch", "claude"]        # Claude Code on a local model (Ollama 0.15+)
@@ -92,4 +92,4 @@ program = "git"
 args = ["log", "--graph", "--oneline", "--all", "-30"]
 
 # No API keys belong in this file. Sign in within the AI CLI, or configure
-# its documented environment/credential manager outside Odin.
+# its documented environment/credential manager outside Raido.

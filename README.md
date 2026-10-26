@@ -1,11 +1,38 @@
-# ◉ Odin
+# ◉ Raido
 
 **All systems in view.** A lean, Rust-native terminal workspace for people who build.
 
 Code, project files, Git, a shell, and your AI CLI — in one keyboard-driven screen.
-No Electron, no web service, no account required by Odin, no telemetry.
+No Electron, no web service, no account required by Raido, no telemetry.
 
-![Odin in the Visual Studio Dark theme: file explorer with icons, Rust source, the AI launcher, a live shell and the Git tree](docs/odin.png)
+![Raido in the Visual Studio Dark theme: file explorer with icons, Rust source, the AI launcher, a live shell and the Git tree](docs/raido.png)
+
+## ᚱ Why Raido
+
+**Raido** (ᚱ, *raidō*) is the fifth rune of the Elder Futhark, the oldest runic
+alphabet. Its name means *ride* or *journey*: the steady forward motion of a rider who
+knows the road, keeps the rhythm and isn't thrown off course. It is one carved
+stroke-shape, a single character with a whole meaning behind it, and it stands for
+the right way of moving: in order, unhurried, toward where you mean to go.
+
+That is what this workspace is for:
+
+- **Simplicity.** One screen and one prefix key. What you need to write, run and
+  review code is in view, and nothing else is.
+- **Free of bloat.** A single native Rust binary: no Electron, no web service, no
+  account, no telemetry, no extension marketplace to curate. It starts at once and
+  stays out of your way.
+- **Free of distractions.** No pop-ups competing for you, no tabs of chrome. An AI
+  agent works beside your code and chimes once when it's done; its changes wait
+  in a review until you've looked at them.
+- **The keyboard is enough.** Every action has a key, and the keys stay where your
+  hands already are. The mouse works when you want it, but you never need it.
+- **Easy to reach.** One install script on macOS, Linux and Windows, and it runs
+  anywhere a terminal does, over SSH included.
+
+Raido was called **Odin** until October 2026. The name changed because Odin is also a
+programming language with its own `odin` command. Your settings, themes, sessions and
+the agent skill carry over by themselves ([Coming from Odin](#coming-from-odin)).
 
 ## Start here
 
@@ -27,16 +54,16 @@ No Electron, no web service, no account required by Odin, no telemetry.
 
 ### Install script
 
-On **macOS or Linux**, one script installs everything Odin needs and then Odin:
+On **macOS or Linux**, one script installs everything Raido needs and then Raido:
 
 ```sh
 scripts/install.sh
 ```
 
-Or, without a checkout (it clones Odin first):
+Or, without a checkout (it clones Raido first):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/yukselberkay/odin/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/yukselberkay/raido/main/scripts/install.sh | bash
 ```
 
 It installs, skipping whatever is already there:
@@ -50,19 +77,19 @@ It installs, skipping whatever is already there:
    is too old is reported, not replaced.
 3. **rust-analyzer**, for Rust diagnostics, hover and completion in the editor
    (`--no-lsp` skips it).
-4. **JetBrains Mono Nerd Font**, Odin's [font](#fonts) and the source of the explorer's
-   Nerd Font file icons, which Odin then shows by default (`icons = true`): Homebrew's cask on macOS
+4. **JetBrains Mono Nerd Font**, Raido's [font](#fonts) and the source of the explorer's
+   Nerd Font file icons, which Raido then shows by default (`icons = true`): Homebrew's cask on macOS
    when Homebrew is installed, otherwise the latest Nerd Fonts release into
    `~/Library/Fonts` or `~/.local/share/fonts` (`--no-font` skips it).
-5. **Odin**, built with `cargo install --locked` into `~/.cargo/bin/odin`.
-6. **`odin` on your PATH**, so it runs by name. If your terminal can't find it yet, it
+5. **Raido**, built with `cargo install --locked` into `~/.cargo/bin/raido`.
+6. **`raido` on your PATH**, so it runs by name. If your terminal can't find it yet, it
    links it into a folder already on your PATH that you can write to
    (`~/.local/bin`, `~/bin`, `/opt/homebrew/bin` or `/usr/local/bin`), so it works in
    that terminal at once; without one, it adds `~/.cargo/bin` to your shell's startup
-   file (zsh, bash or fish; once, marked) for new terminals. Another `odin` already
-   first on PATH (the Odin programming language has one too) is reported, not
-   replaced.
-7. **The [Odin skill](#ask-your-ai-agent-about-odin)** for AI agents, for every project
+   file (zsh, bash or fish; once, marked) for new terminals. Another `raido` already
+   first on PATH is reported, not replaced. An install from when Raido was called
+   Odin (the `odin` command) is removed.
+7. **The [Raido skill](#ask-your-ai-agent-about-raido)** for AI agents, for every project
    of your user (`--no-skill` skips it; a failure here only warns).
 
 Run it as yourself, not with `sudo`; it asks for `sudo` only for system packages.
@@ -70,7 +97,7 @@ To do the same steps by hand, read on.
 
 ### 1. Prerequisites
 
-Odin runs on **Linux, macOS and Windows 10/11** (see [Windows](#windows) for the
+Raido runs on **Linux, macOS and Windows 10/11** (see [Windows](#windows) for the
 Windows specifics). You need:
 
 - Rust **1.88 or newer** and Cargo. Current stable Rust is recommended.
@@ -117,13 +144,13 @@ If Rust is already installed but too old, use `rustup update stable`.
 On **Windows**, `scripts\install.ps1` does the same in PowerShell, using winget for
 the programs: Git, the Visual Studio C++ build tools (Rust's linker; a large
 download), Rust through rustup, rust-analyzer, JetBrains Mono Nerd Font (for your
-user, no administrator rights), Odin, the AI-agent skill, and `%USERPROFILE%\.cargo\bin`
-on your user PATH, so `odin` runs in that window at once and in every new one:
+user, no administrator rights), Raido, the AI-agent skill, and `%USERPROFILE%\.cargo\bin`
+on your user PATH, so `raido` runs in that window at once and in every new one:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\install.ps1
 # without a checkout:
-irm https://raw.githubusercontent.com/yukselberkay/odin/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/yukselberkay/raido/main/scripts/install.ps1 | iex
 ```
 
 `-NoFont`, `-NoLsp` and `-NoSkill` skip those parts. Afterwards pick
@@ -135,48 +162,48 @@ Appearance → Font face). By hand instead:
 2. Install [Git for Windows](https://git-scm.com/download/win).
 3. Use **Windows Terminal** (built into Windows 11) for true color and full key
    support. For explorer icons, set a [Nerd Font](https://www.nerdfonts.com/) in its
-   profile; without one, Odin shows plain colored markers instead.
+   profile; without one, Raido shows plain colored markers instead.
 
 Then build and install from PowerShell exactly as below (`cargo build --release
---locked`, `cargo install --path . --locked`); the binary is `odin.exe` in
+--locked`, `cargo install --path . --locked`); the binary is `raido.exe` in
 `%USERPROFILE%\.cargo\bin`, which rustup adds to `PATH`.
 
 On Windows, terminal panes start **PowerShell** (`pwsh`, else Windows PowerShell,
 else `cmd.exe`; override with `shell = "…"`), configuration lives in
-**`%APPDATA%\odin\config.toml`** (themes in `%APPDATA%\odin\themes`), and the clipboard
+**`%APPDATA%\raido\config.toml`** (themes in `%APPDATA%\raido\themes`), and the clipboard
 goes through PowerShell's `Get-Clipboard` / `Set-Clipboard`. CLIs installed with npm
 (`codex`, `gemini`, `pyright-langserver`, …) are found through their `.cmd` shims.
 Omarchy themes are Linux-only and simply do not appear.
 
 ### 2. Get the source and build
 
-Extract the supplied **source ZIP**, or use your existing Odin checkout, then
+Extract the supplied **source ZIP**, or use your existing Raido checkout, then
 enter the directory containing `Cargo.toml`:
 
 ```sh
-cd odin
+cd raido
 cargo build --release --locked
-./target/release/odin --version
+./target/release/raido --version
 ```
 
 There is no public repository URL or crates.io installation assumed by this
 guide. The first build downloads dependencies; subsequent builds reuse Cargo's
 cache. `--locked` uses the versions recorded in `Cargo.lock`.
 
-The executable is `target/release/odin`. No Node.js, browser, or Python runtime
+The executable is `target/release/raido`. No Node.js, browser, or Python runtime
 is needed to run the editor. Screenshot tooling is not part of the application.
 
 ### 3. Run without installing
 
 ```sh
-./target/release/odin .                   # Browse the current project
-./target/release/odin examples/forge.c    # Open a specific file
-./target/release/odin . --demo            # Rust example + AI launcher + shell
-./target/release/odin --help
+./target/release/raido .                   # Browse the current project
+./target/release/raido examples/forge.c    # Open a specific file
+./target/release/raido . --demo            # Rust example + AI launcher + shell
+./target/release/raido --help
 ```
 
 Run these inside an interactive terminal, not through a pipe. When opening a
-file inside a Git repository, Odin uses that repository as its workspace root;
+file inside a Git repository, Raido uses that repository as its workspace root;
 outside Git it uses the file's parent directory.
 When opening a directory, that directory is the workspace. Shell panes start
 there, and editor command paths are resolved relative to it.
@@ -192,11 +219,11 @@ From the source directory, install into Cargo's user-level bin directory:
 
 ```sh
 cargo install --path . --locked
-odin --version
-odin ~/projects/my-project
+raido --version
+raido ~/projects/my-project
 ```
 
-By default the binary is installed at `~/.cargo/bin/odin`. Cargo's bin directory
+By default the binary is installed at `~/.cargo/bin/raido`. Cargo's bin directory
 must be on `PATH`; `. "$HOME/.cargo/env"` sets that up for the current shell.
 Do **not** run `cargo install` with `sudo`.
 
@@ -205,7 +232,7 @@ For an explicit alternative installation location:
 ```sh
 cargo install --path . --locked --root "$HOME/.local"
 export PATH="$HOME/.local/bin:$PATH"
-odin --version
+raido --version
 ```
 
 Add that PATH line to your shell startup file if you want it to persist.
@@ -219,17 +246,33 @@ If you chose a custom root, repeat `--root "$HOME/.local"` when updating.
 For a Cargo-managed default installation, uninstall with:
 
 ```sh
-cargo uninstall odin-editor
+cargo uninstall raido
 ```
 
 For the custom-root installation, use
-`cargo uninstall --root "$HOME/.local" odin-editor`.
-The **package** is named `odin-editor`; its **executable** is named `odin`.
+`cargo uninstall --root "$HOME/.local" raido`.
+The **package** is named `raido`; its **executable** is named `raido`.
 Uninstalling does not remove your projects or user configuration.
+
+### Coming from Odin
+
+Raido is the same workspace under a new name. The install script removes the old
+`odin` command (`cargo uninstall odin-editor` does it by hand), and on its first start
+Raido moves what Odin kept:
+
+| Odin kept | Raido uses | When it moves |
+| --- | --- | --- |
+| `~/.config/odin` (settings, themes; `%APPDATA%\odin` on Windows) | `~/.config/raido` | First start |
+| A project's `.odin/` session | `.raido/` | When the project opens |
+| The `odin` skill in your AI agents' folders | The `raido` skill | When the skill is installed or refreshed (at startup when an agent is installed) |
+| `ODIN`, `ODIN_SOCKET`, `ODIN_DOCS` in terminal panes | `RAIDO`, `RAIDO_SOCKET`, `RAIDO_DOCS` | At once |
+
+Only Odin's own files move; a folder or skill named `odin` that belongs to something
+else (the Odin language, for one) is left alone.
 
 ## Your first five minutes
 
-1. **Open a project:** run `odin /path/to/project` (or the local binary above).
+1. **Open a project:** run `raido /path/to/project` (or the local binary above).
    A directory opens a scratch editor plus the file/Git sidebar.
 2. **Choose a file:** press `Ctrl-e`, use Up/Down to select a file or directory,
    Right to expand, Left to collapse, and Enter to open. Focus moves to the editor.
@@ -253,17 +296,17 @@ keys (Alt-↑/↓ also works where Alt is free). **Esc** returns to your work wh
 guide stays open, so you can follow it step by step as you type commands and edit;
 any other key also goes straight to your work. **F1** focuses the open guide again,
 and F1 on a focused guide (or `:help`) closes it. Editor commands
-such as `:w` are entered in Odin, not the shell. While a terminal is focused,
-use **Ctrl-b then `:`** to open Odin's command prompt.
+such as `:w` are entered in Raido, not the shell. While a terminal is focused,
+use **Ctrl-b then `:`** to open Raido's command prompt.
 
-![The F1 field guide docked beside the editor](docs/odin-field-guide.png)
+![The F1 field guide docked beside the editor](docs/raido-field-guide.png)
 
 ## Horizontal and vertical tiles
 
 The names describe the dividing border: a **vertical split** creates left/right
 panes; a **horizontal split** creates top/bottom panes.
 
-| Layout | Shortcut | Odin command |
+| Layout | Shortcut | Raido command |
 | --- | --- | --- |
 | Side-by-side editor panes | `Ctrl-b %` | `:vsplit` |
 | Stacked editor panes | `Ctrl-b "` | `:split` |
@@ -290,14 +333,14 @@ on screen can't be docked, and closing it brings back the newest docked one.
 
 ### Reproduce the C + terminal screenshot
 
-From the Odin source directory:
+From the Raido source directory:
 
 ```sh
-odin .
-# Without installing: ./target/release/odin .
+raido .
+# Without installing: ./target/release/raido .
 ```
 
-Then use these keys **inside Odin**:
+Then use these keys **inside Raido**:
 
 1. Type `:e examples/forge.c`, then Enter — open the C source in the first pane.
 2. `Ctrl-b %` — create a right-hand editor pane (vertical dividing border).
@@ -314,12 +357,12 @@ Then use these keys **inside Odin**:
 6. `Ctrl-b o` cycles back to the C editor; `Ctrl-b z` zooms/unzooms it.
    To give the C editor more room, use `Ctrl-b Ctrl-Right` a few times.
 
-![Odin with C source left, the README rendered top-right, and a live C build terminal bottom-right](docs/odin-c-tiles.png)
+![Raido with C source left, the README rendered top-right, and a live C build terminal bottom-right](docs/raido-c-tiles.png)
 
 This is a live application capture, not a mockup. The file explorer and Git
 history remain visible alongside both split directions.
 
-Start with `odin .` as above even if you extracted a ZIP: the archive does not
+Start with `raido .` as above even if you extracted a ZIP: the archive does not
 contain Git history. To enable Git for a new project, run `git init` in its root;
 the history graph appears after you make commits.
 
@@ -345,7 +388,7 @@ the history graph appears after you make commits.
 - **Terminals:** real PTYs, ANSI/256/true-color rendering, resize propagation,
   application cursor keys, bracketed paste, terminal query responses, and
   bounded scrollback. Shells and CLI tools run in the project directory.
-  `odin FILE` typed in one opens FILE in a pane of this Odin, not a second Odin.
+  `raido FILE` typed in one opens FILE in a pane of this Raido, not a second Raido.
 - **AI panes:** run **OpenAI Codex**, **Claude Code**, **Gemini CLI** or the
   **Antigravity CLI** (`agy`) as installed executables, beside or below your code.
   These are the real tools, not imitations or provider-specific chat widgets.
@@ -374,7 +417,7 @@ Shift on many keyboard layouts. On macOS, **Ctrl means Control, not Command**.
 | `Ctrl-s` | Save editor buffer |
 | `Ctrl-q` | Quit, refusing unsaved buffers |
 | `Ctrl-b %` / `Ctrl-b "` | Side-by-side / stacked editor split |
-| `Ctrl-b arrows` or `Ctrl-b h/j/k/l` | Move between panes; the one taking your keys has Odin's `◉` before its title |
+| `Ctrl-b arrows` or `Ctrl-b h/j/k/l` | Move between panes; the one taking your keys has Raido's `◉` before its title |
 | `Ctrl-b Ctrl-arrows` | Resize the closest split on that axis |
 | `Ctrl-b r` | Resize mode: arrows or `h j k l` resize the focused pane, as often as you like, Enter or Escape when done (macOS keeps Ctrl+arrows for switching desktops, so use this there) |
 | `Ctrl-b Shift-arrows` or `Ctrl-b H/J/K/L` | Move the pane: it trades places with the pane on that side, or, at the edge already, takes that whole side of the window (`:move right`) |
@@ -396,7 +439,7 @@ Shift on many keyboard layouts. On macOS, **Ctrl means Control, not Command**.
 | `Ctrl-b :` | Command prompt, including from terminal panes |
 | `F1` | Field guide beside your work, focused: ↑/↓ PgUp/PgDn scroll, Esc back to work (stays open); F1 refocuses / closes |
 
-`Ctrl-q`, `Ctrl-e`, `Ctrl-p`, F1 and the Ctrl-b prefix are reserved by Odin even
+`Ctrl-q`, `Ctrl-e`, `Ctrl-p`, F1 and the Ctrl-b prefix are reserved by Raido even
 inside a terminal. Other ordinary terminal keys go to the child CLI; Escape alone
 does **not** leave a terminal pane. `Ctrl-s` saves in an editor but passes through
 in terminal panes. Use Ctrl-b plus arrows or `o` to leave a terminal.
@@ -434,7 +477,7 @@ Git sees (ignored files left out) or, outside a repository, everything but `.git
 `target` and `node_modules`; binary files and files over 2 MB are skipped, and it
 stops at 2,000 results.
 
-Dotfiles and dot-directories (`.github`, `.env`, `.git`, `.odin`, …) are always shown.
+Dotfiles and dot-directories (`.github`, `.env`, `.git`, `.raido`, …) are always shown.
 Only `target` and `node_modules` build output is left out of the tree; `Ctrl-p` still
 opens files there.
 
@@ -457,7 +500,7 @@ The name takes the mark's color too. Colors come from the theme's terminal palet
 Each entry shows a **file-type icon** in its language's color, the same Nerd Font glyphs
 Omarchy's terminal tools use (Rust, C/C++, Python, Go, JS/TS, Markdown, TOML, YAML,
 shell, images, archives, Git files, Docker, licenses…). They need a Nerd Font in your
-terminal, which Omarchy ships by default. With the default `icons = true`, Odin uses
+terminal, which Omarchy ships by default. With the default `icons = true`, Raido uses
 them when your terminal bundles Nerd Font symbols (kitty, WezTerm, Ghostty) or a Nerd
 Font is installed, and otherwise shows plain markers in the same colors (`●` files,
 `■` folders) instead of `?` or boxes. Force a style with `icons = "nerd"` or
@@ -478,23 +521,23 @@ after one of them, `+`, `-` and `0` keep working without the prefix for a second
 `:zoom in`, `:zoom out` and `:zoom reset` do the same (`:zoom` alone maximizes the
 pane, like `Ctrl-b z`). The layout, editors and terminal panes reflow to the new size.
 
-A terminal program can't scale its own text, so Odin asks the terminal window:
+A terminal program can't scale its own text, so Raido asks the terminal window:
 
 | Terminal | How |
 | --- | --- |
-| macOS Terminal | AppleScript, 1 pt per step, only for Odin's own tab; your profile is untouched and reset returns to its size |
+| macOS Terminal | AppleScript, 1 pt per step, only for Raido's own tab; your profile is untouched and reset returns to its size |
 | xterm | Its font menu escape (`allowFontOps`, on by default) |
 | kitty | `kitty @ set-font-size`, when remote control is on (`allow_remote_control` and `listen_on`) |
-| Others (iTerm2, Ghostty, WezTerm, Alacritty, Windows Terminal, …) | Odin names your terminal's own keys: Cmd-+ / Cmd-- / Cmd-0 on macOS, Ctrl-+ / Ctrl-- / Ctrl-0 elsewhere |
+| Others (iTerm2, Ghostty, WezTerm, Alacritty, Windows Terminal, …) | Raido names your terminal's own keys: Cmd-+ / Cmd-- / Cmd-0 on macOS, Ctrl-+ / Ctrl-- / Ctrl-0 elsewhere |
 
 ### Fonts
 
-Odin's font is **JetBrains Mono Nerd Font Mono at 14 pt** (`font` and `font_size` in
-`config.toml`). The font belongs to the terminal window, so how far Odin can apply
+Raido's font is **JetBrains Mono Nerd Font Mono at 14 pt** (`font` and `font_size` in
+`config.toml`). The font belongs to the terminal window, so how far Raido can apply
 it depends on the terminal:
 
-- **macOS Terminal:** while Odin runs, its tab switches to that font and size, and
-  gets its own font back when Odin exits. Your profile and other tabs don't change.
+- **macOS Terminal:** while Raido runs, its tab switches to that font and size, and
+  gets its own font back when Raido exits. Your profile and other tabs don't change.
   `Ctrl-b 0` returns to 14 pt.
 - **Other terminals** can't have one window's font changed from outside, so they
   keep their own font. Make JetBrains Mono your terminal's font with
@@ -513,7 +556,7 @@ itself, `:font` edits the terminal's config:
 | `:font list` | Installed monospace fonts |
 | `:font +` / `-` / `reset` | Same as `Ctrl-b +` / `-` / `0` above |
 
-Odin finds the terminal from its environment, or on Linux from the process that
+Raido finds the terminal from its environment, or on Linux from the process that
 started it (foot under Omarchy sets no variable). Only the font lines change; the
 rest of the file is kept. For WezTerm, Windows Terminal and macOS terminals, `:font`
 says where the setting lives. Use a [Nerd Font](https://www.nerdfonts.com/) for the
@@ -566,7 +609,7 @@ more room.
 
 ### Review AI changes
 
-Like VS Code shows what Copilot or Claude changed, Odin shows what your AI panes
+Like VS Code shows what Copilot or Claude changed, Raido shows what your AI panes
 change, whichever CLI runs in them (Codex, Claude Code, Gemini, a local model):
 **`Ctrl-b v`** or `:changes` opens the review. Each changed file is listed with its
 hunks, old and new line numbers, added lines in green and removed lines in red, and
@@ -611,19 +654,19 @@ When an AI pane finishes a prompt, the status line says how many files it change
 (`Claude finished · 3 files to review: Ctrl-b v`), and its title shows
 `✎ 3 files · ^B v` until you've kept or undone them.
 
-**How it knows what the agent changed:** while AI panes are open, Odin snapshots the
+**How it knows what the agent changed:** while AI panes are open, Raido snapshots the
 project with Git every couple of seconds while an agent works, and every few seconds
 while they wait. Files that change while an agent is working are the agent's; the
 review compares each one with how it was before the agent first touched it, so
 changes from several prompts add up until you keep or undo them. Files you change
-while no agent works, or save from Odin's editor, are yours and stay out of the
+while no agent works, or save from Raido's editor, are yours and stay out of the
 review. Edits you make in another editor *while* an agent works can't be told apart
 and show up too (keep them with `y`). It works with every CLI, needs no setup, and
-never writes to your repository: the snapshots go into Odin's own Git index and
-object store in your cache folder, deleted when Odin quits. `.gitignore`d files
+never writes to your repository: the snapshots go into Raido's own Git index and
+object store in your cache folder, deleted when Raido quits. `.gitignore`d files
 (build output, `node_modules`) are left out.
 
-The review needs a Git repository (`git init` makes one) and lasts while Odin runs.
+The review needs a Git repository (`git init` makes one) and lasts while Raido runs.
 Set `review_changes = false` to turn it off.
 
 ### Editor: normal mode
@@ -749,8 +792,8 @@ pops up by itself shows at most six suggestions. `autocomplete = false` keeps it
 `Ctrl-Space` and `.`.
 
 Mac-style moves work in insert and normal mode, as far as your terminal passes the
-keys on (`odin --keys` shows what arrives; a key that prints nothing never reaches
-Odin):
+keys on (`raido --keys` shows what arrives; a key that prints nothing never reaches
+Raido):
 
 | Keys | Action |
 | --- | --- |
@@ -762,14 +805,14 @@ Odin):
 
 macOS Terminal keeps Cmd+arrows for itself, so use Fn+Shift+←/→ there, or a terminal
 that passes Cmd on (kitty, WezTerm, Ghostty). If a combination prints nothing in
-`odin --keys`, macOS Terminal can be taught to send it in Settings → Profiles →
+`raido --keys`, macOS Terminal can be taught to send it in Settings → Profiles →
 Keyboard; for example Shift+Option+← / → as `\033[1;4D` / `\033[1;4C`.
 
 ### Copy and paste
 
-One clipboard, shared with the rest of your desktop: everything you copy in Odin can
+One clipboard, shared with the rest of your desktop: everything you copy in Raido can
 be pasted in other apps and vice versa (via `wl-copy`/`wl-paste` on Wayland,
-`xclip` or `xsel` on X11, `pbcopy`/`pbpaste` on macOS; without them Odin copies through
+`xclip` or `xsel` on X11, `pbcopy`/`pbpaste` on macOS; without them Raido copies through
 the terminal's OSC 52, which most terminals support, even over SSH).
 
 | Keys | Action |
@@ -798,7 +841,7 @@ Claude Code's full-screen mode, htop; other full-screen programs like `less` get
 arrow keys, as in a normal terminal. A click focuses a pane, puts the editor cursor
 on the character you clicked, or opens an explorer entry.
 
-While Odin has the mouse, your terminal's click-and-drag selection is off. To select
+While Raido has the mouse, your terminal's click-and-drag selection is off. To select
 and copy with the mouse:
 
 - **`Ctrl-b y`** (or `:mouse off`) hands the mouse back to the terminal and leaves the
@@ -836,7 +879,7 @@ pane keeps running underneath; leaving shows its live output again. `Ctrl-b` and
 `Ctrl-q` still work and leave copy mode first.
 
 **Copy view (`Ctrl-b Z`, or `:copyview`)** shows only the focused pane, edge to edge:
-no sidebar, header, status lines, borders, line numbers or change marks, and Odin
+no sidebar, header, status lines, borders, line numbers or change marks, and Raido
 lets go of the mouse. Select with the mouse as usual, then `Ctrl-b Z` again to
 return. Keys keep working in the pane, so you can scroll a terminal with PageUp
 while in it. A reminder
@@ -847,12 +890,12 @@ text, however long, without anything from the screen.
 
 ### Language servers (LSP)
 
-Odin starts the standard language server for a file the first time you open it, in
+Raido starts the standard language server for a file the first time you open it, in
 the project root, and talks to it in the background. Install the server once:
 
-![clangd hover docs for a C function, with an error marked in the gutter and underlined](docs/odin-lsp.png)
+![clangd hover docs for a C function, with an error marked in the gutter and underlined](docs/raido-lsp.png)
 
-| Language | Server Odin looks for | Install |
+| Language | Server Raido looks for | Install |
 | --- | --- | --- |
 | Rust | `rust-analyzer` | `rustup component add rust-analyzer` |
 | Go | `gopls` | `go install golang.org/x/tools/gopls@latest` |
@@ -899,7 +942,7 @@ Existing `.md`/`.markdown` files open **rendered**; new or empty ones open as
 source so you can write. The preview is read-only and re-renders on every edit,
 and when an AI or shell tool rewrites the file on disk.
 
-![Markdown source on the left with a live rendered preview on the right](docs/odin-markdown.png)
+![Markdown source on the left with a live rendered preview on the right](docs/raido-markdown.png)
 
 | Key / command | Action |
 | --- | --- |
@@ -934,26 +977,26 @@ without shell quotes. Shell commands follow your shell's normal quoting rules.
 
 ### Opening files from a terminal pane
 
-Inside one of Odin's terminal panes, `odin FILE` doesn't start a second Odin inside
-the first. It opens FILE in this Odin, in a new editor pane beside the terminal,
-and returns you to the shell prompt with `Opened FILE in Odin`. Relative paths are
+Inside one of Raido's terminal panes, `raido FILE` doesn't start a second Raido inside
+the first. It opens FILE in this Raido, in a new editor pane beside the terminal,
+and returns you to the shell prompt with `Opened FILE in Raido`. Relative paths are
 relative to the shell's current directory.
 
 - A file that doesn't exist yet opens as a new buffer; `Ctrl-s` creates it.
 - A file already on screen brings its pane forward instead of opening another.
 - Markdown files open rendered, as they do from the explorer.
-- `odin DIR` (or bare `odin`) for a folder of this project shows it in the explorer.
-  A folder of another project, or `odin --nested FILE`, starts a separate Odin as before.
+- `raido DIR` (or bare `raido`) for a folder of this project shows it in the explorer.
+  A folder of another project, or `raido --nested FILE`, starts a separate Raido as before.
 
-On macOS and Linux, Odin listens on a socket in a private temporary directory (mode
-`0700`, removed when Odin exits) and passes its path to every terminal pane as
-`ODIN_SOCKET`. On Windows it listens on a local port (127.0.0.1 only) and hands its
+On macOS and Linux, Raido listens on a socket in a private temporary directory (mode
+`0700`, removed when Raido exits) and passes its path to every terminal pane as
+`RAIDO_SOCKET`. On Windows it listens on a local port (127.0.0.1 only) and hands its
 panes a random secret with the port; a request without it is turned away.
 
 ### Sessions
 
-Odin reopens a project the way you left it. When you quit — or simply close the
-terminal window — and later run `odin` in the same project, you get back:
+Raido reopens a project the way you left it. When you quit — or simply close the
+terminal window — and later run `raido` in the same project, you get back:
 
 - the same panes in the same layout, with the same pane focused (and zoomed);
 - every open file at its cursor position, **including unsaved edits** (still marked
@@ -964,21 +1007,21 @@ terminal window — and later run `odin` in the same project, you get back:
   conversation id (`--session-id`) and reopens exactly that conversation
   (`--resume <id>`), even with several Claude panes or other Claude sessions in the
   same folder. If you switch conversations inside the pane (`/resume`, `/clear`, a
-  fork), Odin follows: it reads which conversation the pane's Claude is in from
+  fork), Raido follows: it reads which conversation the pane's Claude is in from
   Claude's own registry (`~/.claude/sessions/<pid>.json`) whenever it saves, and
   reopens that one. A pane that never got a message starts fresh under the same id.
   Codex (`resume --last`), Gemini (`--resume latest`) and Antigravity (`--continue`)
   cannot be pinned to an id, so they reopen their latest conversation in the
   project. Other launchers restart below their previous output. Claude panes from a
-  session saved by an older Odin open Claude's conversation picker;
+  session saved by an older Raido open Claude's conversation picker;
 - the AI launcher, Markdown previews, the Git pane and its branch filter.
 
-The session lives in `.odin/session.json` in the project root, readable only by you.
-`.odin/` contains its own `.gitignore`, so it is never committed. Odin saves on quit and every few seconds while you work (only when something
+The session lives in `.raido/session.json` in the project root, readable only by you.
+`.raido/` contains its own `.gitignore`, so it is never committed. Raido saves on quit and every few seconds while you work (only when something
 changed), so a closed window or a crash loses at most a few seconds.
 
-Sessions are kept automatically in Git repositories and wherever `.odin/` exists, so
-opening Odin in an arbitrary directory leaves nothing behind; `:session save` starts
+Sessions are kept automatically in Git repositories and wherever `.raido/` exists, so
+opening Raido in an arbitrary directory leaves nothing behind; `:session save` starts
 one anywhere. Programs that were running are started again, not continued:
 a shell gets a fresh prompt below its old output, and `:run` plugins come back as a
 shell instead of running again.
@@ -988,7 +1031,7 @@ shell instead of running again.
 | `:session` | Where this project's session is saved, or why it is not |
 | `:session save` | Save now, and keep a session here even outside a Git repository |
 | `:session forget` | Delete the saved session and stop saving until the next start |
-| `odin --fresh` | Start without reopening the session (it is replaced when you quit) |
+| `raido --fresh` | Start without reopening the session (it is replaced when you quit) |
 
 Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 
@@ -1004,7 +1047,7 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 :reload                   Reload a clean file
 :new                      New scratch editor pane
 :split / :vsplit          Stack / side-by-side split
-:term                     New shell (in it, `odin FILE` opens FILE here)
+:term                     New shell (in it, `raido FILE` opens FILE here)
 :ai [codex|claude|gemini|agy] [right|below]
                           AI launcher, or launch a CLI, beside or below
 :ai local [model]         Your local LLM ([ai.local], else Ollama / LM Studio)
@@ -1015,8 +1058,8 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 :format                   Format the file with its language server
 :lsp / :lsp restart       Language server status / restart all servers
 :font [size N|family X|list]  Terminal font: show, save size or family, list fonts
-:docs                     Open the full Odin manual (rendered)
-:skill [install|remove]   Install / remove the Odin skill for AI agents
+:docs                     Open the full Raido manual (rendered)
+:skill [install|remove]   Install / remove the Raido skill for AI agents
 :set rnu / :set nornu     Relative / absolute line numbers
 :run name                 Launch an explicitly configured command plugin
 :git / :git all           Git pane: open, focus, or maximize / show all branches
@@ -1030,46 +1073,46 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 Closing a view does not delete its buffer: reopen it with Tab or `:bn` in an editor.
 With multiple panes, `:q!` allows closing an unsaved view but retains its buffer;
 closing the last pane with `:q!` exits and discards unsaved buffers.
-`:qa!` explicitly discards all unsaved buffers. Odin does not automatically save
+`:qa!` explicitly discards all unsaved buffers. Raido does not automatically save
 files on exit. `:wa` stops on an error (for example an unnamed dirty buffer); use
 `:w filename` on that buffer before retrying.
 
-## Ask your AI agent about Odin
+## Ask your AI agent about Raido
 
-Odin ships an **agent skill** — interactive documentation your AI agent reads on its
-own. Ask it things like *"how do I make the font bigger in Odin?"*, *"how do I open
+Raido ships an **agent skill** — interactive documentation your AI agent reads on its
+own. Ask it things like *"how do I make the font bigger in Raido?"*, *"how do I open
 Git?"* or *"set my theme to Dracula"*, and it answers with the exact keys (or edits
 your config for you).
 
 The skill uses the open [Agent Skills](https://agentskills.io) format (`SKILL.md`),
 so it works with **Claude Code, Codex, Gemini CLI, OpenCode, GitHub Copilot** and any
 other agent that reads skills. It is installed **once per user, not per project**, so
-every project on the machine has it; there is nothing in a project's `.odin` folder.
-It lives in Odin's data folder (`~/.local/share/odin/skills/odin`,
-`~/Library/Application Support/odin/…` on macOS, `%APPDATA%\odin` on Windows), linked
+every project on the machine has it; there is nothing in a project's `.raido` folder.
+It lives in Raido's data folder (`~/.local/share/raido/skills/raido`,
+`~/Library/Application Support/raido/…` on macOS, `%APPDATA%\raido` on Windows), linked
 into the shared `~/.agents/skills` (read by Codex, Gemini CLI, OpenCode, Copilot and
 others) and into `~/.claude/skills` and `~/.codex/skills` when Claude Code or Codex is
 installed or has been used, so even an agent's very first session finds it. This is
 the same layout Omarchy uses for its own skills. Windows gets copies instead of
-links. Odin never replaces an `odin` skill it did not create.
+links. Raido never replaces an `raido` skill it did not create.
 
-It gets there, and stays current with your Odin version:
+It gets there, and stays current with your Raido version:
 
 - **`scripts/install.sh`** installs it as its last step (`--no-skill` skips it). If
-  that step fails, the script only warns: Odin is installed either way.
-- **Each time Odin starts**, it refreshes the skill in the background, but only when
-  an AI agent is installed or has been used on the machine. Without one, Odin
-  leaves the agents' folders alone, and nothing in Odin needs an agent.
-- **Launching an agent** from Odin's launcher checks it again.
+  that step fails, the script only warns: Raido is installed either way.
+- **Each time Raido starts**, it refreshes the skill in the background, but only when
+  an AI agent is installed or has been used on the machine. Without one, Raido
+  leaves the agents' folders alone, and nothing in Raido needs an agent.
+- **Launching an agent** from Raido's launcher checks it again.
 
 The skill bundles this manual, the theme guide and the example config, so answers
-match your Odin version. Agents without skill support can still read it: every Odin
-pane sets **`$ODIN_DOCS`** to the manual's path. You can read it yourself with `:docs`.
+match your Raido version. Agents without skill support can still read it: every Raido
+pane sets **`$RAIDO_DOCS`** to the manual's path. You can read it yourself with `:docs`.
 
 | Do it yourself | |
 | --- | --- |
-| `odin --install-skill` / `:skill` | Install or refresh now (without launching an agent) |
-| `odin --remove-skill` / `:skill remove` | Remove every link and copy Odin made |
+| `raido --install-skill` / `:skill` | Install or refresh now (without launching an agent) |
+| `raido --remove-skill` / `:skill remove` | Remove every link and copy Raido made |
 | `ai_skill = false` | Never install or refresh it automatically |
 
 ## AI authentication
@@ -1091,9 +1134,9 @@ Install the desired CLI separately using its official instructions:
 A missing CLI is reported with its install command.
 
 **Done sound:** when an AI pane finishes a prompt, or stops to ask you something,
-Odin plays a short chime (macOS Glass; the desktop's "complete" sound on Linux;
+Raido plays a short chime (macOS Glass; the desktop's "complete" sound on Linux;
 Windows' notification sound) and,
-if you're in another pane, names the pane in the status line. Odin hears the agent
+if you're in another pane, names the pane in the status line. Raido hears the agent
 working (its spinner keeps drawing after you press Enter) and then going quiet, or
 the agent ringing the terminal bell, so it works with every CLI and needs no setup.
 Pick another sound with `ai_sound` (a system sound such as macOS `"Hero"` or Windows
@@ -1106,8 +1149,8 @@ diff, to keep or undo change by change ([Review AI changes](#review-ai-changes))
 ### Bring your own model (local LLMs)
 
 Any AI tool or local model becomes a launcher entry with a few lines in
-`~/.config/odin/config.toml`. Odin runs it in a real terminal pane in your project —
-no API keys or model traffic pass through Odin.
+`~/.config/raido/config.toml`. Raido runs it in a real terminal pane in your project —
+no API keys or model traffic pass through Raido.
 
 ```toml
 [ai.<name>]            # shows up in the launcher (keys 6–9) and as :ai <name>
@@ -1118,7 +1161,7 @@ env = { OPENAI_API_BASE = "http://localhost:8080/v1", OPENAI_API_KEY = "local" }
 ```
 
 **`[ai.local]`** is special: it is what launcher key **5** and `:ai local [model]` run.
-Without it, Odin finds a local runtime on its own — **Ollama** (`ollama run` with your
+Without it, Raido finds a local runtime on its own — **Ollama** (`ollama run` with your
 first pulled model, or the one you name) or **LM Studio** (`lms chat`) — and otherwise
 tells you how to add one. Defining `[ai.codex]` etc. overrides a built-in entry.
 
@@ -1135,20 +1178,20 @@ Recipes:
 Make the CLIs you want available on `PATH`; launch them in an AI pane and
 follow their own sign-in/authentication flow. Existing CLI logins work normally.
 For API-key authentication, use the CLI's documented credential manager or
-environment setup **outside Odin**, then start Odin from that environment.
-Do not put API keys into project files or Odin's TOML config.
+environment setup **outside Raido**, then start Raido from that environment.
+Do not put API keys into project files or Raido's TOML config.
 
-Odin does not store keys, wrap model requests, disable approvals, or bypass the
+Raido does not store keys, wrap model requests, disable approvals, or bypass the
 CLI's sandbox/permission settings. AI tools run with the same OS permissions as
-the user, and their own usage/billing applies. No model request is made by Odin
+the user, and their own usage/billing applies. No model request is made by Raido
 itself. A missing CLI produces a visible error without destroying a pane.
 
 ## Themes and command plugins
 
-Configuration lives at `~/.config/odin/config.toml` on Linux and macOS,
-`%APPDATA%\odin\config.toml` on Windows, or `$XDG_CONFIG_HOME/odin/config.toml` when
+Configuration lives at `~/.config/raido/config.toml` on Linux and macOS,
+`%APPDATA%\raido\config.toml` on Windows, or `$XDG_CONFIG_HOME/raido/config.toml` when
 that is set. See [config.example.toml](config.example.toml).
-Odin never loads configuration or executable plugins from the project being opened.
+Raido never loads configuration or executable plugins from the project being opened.
 
 ### Bundled dark themes
 
@@ -1170,32 +1213,32 @@ ANSI colors. The original `phosphor` (default) and `amber` also remain available
 | Monokai | `:theme monokai` | Warm black, lime, hot pink, cyan |
 | GitHub Dark | `:theme github-dark` | Near-black, blue, coral, lavender |
 
-![All bundled themes side by side](docs/odin-dark-themes.png)
+![All bundled themes side by side](docs/raido-dark-themes.png)
 
 In an editor, press **Esc**, type a command above, then **Enter**. From a terminal
 or AI pane, press **Ctrl-b**, then **:**, type `theme dracula` (without another
 colon), and press **Enter**. Open buffers and terminal processes are preserved.
-The choice is **saved**: Odin starts with it next time. `:theme name` writes (or
-creates) the single top-level line in `~/.config/odin/config.toml`, leaving your other
+The choice is **saved**: Raido starts with it next time. `:theme name` writes (or
+creates) the single top-level line in `~/.config/raido/config.toml`, leaving your other
 settings and comments untouched:
 
 ```toml
 theme = "visual-studio-dark"
 ```
 
-If updating an older Odin checkout, rebuild/reinstall using
-`cargo install --path . --locked --force`, then restart Odin. Markdown preview adds
+If updating an older Raido checkout, rebuild/reinstall using
+`cargo install --path . --locked --force`, then restart Raido. Markdown preview adds
 `pulldown-cmark`; VS Code theme import adds `serde_json`. See the [theme guide](themes/README.md) for palette
 credits, customization, and compatibility details.
 
 ### Theme plugins — no rebuild needed
 
-Themes are plain files loaded at runtime from `~/.config/odin/themes/`
-(or `$XDG_CONFIG_HOME/odin/themes/`). Drop a file in, and it is available at once:
+Themes are plain files loaded at runtime from `~/.config/raido/themes/`
+(or `$XDG_CONFIG_HOME/raido/themes/`). Drop a file in, and it is available at once:
 
-- **`name.toml`** — an Odin theme (schema in the [theme guide](themes/README.md)).
+- **`name.toml`** — a Raido theme (schema in the [theme guide](themes/README.md)).
 - **`name.json`** — a **VS Code color theme**, used as is. Grab any theme's JSON from
-  the VS Code Marketplace or a theme's repository; Odin maps its editor, UI, terminal
+  the VS Code Marketplace or a theme's repository; Raido maps its editor, UI, terminal
   and TextMate token colors. A relative `"include"` (e.g. Microsoft's
   `2026-dark.json` → `dark_modern.json` → `dark_plus.json`) is followed when the
   parent file sits next to it.
@@ -1206,25 +1249,25 @@ Themes are plain files loaded at runtime from `~/.config/odin/themes/`
 | `:theme na` then **Tab** | Complete theme names; Tab again cycles matches |
 | `:theme name` | Switch; the footer says whether it is built in or which file it came from |
 
-![The theme picker filtered to dark themes, Visual Studio Dark highlighted](docs/odin-theme-picker.png)
+![The theme picker filtered to dark themes, Visual Studio Dark highlighted](docs/raido-theme-picker.png)
 
 **Omarchy themes are picked up automatically.** On an [Omarchy](https://omarchy.org)
 desktop, every installed theme (system and `~/.config/omarchy/themes`) appears in the
 picker as `omarchy-<name>` — e.g. `omarchy-tokyo-night`, `omarchy-catppuccin-latte` —
 read straight from the theme's `colors.toml`. The special theme **`omarchy`** follows
-whatever theme your desktop uses: run `omarchy theme set kanagawa` and Odin re-themes
+whatever theme your desktop uses: run `omarchy theme set kanagawa` and Raido re-themes
 within two seconds. Themes you create or install with Omarchy show up the next time
 you open the picker.
 
 A user file **overrides** a built-in of the same name, so you can customize any
 bundled theme by copying it into the themes directory. The active theme file is
-**live**: save it and Odin re-themes within two seconds. A broken file keeps the last
+**live**: save it and Raido re-themes within two seconds. A broken file keeps the last
 good theme and shows the error; a broken startup theme falls back to Phosphor.
-Theme files cannot execute code; Odin never loads them from project directories.
+Theme files cannot execute code; Raido never loads them from project directories.
 
 ### Custom themes and plugins
 
-Copy [themes/ice.toml](themes/ice.toml) to `~/.config/odin/themes/ice.toml`, then use
+Copy [themes/ice.toml](themes/ice.toml) to `~/.config/raido/themes/ice.toml`, then use
 `:theme ice`. Or copy one of the new TOML files under a **new name**, edit it, and
 select that name — or reuse a built-in name to override it.
 Legacy `syntax = "base16-ocean.dark"` themes still work. The optional
@@ -1235,9 +1278,9 @@ For the default configuration location, these setup commands create the
 directories and prompt before replacing existing files:
 
 ```sh
-mkdir -p "$HOME/.config/odin/themes"
-cp -i config.example.toml "$HOME/.config/odin/config.toml"
-cp -i themes/ice.toml "$HOME/.config/odin/themes/ice.toml"
+mkdir -p "$HOME/.config/raido/themes"
+cp -i config.example.toml "$HOME/.config/raido/config.toml"
+cp -i themes/ice.toml "$HOME/.config/raido/themes/ice.toml"
 ```
 
 If you set `XDG_CONFIG_HOME`, use that directory instead of `~/.config`.
@@ -1255,14 +1298,14 @@ theme immediately. The configuration supports:
 | `relative_numbers` | `false` | Relative line numbers except the current line; type the shown number, then `j`/Enter (down) or `k`/`-` (up) |
 | `icons` | `true` | Explorer file-type icons: `true` picks Nerd Font glyphs when a Nerd Font is available, else colored markers; `"nerd"`/`"basic"` force one; `false` for none |
 | `git_pane` | `false` | Open the Git pane (branches, commit graph, details) at startup |
-| `restore_session` | `true` | Save each project's panes, buffers and terminals to `.odin/` and reopen them |
+| `restore_session` | `true` | Save each project's panes, buffers and terminals to `.raido/` and reopen them |
 | `[ai.name]` | None | Your own AI launcher: `program`, `args` (`{model}`), `model`, `env`; `[ai.local]` backs the Local LLM entry |
 | `ai_split` | `"right"` | Where AI panes open: `"right"` (side by side) or `"below"` (stacked) |
 | `mouse` | `true` | Wheel scrolls the pane under the pointer, a click focuses it ([Mouse](#mouse)); `false` leaves the mouse to the terminal |
 | `ai_sound` | `"default"` | Sound when an AI pane finishes a prompt: `"default"`, `"off"`, `"bell"`, a system sound name (macOS `"Hero"`, Windows `"chimes"`) or a sound file; `:sound` plays it |
 | `review_changes` | `true` | Track the files AI panes change, to [review, keep or undo](#review-ai-changes) them (`Ctrl-b v`) |
 | `format_on_save` | `["go"]` | Languages whose files get imports organized and formatting from their server on save ([Go: tidy on save](#go-tidy-on-save)) |
-| `ai_skill` | `true` | Keep the [Odin skill](#ask-your-ai-agent-about-odin) installed for the AI agents on this machine (at startup and when you launch one) |
+| `ai_skill` | `true` | Keep the [Raido skill](#ask-your-ai-agent-about-raido) installed for the AI agents on this machine (at startup and when you launch one) |
 | `shell` | `$SHELL`, then `/bin/sh` | Executable path for interactive terminal panes |
 | `[plugins.name]` | None | Explicit `program` and `args` for `:run name` |
 
@@ -1286,41 +1329,41 @@ plugins are intentionally not part of v0.1.
 | --- | --- |
 | `cargo` or `rustc` not found | Install Rust with rustup, then open a new shell or run `. "$HOME/.cargo/env"`. |
 | Linker / `cc` not found | Install the compiler prerequisites above; on macOS complete the Xcode tools installation. |
-| `odin` not found after installing | Add the selected installation's `bin` directory to PATH, or run its executable by full path. |
-| Need a specific Odin executable | `command -v odin` shows which installation your shell selects. |
-| “Odin needs an interactive terminal” | Launch directly in Terminal, iTerm2, a Linux terminal emulator or an SSH terminal; do not pipe stdout. |
-| No syntax colors / monochrome UI | Use a color-capable terminal. If you intentionally inherited `NO_COLOR`, `env -u NO_COLOR odin .` enables normal colors for this run. |
+| `raido` not found after installing | Add the selected installation's `bin` directory to PATH, or run its executable by full path. |
+| Need a specific Raido executable | `command -v raido` shows which installation your shell selects. |
+| “Raido needs an interactive terminal” | Launch directly in Terminal, iTerm2, a Linux terminal emulator or an SSH terminal; do not pipe stdout. |
+| No syntax colors / monochrome UI | Use a color-capable terminal. If you intentionally inherited `NO_COLOR`, `env -u NO_COLOR raido .` enables normal colors for this run. |
 | Sidebar missing or tiny panes | Widen the terminal; the sidebar hides below 70 columns. Ctrl-b s toggles it; Ctrl-b z zooms a pane. |
 | A split shortcut does nothing | Release Ctrl-b before the second key. Use `:vsplit` or `:split` if your keyboard makes `%`/`"` awkward. |
-| Running Odin inside tmux | tmux normally consumes Ctrl-b first. Send its literal prefix with Ctrl-b b, then the Odin action, or configure a different tmux prefix. |
-| C compilation fails | Run from the Odin project directory; ensure `cc` exists and create `target` with `mkdir -p target`. |
+| Running Raido inside tmux | tmux normally consumes Ctrl-b first. Send its literal prefix with Ctrl-b b, then the Raido action, or configure a different tmux prefix. |
+| C compilation fails | Run from the Raido project directory; ensure `cc` exists and create `target` with `mkdir -p target`. |
 | New file is absent from the sidebar | Save it first, then focus the explorer and press `r`. |
-| `codex` or `claude` cannot launch | Install that CLI separately and verify `command -v codex` or `command -v claude` in the shell that launches Odin. |
-| File changed on disk | Odin refuses to overwrite it. Save your buffer under a new name with `:w recovery-name`, then compare with the disk version. |
-| Read-only, binary or non-UTF-8 file | Odin respects read-only files and only edits UTF-8 text. Convert a copy externally if needed. |
+| `codex` or `claude` cannot launch | Install that CLI separately and verify `command -v codex` or `command -v claude` in the shell that launches Raido. |
+| File changed on disk | Raido refuses to overwrite it. Save your buffer under a new name with `:w recovery-name`, then compare with the disk version. |
+| Read-only, binary or non-UTF-8 file | Raido respects read-only files and only edits UTF-8 text. Convert a copy externally if needed. |
 | Custom theme not found | Use a simple name with letters, digits, hyphens or underscores, and place its TOML in the user themes directory. |
 
 Clean buffers refresh after external edits; buffers with unsaved changes do not.
-Odin does not provide automatic crash recovery in v0.1.
+Raido does not provide automatic crash recovery in v0.1.
 
 ### macOS, Linux and Windows
 
-Odin works the same on all three; where the systems differ, each gets its own way:
+Raido works the same on all three; where the systems differ, each gets its own way:
 
 | Feature | macOS | Linux | Windows |
 | --- | --- | --- | --- |
 | Clipboard | `pbcopy` / `pbpaste` | `wl-copy` (Wayland), `xclip` / `xsel` (X11) | PowerShell |
 | Clipboard fallback (SSH, none of the above) | OSC 52 | OSC 52 | OSC 52 |
-| `odin FILE` from a terminal pane | private socket | private socket | local port with a secret |
+| `raido FILE` from a terminal pane | private socket | private socket | local port with a secret |
 | AI-finished chime | Glass (`afplay`) | desktop "complete" sound (`paplay`, `pw-play`) | notify sound (PowerShell) |
 | Shells reopen in their last folder | yes | yes | in the project folder (Windows can't tell another program's folder) |
-| Odin's font while it runs | macOS Terminal switches the tab | set it in your terminal or `:font` | set it in your terminal |
+| Raido's font while it runs | macOS Terminal switches the tab | set it in your terminal or `:font` | set it in your terminal |
 | Text size `Ctrl-b + - 0` | Terminal.app, xterm, kitty; others: Cmd-+ / Cmd-- | xterm, kitty; others: Ctrl-+ / Ctrl-- | Windows Terminal: Ctrl-+ / Ctrl-- |
 | Terminal's copy key (shown in hints) | ⌘C | Ctrl-Shift-C | Ctrl-Shift-C |
 | AI skill for agents | linked | linked | copied (links need extra rights) |
-| One-step install, `odin` on PATH | `scripts/install.sh` | `scripts/install.sh` | `scripts\install.ps1` |
+| One-step install, `raido` on PATH | `scripts/install.sh` | `scripts/install.sh` | `scripts\install.ps1` |
 
-Some keys never reach Odin because the system or the terminal keeps them. Each has
+Some keys never reach Raido because the system or the terminal keeps them. Each has
 another way in:
 
 | Key | Kept by | Use instead |
@@ -1333,9 +1376,9 @@ another way in:
 | `Ctrl-b Shift-arrows` (move a pane) | Konsole (Shift+←/→) | `Ctrl-b H J K L` |
 | Alt+←/→ (word left/right) | Windows Terminal (moving between its panes) | Ctrl+←/→ |
 | Ctrl-V (paste) | Windows Terminal (its own paste) | works the same: the paste replaces a selection |
-| Mouse drag (select) | Odin, while it has the mouse | `Ctrl-b y` or `Ctrl-b Z` |
+| Mouse drag (select) | Raido, while it has the mouse | `Ctrl-b y` or `Ctrl-b Z` |
 
-`odin --keys` shows exactly what your terminal sends, to check any other shortcut.
+`raido --keys` shows exactly what your terminal sends, to check any other shortcut.
 
 ## Design and boundaries
 
@@ -1367,7 +1410,7 @@ cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
 cargo build --release --locked
-python3 scripts/pty_smoke.py target/release/odin
+python3 scripts/pty_smoke.py target/release/raido
 cargo run --example beacon
 cc -std=c11 -Wall -Wextra -Werror examples/forge.c -o target/forge
 ./target/forge

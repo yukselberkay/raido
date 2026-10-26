@@ -306,7 +306,7 @@ pub struct App {
     last_reload: Instant,
     theme_stamp: Option<std::time::SystemTime>,
     completion: Option<(String, usize)>,
-    /// Last session JSON written to `.odin/session.json`, to skip unchanged saves.
+    /// Last session JSON written to `.raido/session.json`, to skip unchanged saves.
     session_json: String,
     last_session: Instant,
     /// Autosave this project's session (`:session forget` turns it off until restart).
@@ -315,7 +315,7 @@ pub struct App {
     text_size: Option<Receiver<Result<String>>>,
     /// Right after Ctrl-b +, `-` or `0`, those keys repeat without the prefix.
     text_size_repeat: Option<Instant>,
-    /// `odin FILE` typed in a terminal pane arrives here.
+    /// `raido FILE` typed in a terminal pane arrives here.
     pub remote: Option<crate::remote::Server>,
     /// Quick diff gutter marks, by buffer.
     pub diffs: HashMap<usize, quickdiff::State>,
@@ -360,7 +360,7 @@ pub struct App {
 impl App {
     pub fn new(root: PathBuf, initial: Option<PathBuf>, demo: bool) -> Result<Self> {
         let config = Config::load()?;
-        // A broken user theme must not stop Odin from starting.
+        // A broken user theme must not stop Raido from starting.
         let (theme, theme_error) = match config::load_theme(&config.theme) {
             Ok(theme) => (theme, None),
             Err(error) => (Theme::default(), Some(format!("{error:#}"))),
@@ -386,7 +386,7 @@ impl App {
             mode: Mode::Normal,
             prefix: false,
             input: None,
-            message: "Welcome to Odin. F1 opens the field guide.".into(),
+            message: "Welcome to Raido. F1 opens the field guide.".into(),
             error: false,
             help: false,
             help_focus: false,
@@ -536,8 +536,8 @@ impl App {
         }
         changed
     }
-    /// `odin PATH` from one of Odin's terminals: open the file here instead of
-    /// nesting another Odin; a folder of this project is shown in the explorer.
+    /// `raido PATH` from one of Raido's terminals: open the file here instead of
+    /// nesting another Raido; a folder of this project is shown in the explorer.
     fn remote_open(&mut self, path: &Path) -> crate::remote::Reply {
         use crate::remote::Reply;
         if path.is_dir() {
@@ -555,14 +555,14 @@ impl App {
             }
             let name = dir.file_name().unwrap_or_default().to_string_lossy();
             return Reply::Opened(format!(
-                "Odin is already open here; {} is in the explorer",
+                "Raido is already open here; {} is in the explorer",
                 workspace::printable(&name)
             ));
         }
         match self.open_from_terminal(path) {
             Ok(name) => {
                 self.notice(format!("Opened {name} from the terminal"));
-                Reply::Opened(format!("Opened {name} in Odin"))
+                Reply::Opened(format!("Opened {name} in Raido"))
             }
             Err(error) => {
                 let error = format!("{error:#}");
@@ -619,7 +619,7 @@ impl App {
         self.open(&key)?;
         Ok(name)
     }
-    /// Zoom in / out: ask the terminal window for bigger or smaller text. Odin's
+    /// Zoom in / out: ask the terminal window for bigger or smaller text. Raido's
     /// layout follows the resize that results.
     fn change_text_size(&mut self, step: textsize::Step) {
         self.text_size = Some(textsize::change(step));
@@ -892,7 +892,7 @@ impl App {
         }
         let closing = self.focused;
         if self.visible().len() == 1 {
-            // The last pane on screen: a docked one takes its place, else Odin quits.
+            // The last pane on screen: a docked one takes its place, else Raido quits.
             let Some(next) = self.docked.pop() else {
                 self.quit(force)?;
                 return Ok(());
@@ -924,7 +924,7 @@ impl App {
         self.running = false;
         Ok(())
     }
-    /// The workspace as it is now, for `.odin/session.json`.
+    /// The workspace as it is now, for `.raido/session.json`.
     pub fn session(&self) -> Session {
         let relative = |path: &Path| {
             path.strip_prefix(&self.root)
@@ -1405,7 +1405,7 @@ impl App {
             self.git_receiver = Some(workspace::refresh_git(self.root.clone()));
             self.last_git = Instant::now();
         }
-        // Closing the terminal window kills Odin without a clean quit, so keep the
+        // Closing the terminal window kills Raido without a clean quit, so keep the
         // session current while you work.
         if self.last_session.elapsed() >= Duration::from_secs(5) {
             self.last_session = Instant::now();
@@ -1416,7 +1416,7 @@ impl App {
         }
         if self.last_reload.elapsed() >= Duration::from_secs(2) {
             self.last_reload = Instant::now();
-            // Theme files are live: saving the active one re-themes Odin immediately.
+            // Theme files are live: saving the active one re-themes Raido immediately.
             let stamp = config::theme_stamp(&self.config.theme);
             if stamp.is_some() && stamp != self.theme_stamp {
                 self.theme_stamp = stamp;
@@ -1509,7 +1509,7 @@ impl App {
             self.menu = None;
         }
     }
-    /// Odin takes the mouse (config `mouse`), except in copy view, which is for
+    /// Raido takes the mouse (config `mouse`), except in copy view, which is for
     /// selecting text with it.
     pub fn mouse_wanted(&self) -> bool {
         self.config.mouse && self.copy_view.is_none() && !self.mouse_released
@@ -3726,7 +3726,7 @@ impl App {
         };
         if let Some(name) = unsaved.first() {
             note.push_str(&format!(
-                " · {name} has unsaved edits in Odin; :reload shows the file"
+                " · {name} has unsaved edits in Raido; :reload shows the file"
             ));
         }
         self.notice(note);
@@ -3812,7 +3812,7 @@ impl App {
             .collect()
     }
     fn launch(&mut self, program: &str, model: Option<&str>, split: Option<Axis>) -> Result<()> {
-        // Agents find Odin's docs as a skill; install or refresh it once per session.
+        // Agents find Raido's docs as a skill; install or refresh it once per session.
         if self.config.ai_skill && !self.skill_ready {
             self.skill_ready = crate::skill::install().is_ok();
         }
@@ -4252,21 +4252,21 @@ impl App {
             "docs" | "manual" => {
                 crate::skill::write_source()?;
                 self.open(&crate::skill::manual())?;
-                self.notice("Odin manual · [ ] jump between headings · F1 for the shortcut guide");
+                self.notice("Raido manual · [ ] jump between headings · F1 for the shortcut guide");
             }
             "skill" => match arg {
                 "" | "install" => {
                     let places = crate::skill::install()?;
                     self.skill_ready = true;
                     self.notice(format!(
-                        "Odin skill ready in {} agent folder(s) · ask your AI agent \"how do I … in Odin?\"",
+                        "Raido skill ready in {} agent folder(s) · ask your AI agent \"how do I … in Raido?\"",
                         places.len()
                     ));
                 }
                 "remove" => {
                     let removed = crate::skill::remove()?;
                     self.notice(format!(
-                        "Removed the Odin skill from {removed} place(s) · set ai_skill = false to keep it off"
+                        "Removed the Raido skill from {removed} place(s) · set ai_skill = false to keep it off"
                     ));
                 }
                 _ => bail!("Use :skill, :skill install or :skill remove"),
@@ -4384,7 +4384,7 @@ impl App {
                     self.session_enabled = false;
                     self.session_json.clear();
                     self.notice(
-                        "Session deleted; Odin will start fresh here (:session save undoes)",
+                        "Session deleted; Raido will start fresh here (:session save undoes)",
                     );
                 }
                 _ => bail!("Use :session, :session save or :session forget"),
@@ -5318,7 +5318,7 @@ mod tests {
             .collect();
         assert!(screen.contains("FIELD GUIDE"));
         assert!(screen.contains("a.txt"), "editor pane still visible");
-        assert!(screen.contains("◉ ODIN"), "the logo stays in the header");
+        assert!(screen.contains("◉ RAIDO"), "the logo stays in the header");
         assert!(!screen.contains("ALL SYSTEMS IN VIEW"), "no tagline");
         assert_eq!(app.help_scroll, 1);
         assert!(!app.help_focus, "typing went back to work");
@@ -5394,7 +5394,7 @@ mod tests {
         assert_eq!(r[0].1.x, r[1].1.x);
         // A CLI that is not installed explains how to get it.
         assert!(matches!(app.panes.get(&app.focused), Some(Pane::Ai)));
-        let error = app.launch_agent("odin-no-such-agent", None).unwrap_err();
+        let error = app.launch_agent("raido-no-such-agent", None).unwrap_err();
         assert!(error.to_string().contains("not installed"));
         assert!(app.command("ai nonsense").is_err());
     }
@@ -5475,7 +5475,7 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         assert!(matches!(app.panes.get(&app.focused), Some(Pane::Terminal(t)) if t.title == "sh"));
         // Unknown names and missing programs explain themselves.
         assert!(app.command("ai nosuch").is_err());
-        app.config.ai.get_mut("llamacpp").unwrap().program = "odin-no-such-llm".into();
+        app.config.ai.get_mut("llamacpp").unwrap().program = "raido-no-such-llm".into();
         let error = app.command("ai llamacpp").unwrap_err().to_string();
         assert!(error.contains("not on PATH"), "{error}");
     }
@@ -5513,7 +5513,7 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
                 .iter()
                 .map(|c| c.symbol())
                 .collect::<String>();
-            assert!(rendered.contains("ODIN"));
+            assert!(rendered.contains("RAIDO"));
             if width == 160 {
                 for needle in [
                     "EXPLORER",
@@ -5716,7 +5716,7 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         assert!(!app.resizing && app.input.is_some());
     }
     #[test]
-    fn the_active_pane_carries_the_odin_mark() {
+    fn the_active_pane_carries_the_raido_mark() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = App::new(dir.path().into(), None, false).unwrap();
         app.split_editor(Axis::Horizontal).unwrap();
@@ -5727,7 +5727,7 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
                     row.match_indices("◉ ")
                         .map(|(at, _)| row[at..].chars().take(12).collect::<String>())
                 })
-                .filter(|s| !s.starts_with("◉ ODIN"))
+                .filter(|s| !s.starts_with("◉ RAIDO"))
                 .collect()
         };
         let focused = app.focused + 1;
@@ -5866,7 +5866,7 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         let mut app = App::new(dir.path().into(), None, false).unwrap();
         assert!(app
             .open_terminal(
-                Some(("/nonexistent/odin-test-cli", Vec::new())),
+                Some(("/nonexistent/raido-test-cli", Vec::new())),
                 Some(Axis::Horizontal)
             )
             .is_err());
@@ -6095,7 +6095,7 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         if let Some(cwd) = cwd {
             assert!(cwd.ends_with("sub"), "{}", cwd.display());
         }
-        let ignore = std::fs::read_to_string(dir.path().join(".odin/.gitignore")).unwrap();
+        let ignore = std::fs::read_to_string(dir.path().join(".raido/.gitignore")).unwrap();
         assert!(ignore.contains('*'));
     }
     #[cfg(unix)]
@@ -6213,9 +6213,9 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
             std::process::Command::new("git")
                 .args([
                     "-c",
-                    "user.name=Odin",
+                    "user.name=Raido",
                     "-c",
-                    "user.email=odin@example.com",
+                    "user.email=raido@example.com",
                     "-C",
                 ])
                 .arg(root)
@@ -6275,7 +6275,7 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         assert_eq!(badge(".git").0, " ", "ignored paths are only dimmed");
     }
     #[test]
-    fn odin_typed_in_a_terminal_opens_the_file_here() {
+    fn raido_typed_in_a_terminal_opens_the_file_here() {
         use crate::remote::Reply;
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
@@ -6287,7 +6287,7 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         let launcher = app.add_pane(Pane::Ai, Axis::Horizontal);
         let panes = app.panes.len();
         let reply = app.remote_open(&root.join("src/main.rs"));
-        assert_eq!(reply, Reply::Opened("Opened main.rs in Odin".into()));
+        assert_eq!(reply, Reply::Opened("Opened main.rs in Raido".into()));
         assert_eq!(app.panes.len(), panes + 1, "a pane of its own");
         let Some(Pane::Editor(id)) = app.panes.get(&app.focused) else {
             panic!("the file is focused in an editor");
@@ -6307,7 +6307,7 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
             Some(root.join("xyz.txt"))
         );
         assert!(!root.join("xyz.txt").exists());
-        // Folders of this project show in the explorer; others get their own Odin.
+        // Folders of this project show in the explorer; others get their own Raido.
         assert!(matches!(
             app.remote_open(&root.join("src")),
             Reply::Opened(_)
@@ -6329,9 +6329,9 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
             std::process::Command::new("git")
                 .args([
                     "-c",
-                    "user.name=Odin",
+                    "user.name=Raido",
                     "-c",
-                    "user.email=odin@example.com",
+                    "user.email=raido@example.com",
                     "-C",
                 ])
                 .arg(&root)
@@ -6455,7 +6455,7 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         std::fs::write(&path, "first line\nsecond line\n").unwrap();
         let mut app = App::new(dir.path().into(), Some(path), false).unwrap();
         let normal = screen(&mut app, 100, 24).join("\n");
-        assert!(normal.contains("EXPLORER") && normal.contains("ODIN"));
+        assert!(normal.contains("EXPLORER") && normal.contains("RAIDO"));
         press(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
         press(&mut app, KeyCode::Char('Z'), KeyModifiers::SHIFT);
         assert!(app.copy_view.is_some());
@@ -6464,7 +6464,7 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         assert!(bare[0].starts_with("first line"), "{:?}", bare[0]);
         assert!(bare[1].starts_with("second line"));
         let all = bare.join("\n");
-        for chrome in ["EXPLORER", "GIT / TREE", "ODIN", "NORMAL", "│", "╭"] {
+        for chrome in ["EXPLORER", "GIT / TREE", "RAIDO", "NORMAL", "│", "╭"] {
             assert!(!all.contains(chrome), "{chrome} shows in copy view");
         }
         // Ctrl-b Z again returns.
@@ -6674,7 +6674,7 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         }
         mouse(&mut app, MouseEventKind::ScrollUp, t.x + 5, t.y + 3);
         press(&mut app, KeyCode::PageUp, KeyModifiers::NONE);
-        assert_eq!(back(&app), 0, "nothing scrolled on Odin's side");
+        assert_eq!(back(&app), 0, "nothing scrolled on Raido's side");
         let mut echoed = false;
         for _ in 0..200 {
             app.tick();

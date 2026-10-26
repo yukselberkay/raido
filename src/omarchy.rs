@@ -1,5 +1,5 @@
-//! Omarchy desktop themes as Odin themes. Every Omarchy theme ships a `colors.toml`
-//! with named colors (accent, background, foreground, red, …); Odin reads it
+//! Omarchy desktop themes as Raido themes. Every Omarchy theme ships a `colors.toml`
+//! with named colors (accent, background, foreground, red, …); Raido reads it
 //! directly, so installed and custom Omarchy themes appear in the theme picker.
 //!
 //! - `omarchy-<name>`: a specific theme from `~/.config/omarchy/themes` (user,
@@ -43,7 +43,7 @@ pub fn current_name() -> Option<String> {
     Some(name.trim().to_string()).filter(|n| !n.is_empty())
 }
 
-/// Odin names for every Omarchy theme found, plus `omarchy` when one is active.
+/// Raido names for every Omarchy theme found, plus `omarchy` when one is active.
 pub fn themes() -> Vec<String> {
     let mut names = BTreeSet::new();
     for dir in theme_dirs() {
@@ -70,7 +70,7 @@ pub fn themes() -> Vec<String> {
     names
 }
 
-/// The `colors.toml` behind an Odin theme name, if it is an Omarchy theme.
+/// The `colors.toml` behind a Raido theme name, if it is an Omarchy theme.
 pub fn file(name: &str) -> Option<PathBuf> {
     if name == FOLLOW {
         return Some(current_dir()?.join("theme/colors.toml")).filter(|p| p.is_file());
@@ -198,7 +198,7 @@ hyprland_active_border = "rgba(ffb000ee) rgba(33ff66ee) 45deg"
 "##;
 
     #[test]
-    fn colors_toml_maps_onto_an_odin_theme() {
+    fn colors_toml_maps_onto_an_raido_theme() {
         let theme = convert(TOKYO).unwrap();
         assert_eq!(theme.background, "#1a1b26");
         assert_eq!(theme.accent, "#7aa2f7");

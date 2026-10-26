@@ -1,11 +1,11 @@
-//! `odin FILE` typed in one of Odin's own terminal panes opens FILE in that Odin
-//! instead of starting another one inside it. Odin listens and tells its terminals
-//! where (`ODIN_SOCKET`); the inner `odin` sends the path there and exits.
+//! `raido FILE` typed in one of Raido's own terminal panes opens FILE in that Raido
+//! instead of starting another one inside it. Raido listens and tells its terminals
+//! where (`RAIDO_SOCKET`); the inner `raido` sends the path there and exits.
 //!
 //! On Unix that's a socket in a directory only you can enter. Windows has no Unix
-//! sockets in Rust's standard library, so there Odin listens on a local TCP port
+//! sockets in Rust's standard library, so there Raido listens on a local TCP port
 //! (127.0.0.1 only) and requires a random secret that only its own panes are
-//! given: `ODIN_SOCKET=tcp:127.0.0.1:PORT:SECRET`.
+//! given: `RAIDO_SOCKET=tcp:127.0.0.1:PORT:SECRET`.
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -18,9 +18,9 @@ use std::{
     time::Duration,
 };
 
-pub const VAR: &str = "ODIN_SOCKET";
+pub const VAR: &str = "RAIDO_SOCKET";
 
-/// Where this Odin listens, handed to every terminal pane it starts.
+/// Where this Raido listens, handed to every terminal pane it starts.
 static ADDRESS: OnceLock<PathBuf> = OnceLock::new();
 
 pub fn address() -> Option<&'static Path> {
@@ -30,7 +30,7 @@ pub fn address() -> Option<&'static Path> {
 #[derive(Serialize, Deserialize)]
 struct Ask {
     open: PathBuf,
-    /// The secret from `ODIN_SOCKET` (TCP only).
+    /// The secret from `RAIDO_SOCKET` (TCP only).
     #[serde(default)]
     secret: String,
 }
@@ -40,12 +40,12 @@ struct Ask {
 pub enum Reply {
     /// Done; the text says what happened.
     Opened(String),
-    /// Not for this Odin (another project): start a separate one.
+    /// Not for this Raido (another project): start a separate one.
     Elsewhere,
     Failed(String),
 }
 
-/// One `odin PATH` from a terminal pane, answered from the main loop.
+/// One `raido PATH` from a terminal pane, answered from the main loop.
 pub struct Request {
     pub path: PathBuf,
     reply: Sender<Reply>,
@@ -59,7 +59,7 @@ impl Request {
 
 pub struct Server {
     pub requests: Receiver<Request>,
-    /// The socket's private directory (Unix), removed when Odin exits.
+    /// The socket's private directory (Unix), removed when Raido exits.
     dir: Option<PathBuf>,
 }
 
@@ -71,7 +71,7 @@ impl Drop for Server {
     }
 }
 
-/// Listen for `odin FILE` from this Odin's terminal panes.
+/// Listen for `raido FILE` from this Raido's terminal panes.
 pub fn listen() -> Result<Server> {
     #[cfg(unix)]
     return listen_unix();
@@ -79,7 +79,7 @@ pub fn listen() -> Result<Server> {
     return listen_tcp();
 }
 
-/// Hand PATH (absolute) to the Odin at `address`. An error means no Odin answered,
+/// Hand PATH (absolute) to the Raido at `address`. An error means no Raido answered,
 /// so the caller should start normally.
 pub fn send(address: &Path, path: &Path) -> Result<Reply> {
     if let Some(tcp) = address.to_str().and_then(|a| a.strip_prefix("tcp:")) {
@@ -88,7 +88,7 @@ pub fn send(address: &Path, path: &Path) -> Result<Reply> {
     #[cfg(unix)]
     return send_unix(address, path);
     #[cfg(not(unix))]
-    anyhow::bail!("Not an Odin address: {}", address.display())
+    anyhow::bail!("Not a Raido address: {}", address.display())
 }
 
 /// Read one request from a connection, pass it to the main loop, write the answer.
@@ -101,7 +101,7 @@ fn serve<S: Read + Write>(mut stream: S, sender: &Sender<Request>, secret: Optio
     drop(reader);
     let reply = match serde_json::from_str::<Ask>(&line) {
         Ok(ask) if secret.is_some_and(|s| s != ask.secret) => {
-            Reply::Failed("Not one of this Odin's terminals".into())
+            Reply::Failed("Not one of this Raido's terminals".into())
         }
         Ok(ask) => {
             let (reply, answer) = mpsc::channel();
@@ -114,7 +114,7 @@ fn serve<S: Read + Write>(mut stream: S, sender: &Sender<Request>, secret: Optio
             }
             answer
                 .recv_timeout(Duration::from_secs(10))
-                .unwrap_or_else(|_| Reply::Failed("Odin is busy; try again".into()))
+                .unwrap_or_else(|_| Reply::Failed("Raido is busy; try again".into()))
         }
         Err(_) => Reply::Failed("Unreadable request".into()),
     };
@@ -133,7 +133,7 @@ fn ask<S: Read + Write>(mut stream: S, path: &Path, secret: &str) -> Result<Repl
     let mut line = String::new();
     std::io::BufReader::new(&mut stream).read_line(&mut line)?;
     if line.is_empty() {
-        anyhow::bail!("Odin closed the connection");
+        anyhow::bail!("Raido closed the connection");
     }
     Ok(serde_json::from_str(&line)?)
 }
@@ -145,7 +145,7 @@ fn listen_unix() -> Result<Server> {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .subsec_nanos();
-    let dir = std::env::temp_dir().join(format!("odin-{}-{stamp:x}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("raido-{}-{stamp:x}", std::process::id()));
     std::fs::DirBuilder::new()
         .mode(0o700)
         .create(&dir)
@@ -155,7 +155,7 @@ fn listen_unix() -> Result<Server> {
         Ok(listener) => listener,
         Err(error) => {
             let _ = std::fs::remove_dir_all(&dir);
-            return Err(error).context("Listen for `odin FILE` from terminal panes");
+            return Err(error).context("Listen for `raido FILE` from terminal panes");
         }
     };
     let (sender, requests) = mpsc::channel();
@@ -214,7 +214,7 @@ fn listen_tcp() -> Result<Server> {
 /// A TCP listener on 127.0.0.1 and its address with a fresh secret.
 fn tcp_server() -> Result<(Server, PathBuf)> {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
-        .context("Listen for `odin FILE` from terminal panes")?;
+        .context("Listen for `raido FILE` from terminal panes")?;
     let port = listener.local_addr()?.port();
     let secret = secret();
     let (sender, requests) = mpsc::channel();
@@ -239,12 +239,12 @@ fn tcp_server() -> Result<(Server, PathBuf)> {
     ))
 }
 
-/// `127.0.0.1:PORT:SECRET`, from `ODIN_SOCKET` without its `tcp:`.
+/// `127.0.0.1:PORT:SECRET`, from `RAIDO_SOCKET` without its `tcp:`.
 fn send_tcp(address: &str, path: &Path) -> Result<Reply> {
     let (host, secret) = address
         .rsplit_once(':')
-        .context("ODIN_SOCKET is not host:port:secret")?;
-    let target = host.parse().context("ODIN_SOCKET has no usable address")?;
+        .context("RAIDO_SOCKET is not host:port:secret")?;
+    let target = host.parse().context("RAIDO_SOCKET has no usable address")?;
     let stream = std::net::TcpStream::connect_timeout(&target, Duration::from_secs(2))?;
     stream.set_read_timeout(Some(Duration::from_secs(15)))?;
     ask(stream, path, secret)
@@ -270,7 +270,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_terminal_hands_its_path_to_the_running_odin() {
+    fn a_terminal_hands_its_path_to_the_running_raido() {
         let server = listen().unwrap();
         let socket = address().unwrap().to_path_buf();
         let dir = socket.parent().unwrap().to_path_buf();
@@ -281,10 +281,10 @@ mod tests {
             assert_eq!(mode & 0o077, 0, "only you can reach the socket");
         }
         drop(server);
-        assert!(!dir.exists(), "the socket goes away with Odin");
+        assert!(!dir.exists(), "the socket goes away with Raido");
         assert!(
             send(&socket, Path::new("/x")).is_err(),
-            "then odin starts normally"
+            "then raido starts normally"
         );
     }
 
@@ -298,7 +298,7 @@ mod tests {
         assert_eq!(secret.len(), 32);
         let reply = send(Path::new(&format!("{host}:guess")), Path::new("/x")).unwrap();
         assert!(matches!(reply, Reply::Failed(_)), "{reply:?}");
-        assert!(server.requests.try_recv().is_err(), "nothing reached Odin");
+        assert!(server.requests.try_recv().is_err(), "nothing reached Raido");
         // Another server, another secret.
         let (_, other) = tcp_server().unwrap();
         assert_ne!(other.to_string_lossy().rsplit_once(':').unwrap().1, secret);

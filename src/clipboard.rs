@@ -1,6 +1,6 @@
 //! One clipboard for the editor, shared with the desktop: copies go to the
 //! system clipboard (wl-copy, xclip, xsel, pbcopy, or OSC 52 as a fallback)
-//! and pastes read it back, so text moves freely between Odin and other apps.
+//! and pastes read it back, so text moves freely between Raido and other apps.
 use std::{
     io::{Read, Write},
     process::{Command, Stdio},

@@ -7,9 +7,9 @@ Date: 2026-10-18. Host: Linux x86_64. Rust 1.99.1.
 - `cargo fmt --all -- --check`: passed.
 - `cargo clippy --locked --all-targets -- -D warnings`: passed.
 - `cargo test --locked --all-targets`: 17 passed.
-- `cargo build --release --locked --examples --bin odin`: built native optimized
+- `cargo build --release --locked --examples --bin raido`: built native optimized
   editor and runnable Rust example.
-- `python3 scripts/pty_smoke.py target/release/odin`: passed against the real
+- `python3 scripts/pty_smoke.py target/release/raido`: passed against the real
   application and an OS pseudo-terminal. Exercises startup/rendering, UTF-8
   bracketed paste, atomic save, search, numeric jump, splitting, nested shell
   output, AI launcher, resizing, normal exit, alternate-screen and raw-mode cleanup.
@@ -23,12 +23,12 @@ Date: 2026-10-18. Host: Linux x86_64. Rust 1.99.1.
 
 ## Screenshot provenance
 
-The README screenshots (`odin.png`, `odin-c-tiles.png`, `odin-markdown.png`,
-`odin-lsp.png`, `odin-theme-picker.png`, `odin-field-guide.png`,
-`odin-dark-themes.png`) are renders of Odin's real UI in the Visual Studio Dark theme
+The README screenshots (`raido.png`, `raido-c-tiles.png`, `raido-markdown.png`,
+`raido-lsp.png`, `raido-theme-picker.png`, `raido-field-guide.png`,
+`raido-dark-themes.png`) are renders of Raido's real UI in the Visual Studio Dark theme
 (the sheet shows every bundled theme): the app's own draw code fills a ratatui test
 buffer, which is converted to HTML in JetBrainsMono Nerd Font and captured with
-headless Chromium at 2×. Shell panes are real PTYs (`bash --norc` with an `odin $`
+headless Chromium at 2×. Shell panes are real PTYs (`bash --norc` with an `raido $`
 prompt) running `cargo run --example beacon` and the `forge.c` build; the LSP image
 is a live clangd session. No editor contents, terminal output or UI labels are
 fabricated for the images.
@@ -42,11 +42,11 @@ The image shows the AI **launcher**, not an authenticated model response.
   configuration, troubleshooting, and steps to reproduce the C layout.
 - Verified `cargo build --release --locked` and an isolated installation with
   `cargo install --path . --locked --root target/install-check`.
-- The installed `target/install-check/bin/odin --version` reports `odin 0.1.0`.
+- The installed `target/install-check/bin/raido --version` reports `raido 0.1.0`.
 - Compiled `examples/forge.c` with `cc -std=c11 -Wall -Wextra -Werror` and ran it
-  inside Odin's terminal pane. The displayed five FNV-1a fingerprints are actual
+  inside Raido's terminal pane. The displayed five FNV-1a fingerprints are actual
   program output; the sample explicitly identifies FNV-1a as non-cryptographic.
-- `odin-c-tiles.png` captures the installed editor in a 168×48 PTY. Actual keyboard
+- `raido-c-tiles.png` captures the installed editor in a 168×48 PTY. Actual keyboard
   input opens the C file, makes a side-by-side split with Ctrl-b %, opens the
   README on the right, and creates the lower-right shell with Ctrl-b c. The C file
   stays on the left, demonstrating vertical and horizontal dividing borders together.
@@ -70,7 +70,7 @@ The image shows the AI **launcher**, not an authenticated model response.
   explicit RGB/256-color output, and answer terminal color queries by theme.
 - `cargo fmt --all -- --check`, `cargo clippy --locked --all-targets -- -D warnings`,
   `cargo build --release --locked`, and the real-PTY smoke script all passed.
-- `odin-dark-themes.png` is a comparison sheet of ten real terminal captures.
+- `raido-dark-themes.png` is a comparison sheet of ten real terminal captures.
   One release process ran in a 144×36 PTY with C and Rust editor panes and an
   interactive shell running the Forge sample plus ANSI-color output. Actual
   keyboard commands selected each theme without reopening panes or restarting
@@ -140,7 +140,7 @@ published.
   the undeclared-identifier error, hover with docs, definition jump and return,
   struct-member completion after `p.`, and 10 formatting edits. A scripted Python
   server covers the protocol in `cargo test`. rust-analyzer, gopls and pyright were not
-  installed on the test host; Odin reports them with install commands.
+  installed on the test host; Raido reports them with install commands.
 - `cargo test --locked --all-targets`: **42 passed**; fmt and clippy `-D warnings` clean.
 
 ## Persistent theme follow-up

@@ -31,7 +31,7 @@ fn panel<'a>(title: impl Into<Line<'a>>, theme: &Theme, active: bool) -> Block<'
         .title_style(Style::default().fg(color(if active { &theme.accent } else { &theme.muted })))
 }
 /// A pane's (or the explorer's, the Git section's) frame. The one taking your keys
-/// carries Odin's ◉ in the accent color before its title.
+/// carries Raido's ◉ in the accent color before its title.
 fn pane_panel<'a>(title: &str, theme: &Theme, active: bool) -> Block<'a> {
     let title = if active {
         Line::from(vec![
@@ -71,7 +71,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if area.width < 45 || area.height < 12 {
         frame.render_widget(
             Paragraph::new(
-                "ODIN\nTerminal too small.\nResize to at least 45 × 12.\nCtrl-q to quit.",
+                "RAIDO\nTerminal too small.\nResize to at least 45 × 12.\nCtrl-q to quit.",
             )
             .alignment(Alignment::Center),
             area,
@@ -91,7 +91,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let root = app.root.file_name().unwrap_or_default().to_string_lossy();
     let title = Line::from(vec![
         Span::styled(
-            " ◉ ODIN ",
+            " ◉ RAIDO ",
             Style::default()
                 .fg(color(&theme.background))
                 .bg(color(&theme.accent))
@@ -1759,7 +1759,7 @@ fn ai(frame: &mut Frame, area: Rect, theme: &Theme, customs: &[String]) {
         Line::styled("  Same project. Live file refresh.", muted),
         Line::from(""),
         Line::styled("  Sign in using the CLI's own flow.", muted),
-        Line::styled("  Odin never stores API keys.", muted),
+        Line::styled("  Raido never stores API keys.", muted),
         Line::from(""),
         Line::styled(
             "  Focus: Ctrl-b → / o",
@@ -2716,7 +2716,7 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         ),
         (
             ":docs / ask your AI agent",
-            "Full manual / agents know Odin via its skill (:skill)",
+            "Full manual / agents know Raido via its skill (:skill)",
         ),
         (
             "Ctrl-b [  then v V y",
@@ -2757,7 +2757,7 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         ),
         (
             ":session [save|forget]",
-            "Reopen this project as you left it (.odin/)",
+            "Reopen this project as you left it (.raido/)",
         ),
         ("Ctrl-b b", "Send literal Ctrl-b to a terminal"),
         (

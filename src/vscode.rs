@@ -1,4 +1,4 @@
-//! Import a VS Code color theme (`.json`) as an Odin theme, so any theme from
+//! Import a VS Code color theme (`.json`) as a Raido theme, so any theme from
 //! the VS Code Marketplace can be dropped into the user themes directory.
 use crate::config::{SyntaxColors, Theme};
 use anyhow::{bail, Context, Result};

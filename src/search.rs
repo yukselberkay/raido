@@ -157,7 +157,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
         let name = entry.file_name();
         if matches!(
             name.to_str(),
-            Some(".git" | "target" | "node_modules" | ".odin")
+            Some(".git" | "target" | "node_modules" | ".raido")
         ) {
             continue;
         }

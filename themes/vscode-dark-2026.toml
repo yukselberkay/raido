@@ -1,6 +1,6 @@
 # Visual Studio Code "Dark 2026" — VS Code's newest built-in dark theme
-# (extensions/theme-defaults/themes/2026-dark.json). Odin adaptation; see themes/README.md.
-# Built in: :theme vscode-dark-2026. Copy to ~/.config/odin/themes/ to customize.
+# (extensions/theme-defaults/themes/2026-dark.json). Raido adaptation; see themes/README.md.
+# Built in: :theme vscode-dark-2026. Copy to ~/.config/raido/themes/ to customize.
 background = "#121314"
 foreground = "#bbbebf"
 muted = "#8c8c8c"

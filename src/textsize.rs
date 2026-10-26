@@ -1,10 +1,10 @@
-//! Text size (zoom in / out) for the terminal window Odin runs in. A terminal
-//! program can't scale its own text, so Odin asks the terminal: Terminal.app through
-//! AppleScript (only Odin's own tab changes, never the profile), xterm through its
+//! Text size (zoom in / out) for the terminal window Raido runs in. A terminal
+//! program can't scale its own text, so Raido asks the terminal: Terminal.app through
+//! AppleScript (only Raido's own tab changes, never the profile), xterm through its
 //! font escape, kitty through remote control. Elsewhere it names the terminal's keys.
 //!
-//! [`WindowFont`] also gives Odin's Terminal.app tab its own font (config `font`,
-//! `font_size`) while Odin runs.
+//! [`WindowFont`] also gives Raido's Terminal.app tab its own font (config `font`,
+//! `font_size`) while Raido runs.
 use anyhow::{bail, Context, Result};
 use std::{
     io::Write,
@@ -17,8 +17,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// The size Odin gave its window; Ctrl-b 0 returns to it.
-static ODIN_SIZE: OnceLock<f32> = OnceLock::new();
+/// The size Raido gave its window; Ctrl-b 0 returns to it.
+static RAIDO_SIZE: OnceLock<f32> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -77,7 +77,7 @@ fn host(env: &dyn Fn(&str) -> Option<String>) -> Host {
     }
 }
 
-/// What to tell someone whose terminal Odin can't drive.
+/// What to tell someone whose terminal Raido can't drive.
 fn keys_hint() -> String {
     let keys = if cfg!(target_os = "macos") {
         "Cmd-+ / Cmd-- / Cmd-0"
@@ -138,7 +138,7 @@ pub fn change(step: Step) -> Receiver<Result<String>> {
     receiver
 }
 
-/// Resize the font of the Terminal.app tab Odin runs in (found by its tty), leaving
+/// Resize the font of the Terminal.app tab Raido runs in (found by its tty), leaving
 /// the profile and every other tab alone. Reset returns to the profile's size.
 const APPLE_SCRIPT: &str = r#"on run argv
     set target to item 1 of argv
@@ -167,23 +167,23 @@ const APPLE_SCRIPT: &str = r#"on run argv
             end repeat
         end repeat
     end tell
-    error "Odin's Terminal tab was not found"
+    error "Raido's Terminal tab was not found"
 end run"#;
 
-/// The tty of the Terminal.app tab Odin runs in, as Terminal names it.
+/// The tty of the Terminal.app tab Raido runs in, as Terminal names it.
 fn own_tty() -> Result<String> {
     let tty = run(Command::new("ps").args(["-o", "tty=", "-p", &std::process::id().to_string()]))?;
     let tty = tty.trim();
     if tty.is_empty() || tty.contains('?') {
-        bail!("Odin has no terminal tab");
+        bail!("Raido has no terminal tab");
     }
     Ok(format!("/dev/{tty}"))
 }
 
 fn apple_terminal(step: Step) -> Result<String> {
     let tty = own_tty()?;
-    // Reset returns to Odin's own size when it set one, else to the profile's.
-    let change = match (step, ODIN_SIZE.get()) {
+    // Reset returns to Raido's own size when it set one, else to the profile's.
+    let change = match (step, RAIDO_SIZE.get()) {
         (Step::In, _) => "1".to_string(),
         (Step::Out, _) => "-1".to_string(),
         (Step::Reset, Some(size)) => format!("={size}"),
@@ -197,8 +197,8 @@ fn apple_terminal(step: Step) -> Result<String> {
     ))
 }
 
-/// Odin's font for the terminal window it runs in, put back when Odin exits (on
-/// drop). Only Terminal.app lets Odin change its own tab's font from outside (the
+/// Raido's font for the terminal window it runs in, put back when Raido exits (on
+/// drop). Only Terminal.app lets Raido change its own tab's font from outside (the
 /// profile is untouched); every other terminal keeps its own font, as does
 /// Terminal.app when the font is not installed.
 pub struct WindowFont {
@@ -235,7 +235,7 @@ impl WindowFont {
             }),
             _ => return None,
         };
-        let _ = ODIN_SIZE.set(size);
+        let _ = RAIDO_SIZE.set(size);
         Some(Self {
             worker: Some(worker),
         })
@@ -270,7 +270,7 @@ const APPLE_FONT_SCRIPT: &str = r#"on run argv
             end repeat
         end repeat
     end tell
-    error "Odin's Terminal tab was not found"
+    error "Raido's Terminal tab was not found"
 end run"#;
 
 fn apple_font(tty: &str, name: &str, size: &str) -> Result<String> {
@@ -309,7 +309,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn odin_drives_the_terminals_it_can_and_names_keys_elsewhere() {
+    fn raido_drives_the_terminals_it_can_and_names_keys_elsewhere() {
         let env = |vars: &'static [(&'static str, &'static str)]| {
             move |name: &str| {
                 vars.iter()
@@ -343,7 +343,7 @@ mod tests {
         assert_eq!(host(&env(&[("TERM_PROGRAM", "WezTerm")])), Host::Other);
         // No font asked for, or one that isn't installed: the terminal keeps its own.
         assert!(WindowFont::apply("", 14.0).is_none());
-        assert!(WindowFont::apply("No Such Font Odin Test", 14.0).is_none());
+        assert!(WindowFont::apply("No Such Font Raido Test", 14.0).is_none());
         assert!(WindowFont::apply(crate::config::DEFAULT_FONT, 500.0).is_none());
         assert!(keys_hint().contains("-0"));
         assert_eq!(Step::key('='), Some(Step::In));

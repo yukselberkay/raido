@@ -96,7 +96,7 @@ pub fn shell(configured: Option<&str>) -> (String, Vec<String>) {
     (program, vec!["-i".into()])
 }
 
-/// Base directory for Odin's config: `$XDG_CONFIG_HOME` if set, else
+/// Base directory for Raido's config: `$XDG_CONFIG_HOME` if set, else
 /// `~/.config` on Linux and macOS, `%APPDATA%` on Windows.
 pub fn config_base() -> PathBuf {
     if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
@@ -119,11 +119,11 @@ mod tests {
     fn finds_programs_on_path_and_rejects_missing_ones() {
         let shell = if cfg!(windows) { "cmd" } else { "sh" };
         assert!(which(shell).is_some(), "{shell} should be on PATH");
-        assert!(which("odin-definitely-missing-tool").is_none());
+        assert!(which("raido-definitely-missing-tool").is_none());
         assert!(which("").is_none());
         assert_eq!(
-            resolve("odin-definitely-missing-tool"),
-            "odin-definitely-missing-tool"
+            resolve("raido-definitely-missing-tool"),
+            "raido-definitely-missing-tool"
         );
     }
 

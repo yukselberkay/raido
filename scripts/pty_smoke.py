@@ -14,8 +14,8 @@ import time
 
 
 def main():
-    binary = str(Path(sys.argv[1] if len(sys.argv) > 1 else "target/release/odin").resolve())
-    with tempfile.TemporaryDirectory(prefix="odin-smoke-") as directory:
+    binary = str(Path(sys.argv[1] if len(sys.argv) > 1 else "target/release/raido").resolve())
+    with tempfile.TemporaryDirectory(prefix="raido-smoke-") as directory:
         root = Path(directory)
         source = root / "main.rs"
         source.write_text("fn main() {}\n", encoding="utf-8")
@@ -23,8 +23,8 @@ def main():
         if pid == 0:
             os.chdir(root)
             os.environ.update(TERM="xterm-256color", SHELL="/bin/sh", XDG_CONFIG_HOME=str(root / "config"))
-            # Run standalone even when started from inside an Odin terminal pane.
-            os.environ.pop("ODIN_SOCKET", None)
+            # Run standalone even when started from inside a Raido terminal pane.
+            os.environ.pop("RAIDO_SOCKET", None)
             os.execv(binary, [binary, str(source)])
         output = bytearray()
         exited = False
@@ -54,7 +54,7 @@ def main():
             fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 150, 0, 0))
             os.kill(pid, signal.SIGWINCH)
             drain(0.8)
-            assert b"ODIN" in output, "Application did not render"
+            assert b"RAIDO" in output, "Application did not render"
             send(b"i")
             send(b"\x1b[200~// smoke \xce\xbb\n\x1b[201~")
             send(b"\x1b")
@@ -64,13 +64,13 @@ def main():
             send(b"/main\r")
             prefix(b"%")
             prefix(b"c")
-            send(b"printf 'ODIN_PTY_OK\\n'\r")
+            send(b"printf 'RAIDO_PTY_OK\\n'\r")
             drain(0.5)
-            assert b"ODIN_PTY_OK" in output, "Nested terminal did not render"
-            # `odin FILE` in Odin's own terminal opens FILE here; no second Odin.
+            assert b"RAIDO_PTY_OK" in output, "Nested terminal did not render"
+            # `raido FILE` in Raido's own terminal opens FILE here; no second Raido.
             send(f"'{binary}' fromshell.txt\r".encode())
             drain(1.0)
-            assert "fromshell.txt ─".encode() in output, "odin FILE nested instead of opening a pane"
+            assert "fromshell.txt ─".encode() in output, "raido FILE nested instead of opening a pane"
             send(b"ihello from the shell")
             send(b"\x1b")
             send(b"\x13")
@@ -93,7 +93,7 @@ def main():
             assert exited, "App failed to exit"
             assert b"\x1b[?1049l" in output, "Alternate screen was not restored"
             assert not (termios.tcgetattr(fd)[3] & termios.ICANON) == 0, "Raw mode was not restored"
-            print("PASS: real PTY startup, Unicode paste, save, search, jump, split, nested shell, odin FILE from the shell, AI launcher, resize, clean exit and terminal restoration")
+            print("PASS: real PTY startup, Unicode paste, save, search, jump, split, nested shell, raido FILE from the shell, AI launcher, resize, clean exit and terminal restoration")
         finally:
             if not exited:
                 try:
