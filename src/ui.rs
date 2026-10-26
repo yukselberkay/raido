@@ -2578,9 +2578,9 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
         } else if app.prefix {
             " % split  \" stack  c shell  a/A AI beside/below  m preview  v review AI changes  t themes  arrows focus  ⇧arrows move  space flip  d dock  D docked  y mouse  r resize  z zoom  Z copy view  [ copy mode  +/-/0 text size  x close  ? help"
         } else if app.sidebar_focus && !app.git_focus && app.explorer_search.is_some() {
-            " type to search names and text   ↑ ↓ preview   Enter open at the line   ^U clear   Esc back to the tree"
+            " type to search names and text   ↑ ↓ preview   PgUp PgDn page   Enter open at the line   ^U clear   Esc back to the tree"
         } else if app.sidebar_focus && !app.git_focus {
-            " ^F search files   j k move   → expand/open   ← collapse   space fold   c collapse all   E expand all   Enter open   n new   Esc back"
+            " ^F search files   j k move   PgUp PgDn page   → expand/open   ← collapse   space fold   c collapse all   E expand all   Enter open   n new   Esc back"
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Git(v)) if v.diff.is_some())
             && !app.sidebar_focus
         {
@@ -2756,6 +2756,10 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         (
             "↑ ↓ / → / ← / Enter",
             "Browse, previewing files / expand / collapse / open",
+        ),
+        (
+            "PgUp PgDn / Home End",
+            "A screenful up / down, or to the first / last entry",
         ),
         (
             "Space / c / E",
