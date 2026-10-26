@@ -452,7 +452,7 @@ These shortcuts apply while the sidebar has focus (`FILES` or `GIT` in the statu
 | Key | Action |
 | --- | --- |
 | Up/Down or `k`/`j` | Select previous/next entry; a selected file is **previewed** in the editor pane while focus stays here |
-| PageUp/PageDown (Fn-↑/↓ on a Mac), Home/End | Move a screenful up/down, or to the first/last entry (also in the Git section and in search results) |
+| PageUp/PageDown (Fn-↑/↓ on a Mac), Home/End | Move 5 entries up/down, or to the first/last entry (also in the Git section and in search results) |
 | Right or `l` | Expand directory; enter its first child if already expanded; open file |
 | Left or `h` | Collapse current directory or select parent |
 | Enter | Toggle directory / open selected file and move focus to it |

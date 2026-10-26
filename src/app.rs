@@ -641,12 +641,11 @@ impl App {
                 return Ok(());
             }
             KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown => {
-                let page = explorer_page(self.explorer_rows);
                 let step: isize = match key.code {
                     KeyCode::Up => -1,
                     KeyCode::Down => 1,
-                    KeyCode::PageUp => -page,
-                    _ => page,
+                    KeyCode::PageUp => -SIDEBAR_PAGE,
+                    _ => SIDEBAR_PAGE,
                 };
                 search.selected = search.selected.saturating_add_signed(step).min(last);
                 return self.show_hit(true);
@@ -2708,17 +2707,12 @@ impl App {
             self.git_focus = !self.git_focus;
             return Ok(());
         }
-        // PgUp / PgDn (Fn-↑/↓ on a Mac) move a screenful, Home / End to either end.
-        let page = explorer_page(if self.git_focus {
-            self.git_area
-        } else {
-            self.explorer_rows
-        });
+        // PgUp / PgDn (Fn-↑/↓ on a Mac) move a few entries, Home / End to either end.
         let step = match key.code {
             KeyCode::Up | KeyCode::Char('k') => Some(-1),
             KeyCode::Down | KeyCode::Char('j') => Some(1),
-            KeyCode::PageUp => Some(-page),
-            KeyCode::PageDown => Some(page),
+            KeyCode::PageUp => Some(-SIDEBAR_PAGE),
+            KeyCode::PageDown => Some(SIDEBAR_PAGE),
             KeyCode::Home => Some(isize::MIN / 2),
             KeyCode::End => Some(isize::MAX / 2),
             _ => None,
@@ -4493,14 +4487,9 @@ impl App {
     }
 }
 
-/// Rows a page key moves in a sidebar list drawn at `area` (one row stays in view);
-/// before the first draw, ten.
-fn explorer_page(area: Rect) -> isize {
-    match area.height {
-        0 => 10,
-        height => height.saturating_sub(1).max(1) as isize,
-    }
-}
+/// Entries PgUp / PgDn move in the sidebar's lists (files, Git changes, search
+/// results): a short hop that keeps your place, not a whole screenful.
+const SIDEBAR_PAGE: isize = 5;
 
 /// The word (letters, digits, `_`) under or just before the cursor, and where it
 /// starts (a char index).
@@ -4759,7 +4748,7 @@ mod tests {
         assert!(app.buffers[id].text.to_string().contains("    (\n    \n"));
     }
     #[test]
-    fn page_keys_move_through_the_explorer_a_screenful_at_a_time() {
+    fn page_keys_move_through_the_explorer_a_few_entries_at_a_time() {
         let dir = tempfile::tempdir().unwrap();
         for n in 0..80 {
             std::fs::write(dir.path().join(format!("file{n:02}.txt")), "").unwrap();
@@ -4767,11 +4756,15 @@ mod tests {
         let mut app = App::new(dir.path().into(), None, false).unwrap();
         app.sidebar_focus = true;
         screen(&mut app, 100, 30);
-        let page = app.explorer_rows.height as usize - 1;
-        assert!(page > 5, "{page}");
         let start = app.tree.selected;
         press(&mut app, KeyCode::PageDown, KeyModifiers::NONE);
-        assert_eq!(app.tree.selected, start + page);
+        assert_eq!(app.tree.selected, start + SIDEBAR_PAGE as usize);
+        press(&mut app, KeyCode::PageDown, KeyModifiers::NONE);
+        press(&mut app, KeyCode::PageDown, KeyModifiers::NONE);
+        press(&mut app, KeyCode::PageDown, KeyModifiers::NONE);
+        press(&mut app, KeyCode::PageDown, KeyModifiers::NONE);
+        press(&mut app, KeyCode::PageDown, KeyModifiers::NONE);
+        assert_eq!(app.tree.selected, start + 6 * SIDEBAR_PAGE as usize);
         // The list scrolls along: the selected file is on screen.
         let name = app.tree.entries[app.tree.selected]
             .path
@@ -4783,7 +4776,9 @@ mod tests {
             screen(&mut app, 100, 30).join("\n").contains(&name),
             "{name}"
         );
-        press(&mut app, KeyCode::PageUp, KeyModifiers::NONE);
+        for _ in 0..6 {
+            press(&mut app, KeyCode::PageUp, KeyModifiers::NONE);
+        }
         assert_eq!(app.tree.selected, start);
         press(&mut app, KeyCode::End, KeyModifiers::NONE);
         assert_eq!(app.tree.selected, app.tree.entries.len() - 1);

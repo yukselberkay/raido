@@ -2770,7 +2770,7 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         ),
         (
             "PgUp PgDn / Home End",
-            "A screenful up / down, or to the first / last entry",
+            "5 entries up / down, or to the first / last entry",
         ),
         (
             "Space / c / E",
