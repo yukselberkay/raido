@@ -390,8 +390,15 @@ impl TerminalPane {
         }
         dirty
     }
-    fn is_agent(&self) -> bool {
+    pub fn is_agent(&self) -> bool {
         matches!(self.launch, Launch::Agent { .. })
+    }
+    /// An AI pane working: a prompt is in flight or its output still moves (agents
+    /// animate a spinner while they work).
+    pub fn agent_busy(&self) -> bool {
+        self.is_agent()
+            && self.exited.is_none()
+            && (self.turn.is_some() || self.last_output.elapsed() < QUIET)
     }
     /// Whether an AI pane finished a prompt since the last call: it worked on it
     /// (output kept coming after Enter, as agents animate a spinner) and then went

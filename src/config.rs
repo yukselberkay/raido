@@ -145,6 +145,8 @@ pub struct Config {
     /// Sound when an AI pane finishes a prompt: "default", "off", "bell", a macOS
     /// sound name ("Glass", "Hero"…) or a sound file (see `sound::play`).
     pub ai_sound: String,
+    /// Track the files AI panes change, to review, keep or undo (Ctrl-b v).
+    pub review_changes: bool,
     /// Mouse wheel scrolls what's under the pointer and a click focuses it. Odin then
     /// owns the mouse: copy view (Ctrl-b Z) gives it back for selecting text.
     pub mouse: bool,
@@ -182,6 +184,7 @@ impl Default for Config {
             ai_split: "right".into(),
             ai_skill: true,
             ai_sound: "default".into(),
+            review_changes: true,
             mouse: true,
             ai: BTreeMap::new(),
             plugins: BTreeMap::new(),

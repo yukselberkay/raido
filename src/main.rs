@@ -16,6 +16,7 @@ mod omarchy;
 mod platform;
 mod quickdiff;
 mod remote;
+mod review;
 mod search;
 mod session;
 mod skill;

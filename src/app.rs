@@ -9,7 +9,9 @@ use crate::{
     layout::{Axis, Tile},
     lsp::{self, Lsp},
     markdown::{self, Previews},
-    quickdiff, search,
+    quickdiff,
+    review::{self, ChangesView, Target},
+    search,
     session::{self, SavedBuffer, SavedPane, Session},
     sound,
     terminal::{Launch, TerminalPane},
@@ -35,6 +37,8 @@ pub enum Pane {
     Ai,
     /// Branches, commit graph and commit details (`:git`, Ctrl-b G).
     Git(Box<GitView>),
+    /// What AI agents changed, to keep or undo (`:changes`, Ctrl-b v).
+    Changes(Box<ChangesView>),
 }
 
 /// Rendered, read-only Markdown view of a buffer.
@@ -349,6 +353,8 @@ pub struct App {
     pub mouse_released: bool,
     /// Resize mode (Ctrl-b r): arrows resize the focused pane until Enter or Esc.
     pub resizing: bool,
+    /// Files AI agents changed that you haven't kept or undone yet.
+    pub changes: review::Changes,
 }
 
 impl App {
@@ -405,7 +411,7 @@ impl App {
             jumps: Vec::new(),
             visual_from: Mode::Normal,
             next_pane: 1,
-            git_receiver: Some(workspace::refresh_git(root)),
+            git_receiver: Some(workspace::refresh_git(root.clone())),
             last_git: Instant::now(),
             last_reload: Instant::now(),
             theme_stamp,
@@ -432,6 +438,7 @@ impl App {
             mouse_released: false,
             resizing: false,
             copy_view: None,
+            changes: review::Changes::new(root.clone()),
         };
         if let Some(path) = initial {
             app.open(&path)?;
@@ -960,6 +967,7 @@ impl App {
                     Pane::Git(view) => SavedPane::Git {
                         only: view.only.clone(),
                     },
+                    Pane::Changes(_) => SavedPane::Changes,
                 };
                 (*id, saved)
             })
@@ -1077,6 +1085,7 @@ impl App {
                     Pane::Preview(preview)
                 }
                 SavedPane::Ai => Pane::Ai,
+                SavedPane::Changes => Pane::Changes(Box::default()),
                 SavedPane::Git { only } => {
                     let mut view = GitView::new(self.root.clone());
                     if only.is_some() {
@@ -1194,6 +1203,9 @@ impl App {
         };
         self.buffers[id].save(path)?;
         self.lsp.saved(id, &self.buffers[id]);
+        if let Some(path) = &self.buffers[id].path {
+            self.changes.saved(path);
+        }
         self.notice(format!(
             "Saved {} · {} lines{}",
             self.buffers[id].name(),
@@ -1299,14 +1311,46 @@ impl App {
                 _ => {}
             }
         }
+        if self.config.review_changes {
+            let busy: Vec<String> = self
+                .panes
+                .values()
+                .filter_map(|p| match p {
+                    Pane::Terminal(t) if t.agent_busy() => Some(t.title.clone()),
+                    _ => None,
+                })
+                .collect();
+            let agents = self
+                .panes
+                .values()
+                .any(|p| matches!(p, Pane::Terminal(t) if t.is_agent() && t.exited.is_none()));
+            let watching = self
+                .panes
+                .iter()
+                .any(|(id, p)| matches!(p, Pane::Changes(_)) && !self.docked.contains(id));
+            self.redraw |= self.changes.tick(&busy, agents, watching);
+        }
         if let Some((id, title)) = finished {
             sound::play(&self.config.ai_sound);
+            let changed = self.changes.by(&title);
+            let review = if changed > 0 {
+                format!(" · {} to review: Ctrl-b v", review::files(changed))
+            } else {
+                String::new()
+            };
             if self.docked.contains(&id) {
                 self.notice(format!(
-                    "{title} finished · it's docked: Ctrl-b D brings it back"
+                    "{title} finished{review} · it's docked: Ctrl-b D brings it back"
                 ));
             } else if id != self.focused {
-                self.notice(format!("{title} finished · Ctrl-b arrows to go there"));
+                self.notice(format!(
+                    "{title} finished{review} · Ctrl-b arrows to go there"
+                ));
+            } else if changed > 0 {
+                self.notice(format!(
+                    "{title} changed {} · Ctrl-b v reviews them: keep or undo each change",
+                    review::files(changed)
+                ));
             }
         }
         let asks: Vec<_> = self
@@ -1552,6 +1596,15 @@ impl App {
                     self.focused = id;
                     self.sidebar_focus = false;
                     self.click_editor(id, rect, at);
+                    // A click in the review picks the row (below the pane's own heading).
+                    if let Some(Pane::Changes(view)) = self.panes.get_mut(&id) {
+                        if at.1 >= rect.y + 2 {
+                            let row = view.scroll + usize::from(at.1 - rect.y - 2);
+                            if row < view.rows.len() {
+                                view.cursor = row;
+                            }
+                        }
+                    }
                 }
             }
             _ => {}
@@ -1592,6 +1645,10 @@ impl App {
                 Some(diff) => diff.scroll_by(step),
                 None => view.step(step),
             },
+            Some(Pane::Changes(view)) => {
+                view.sync(&self.changes);
+                view.move_by(step);
+            }
             _ => {}
         }
         Ok(())
@@ -1754,6 +1811,7 @@ impl App {
             }
             Some(Pane::Preview(_)) => return self.preview_key(key),
             Some(Pane::Git(_)) => return self.git_pane_key(key),
+            Some(Pane::Changes(_)) => return self.changes_key(key),
             Some(Pane::Ai) => {
                 let chosen = match key.code {
                     KeyCode::Char('c') => Some("codex"),
@@ -2296,6 +2354,7 @@ impl App {
                 self.git_focus = true;
             }
             KeyCode::Char('G') => self.git_pane()?,
+            KeyCode::Char('v') => self.changes_pane()?,
             KeyCode::Char('z') => {
                 self.zoom = !self.zoom;
                 self.sidebar_focus = false;
@@ -2393,6 +2452,7 @@ impl App {
             }
             Some(Pane::Terminal(t)) => t.title.clone(),
             Some(Pane::Git(_)) => "Git".into(),
+            Some(Pane::Changes(_)) => "Changes".into(),
             Some(Pane::Ai) => "AI launcher".into(),
             None => "?".into(),
         }
@@ -3486,6 +3546,185 @@ impl App {
         }
         Ok(())
     }
+    /// Ctrl-b v / `:changes`: the review of what AI agents changed. Opens it beside
+    /// the focused pane (below a narrow one), focuses it, or maximizes it when focused.
+    fn changes_pane(&mut self) -> Result<()> {
+        if !self.config.review_changes {
+            bail!("Change review is off (review_changes = false in config.toml)");
+        }
+        self.changes.request();
+        let existing = self
+            .panes
+            .iter()
+            .find(|(_, p)| matches!(p, Pane::Changes(_)))
+            .map(|(id, _)| *id);
+        match existing {
+            Some(id) if id == self.focused && !self.sidebar_focus => self.zoom = !self.zoom,
+            Some(id) => {
+                if let Some(index) = self.docked.iter().position(|d| *d == id) {
+                    self.undock(index);
+                }
+                self.focused = id;
+                self.sidebar_focus = false;
+                self.zoom = false;
+            }
+            None => {
+                if self.panes.len() >= 12 {
+                    bail!("Maximum of 12 panes");
+                }
+                let wide = self
+                    .rectangles
+                    .iter()
+                    .find(|(id, _)| *id == self.focused)
+                    .is_some_and(|(_, r)| r.width >= 120);
+                let axis = if wide {
+                    Axis::Horizontal
+                } else {
+                    Axis::Vertical
+                };
+                self.add_pane(Pane::Changes(Box::default()), axis);
+                self.notice(match self.changes.files.len() {
+                    0 => "Changes: what AI agents change shows up here · Ctrl-b v maximizes".into(),
+                    n => format!(
+                        "Changes: {} changed by AI agents · Ctrl-b v maximizes",
+                        review::files(n)
+                    ),
+                });
+            }
+        }
+        self.mode = Mode::Normal;
+        Ok(())
+    }
+    fn changes_key(&mut self, key: KeyEvent) -> Result<()> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(Pane::Changes(view)) = self.panes.get_mut(&self.focused) else {
+            return Ok(());
+        };
+        view.sync(&self.changes);
+        // An undo waits for y (or Enter); any other key leaves everything as it is.
+        if let Some((target, _)) = view.confirm.take() {
+            if !ctrl && matches!(key.code, KeyCode::Char('y') | KeyCode::Enter) {
+                return self.undo_changes(&target);
+            }
+            self.notice("Nothing undone");
+            return Ok(());
+        }
+        let page = view.height.max(2) as isize;
+        let whole = matches!(key.code, KeyCode::Char('Y') | KeyCode::Char('X'));
+        match key.code {
+            KeyCode::Char('d') if ctrl => view.move_by(page / 2),
+            KeyCode::Char('u') if ctrl => view.move_by(-page / 2),
+            _ if ctrl => {}
+            KeyCode::Char('j') | KeyCode::Down => view.move_by(1),
+            KeyCode::Char('k') | KeyCode::Up => view.move_by(-1),
+            KeyCode::PageDown | KeyCode::Char(' ') => view.move_by(page - 1),
+            KeyCode::PageUp => view.move_by(1 - page),
+            KeyCode::Char('g') | KeyCode::Home => view.cursor = 0,
+            KeyCode::Char('G') | KeyCode::End => view.move_by(isize::MAX / 2),
+            KeyCode::Char('n') => view.jump(false, false),
+            KeyCode::Char('N') => view.jump(false, true),
+            KeyCode::Char(']') => view.jump(true, false),
+            KeyCode::Char('[') => view.jump(true, true),
+            KeyCode::Char('l') | KeyCode::Right => view.hscroll += 8,
+            KeyCode::Char('h') | KeyCode::Left => view.hscroll = view.hscroll.saturating_sub(8),
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if let Some(target) = view.target(&self.changes, whole) {
+                    self.keep_changes(&target)?;
+                }
+            }
+            KeyCode::Char('A') => self.keep_changes(&Target::All)?,
+            KeyCode::Char('x') | KeyCode::Char('X') => match view.target(&self.changes, whole) {
+                // One hunk is quick to redo by hand; a whole file asks first.
+                Some(target @ Target::Hunk(..)) => self.undo_changes(&target)?,
+                Some(target) => self.ask_undo(target),
+                None => {}
+            },
+            KeyCode::Char('U') => self.ask_undo(Target::All),
+            KeyCode::Enter | KeyCode::Char('o') => {
+                if let Some((path, line)) = view.location(&self.changes) {
+                    if !path.exists() {
+                        bail!("That file was deleted · x undoes the deletion");
+                    }
+                    self.open(&path)?;
+                    if let Some(b) = self.active_buffer() {
+                        b.goto(line);
+                    }
+                }
+            }
+            KeyCode::Char('r') => self.changes.request(),
+            KeyCode::Char('q') => self.close(false)?,
+            KeyCode::Char(':') => self.input_start(InputKind::Command),
+            _ => {}
+        }
+        Ok(())
+    }
+    /// Ask before undoing a whole file or everything: the agent's version is gone after.
+    fn ask_undo(&mut self, target: Target) {
+        let question = match &target {
+            Target::All if self.changes.files.is_empty() => {
+                self.notice("No agent changes to undo");
+                return;
+            }
+            Target::All => format!(
+                "Undo every agent change in {}? y undoes · any other key keeps them",
+                review::files(self.changes.files.len())
+            ),
+            Target::File(path) | Target::Hunk(path, _) => {
+                let name = self
+                    .changes
+                    .files
+                    .iter()
+                    .find(|f| &f.path == path)
+                    .map_or(path.clone(), |f| f.name.clone());
+                format!("Undo every agent change to {name}? y undoes · any other key keeps it")
+            }
+        };
+        if let Some(view) = self.panes.values_mut().find_map(|p| match p {
+            Pane::Changes(view) => Some(view),
+            _ => None,
+        }) {
+            view.confirm = Some((target, question.clone()));
+            self.notice(question);
+        }
+    }
+    fn keep_changes(&mut self, target: &Target) -> Result<()> {
+        let note = self.changes.keep(target).map_err(anyhow::Error::msg)?;
+        self.notice(note);
+        Ok(())
+    }
+    fn undo_changes(&mut self, target: &Target) -> Result<()> {
+        let count = self.changes.files.len();
+        let name = match target {
+            Target::File(path) | Target::Hunk(path, _) => self
+                .changes
+                .files
+                .iter()
+                .find(|f| &f.path == path)
+                .map_or(path.clone(), |f| f.name.clone()),
+            Target::All => String::new(),
+        };
+        let written = self.changes.undo(target).map_err(anyhow::Error::msg)?;
+        // Open buffers of those files show their text again on the next tick.
+        self.last_reload = Instant::now() - Duration::from_secs(5);
+        let unsaved: Vec<String> = self
+            .buffers
+            .iter()
+            .filter(|b| b.dirty && b.path.as_ref().is_some_and(|p| written.contains(p)))
+            .map(|b| b.name())
+            .collect();
+        let mut note = match target {
+            Target::Hunk(..) => format!("Undid that change in {name}"),
+            Target::File(_) => format!("Undid the agent's changes to {name}"),
+            Target::All => format!("Undid the agent changes to {}", review::files(count)),
+        };
+        if let Some(name) = unsaved.first() {
+            note.push_str(&format!(
+                " · {name} has unsaved edits in Odin; :reload shows the file"
+            ));
+        }
+        self.notice(note);
+        Ok(())
+    }
     fn preview_key(&mut self, key: KeyEvent) -> Result<()> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let Some(Pane::Preview(p)) = self.panes.get_mut(&self.focused) else {
@@ -3961,6 +4200,9 @@ impl App {
                         self.tidy_on_save(id);
                         self.buffers[id].save(None)?;
                         self.lsp.saved(id, &self.buffers[id]);
+                        if let Some(path) = &self.buffers[id].path {
+                            self.changes.saved(path);
+                        }
                     }
                 }
                 self.notice("Saved all modified buffers");
@@ -4139,6 +4381,16 @@ impl App {
                     );
                 }
                 _ => bail!("Use :session, :session save or :session forget"),
+            },
+            // :changes [keep|undo]: the review of what AI agents changed.
+            "changes" | "review" => match arg {
+                "" => self.changes_pane()?,
+                "keep" => self.keep_changes(&Target::All)?,
+                "undo" => {
+                    self.changes_pane()?;
+                    self.ask_undo(Target::All);
+                }
+                _ => bail!("Use :changes, :changes keep (all) or :changes undo (all)"),
             },
             "git" | "graph" => match arg {
                 "" => self.git_pane()?,
@@ -6208,6 +6460,104 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
             start.elapsed() >= Duration::from_secs(4),
             "not before it went quiet"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn what_an_agent_changes_is_reviewed_kept_and_undone() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(["-c", "user.name=Ada", "-c", "user.email=ada@example.com"])
+                .args(["-c", "commit.gpgsign=false", "-C"])
+                .arg(&root)
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(root.join("app.py"), "print(1)\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "first"]);
+        let mut app = App::new(root.clone(), None, false).unwrap();
+        let editor = app.focused;
+        // A fake agent: takes a prompt, thinks, edits two files, works a while.
+        let script = "read prompt; sleep 1; printf 'print(2)\\n' > app.py; \
+                      printf 'note\\n' > notes.md; i=0; while [ $i -lt 20 ]; do \
+                      printf .; sleep 0.1; i=$((i+1)); done; echo done; exec sleep 30";
+        app.open_terminal(
+            Some(("/bin/sh", vec!["-c".into(), script.into()])),
+            Some(Axis::Horizontal),
+        )
+        .unwrap();
+        let agent = app.focused;
+        let Some(Pane::Terminal(t)) = app.panes.get_mut(&agent) else {
+            unreachable!()
+        };
+        t.launch = Launch::Agent {
+            name: "fake".into(),
+            model: None,
+            session: None,
+        };
+        let title = t.title.clone();
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        app.focused = editor;
+        let start = Instant::now();
+        while !app.message.contains("finished") && start.elapsed() < Duration::from_secs(15) {
+            app.tick();
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        assert!(app.message.contains("2 files to review"), "{}", app.message);
+        assert_eq!(app.changes.by(&title), 2);
+        // The agent's pane says so too.
+        let shown = screen(&mut app, 140, 30).join("\n");
+        assert!(shown.contains("✎ 2 files"), "{shown}");
+
+        // Ctrl-b v opens the review: files, hunks, the agent's lines.
+        press(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('v'), KeyModifiers::NONE);
+        assert!(matches!(
+            app.panes.get(&app.focused),
+            Some(Pane::Changes(_))
+        ));
+        let shown = screen(&mut app, 140, 40).join("\n");
+        for expected in [
+            "CHANGES · 2 files",
+            "app.py",
+            "notes.md",
+            "new file",
+            "print(2)",
+        ] {
+            assert!(shown.contains(expected), "{expected}: {shown}");
+        }
+        // x on app.py's change puts it back; Y keeps all of notes.md.
+        press(&mut app, KeyCode::Char('n'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('x'), KeyModifiers::NONE);
+        assert_eq!(
+            std::fs::read_to_string(root.join("app.py")).unwrap(),
+            "print(1)\n"
+        );
+        assert!(app.message.contains("Undid"), "{}", app.message);
+        // Undoing a whole file asks first; any key but y keeps it.
+        press(&mut app, KeyCode::Char('X'), KeyModifiers::NONE);
+        assert!(
+            app.message.contains("Undo every agent change to notes.md"),
+            "{}",
+            app.message
+        );
+        let shown = screen(&mut app, 140, 40).join("\n");
+        assert!(shown.contains("y undo it"), "{shown}");
+        press(&mut app, KeyCode::Char('n'), KeyModifiers::NONE);
+        assert!(root.join("notes.md").exists());
+        press(&mut app, KeyCode::Char('Y'), KeyModifiers::NONE);
+        assert!(app.changes.files.is_empty());
+        assert!(root.join("notes.md").exists());
+        let shown = screen(&mut app, 140, 40).join("\n");
+        assert!(shown.contains("nothing to review"), "{shown}");
     }
 
     #[cfg(unix)]

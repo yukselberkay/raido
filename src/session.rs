@@ -61,6 +61,8 @@ pub enum SavedPane {
     Git {
         only: Option<String>,
     },
+    /// The review of AI agents' changes; what it shows is found again.
+    Changes,
 }
 
 impl Session {

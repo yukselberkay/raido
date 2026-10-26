@@ -42,6 +42,10 @@ ai_skill = true
 # sound), "off", "bell" (the terminal's bell), a system sound name (macOS "Hero",
 # "Ping"…; Windows "Windows Ding", "chimes"…) or a sound file. :sound plays it.
 ai_sound = "default"
+# Ctrl-b v reviews what AI panes changed, like VS Code's agent edits: keep or undo
+# each change. Odin snapshots the project with Git into its own store while agents
+# run (never your repository). false turns it off.
+review_changes = true
 # Mouse wheel scrolls the pane (or explorer, guide) under the pointer; a click
 # focuses a pane, puts the editor cursor there, or opens an explorer entry. While
 # Odin has the mouse, Ctrl-b y hands it to the terminal for selecting and copying

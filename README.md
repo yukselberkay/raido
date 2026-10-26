@@ -349,6 +349,9 @@ the history graph appears after you make commits.
 - **AI panes:** run **OpenAI Codex**, **Claude Code**, **Gemini CLI** or the
   **Antigravity CLI** (`agy`) as installed executables, beside or below your code.
   These are the real tools, not imitations or provider-specific chat widgets.
+- **Review AI changes:** everything Codex, Claude Code or any AI pane changes shows
+  up as a diff, like VS Code's agent edits; keep or undo each change, each file or
+  all of them ([Review AI changes](#review-ai-changes)).
 - **Git sidebar:** current branch, changed/untracked files, and recent ASCII
   commit graph. Enter opens a changed file. Git is read-only here; perform
   staging/commits in the terminal or your preferred Git TUI.
@@ -385,6 +388,7 @@ Shift on many keyboard layouts. On macOS, **Ctrl means Control, not Command**.
 | `Ctrl-b +` / `-` / `0` | [Text size](#text-size) bigger / smaller / reset; keep pressing `+` or `-` to repeat |
 | `Ctrl-b s` / `g` | Toggle sidebar / focus the sidebar's Git section |
 | `Ctrl-b G` | Open the [Git pane](#git-pane); again focuses it, and when focused maximizes / restores it |
+| `Ctrl-b v` | [Review what AI agents changed](#review-ai-changes): keep or undo each change; again focuses the review, and when focused maximizes / restores it |
 | `PageUp` / `PageDown` (Fn-↑/↓ on a Mac) | Scroll a terminal or AI pane's history half a page; then ↑/↓ one line, Home/End top/bottom, Esc or typing returns. Full-screen programs (vim, less) get the keys instead |
 | `Ctrl-b [` | [Copy mode](#copying-from-terminal-and-ai-panes) in a terminal or AI pane |
 | `Ctrl-b Z` | [Copy view](#copying-from-terminal-and-ai-panes): only the focused pane's text; again to return |
@@ -558,6 +562,68 @@ In a commit's changes:
 
 Very large commits are cut off after 20,000 lines. `Ctrl-b G` maximizes the pane for
 more room.
+
+### Review AI changes
+
+Like VS Code shows what Copilot or Claude changed, Odin shows what your AI panes
+change, whichever CLI runs in them (Codex, Claude Code, Gemini, a local model):
+**`Ctrl-b v`** or `:changes` opens the review. Each changed file is listed with its
+hunks, old and new line numbers, added lines in green and removed lines in red, and
+the agent that made it. It updates live while the agent works.
+
+```text
+╭ ◉ 4 CHANGES · 2 files +2 −1 ─────────────────────────────╮
+│── y keep  x undo  Y X file  A U all  n N next  ⏎ open ────│
+│▌app.py                                       +1 −1 · Codex │
+│ @@ -1,1 +1,1 @@                            y keep · x undo │
+│    1      - print(1)                                       │
+│         1 + print(2)                                       │
+│                                                            │
+│ notes.md new file                            +1 −0 · Codex │
+│ @@ -0,0 +1,1 @@                                            │
+│         1 + note                                           │
+╰────────────────────────────────────────────────────────────╯
+```
+
+The bar on the left is the cursor. **`y` keeps** the change it's on, and the review
+stops showing it. **`x` undoes** it: that part of the file goes back to how it was
+before the agent. On a file's heading, or with `Y` / `X`, they act on the whole
+file; `A` keeps everything and `U` undoes everything. Undoing a whole file or
+everything asks first (`y` to confirm), because the agent's version is gone after.
+An undone new file is deleted, and an undone deletion brings the file back. Enter
+opens the file at that line.
+
+| Key | Action |
+| --- | --- |
+| `j`/`k`, Up/Down, Space/PageDown/PageUp, `Ctrl-d`/`Ctrl-u`, `g`/`G` | Move the cursor |
+| `n` / `N` | Next / previous change (hunk) |
+| `]` / `[` | Next / previous file |
+| `y` / `x` | Keep / undo the change under the cursor (the whole file on its heading) |
+| `Y` / `X` | Keep / undo the whole file |
+| `A` / `U` | Keep / undo every file (`:changes keep`, `:changes undo`) |
+| Enter or `o` | Open the file at that line |
+| `h` / `l` | Scroll long lines sideways |
+| `r` | Look again now |
+| `q` | Close the review |
+
+When an AI pane finishes a prompt, the status line says how many files it changed
+(`Claude finished · 3 files to review: Ctrl-b v`), and its title shows
+`✎ 3 files · ^B v` until you've kept or undone them.
+
+**How it knows what the agent changed:** while AI panes are open, Odin snapshots the
+project with Git every couple of seconds while an agent works, and every few seconds
+while they wait. Files that change while an agent is working are the agent's; the
+review compares each one with how it was before the agent first touched it, so
+changes from several prompts add up until you keep or undo them. Files you change
+while no agent works, or save from Odin's editor, are yours and stay out of the
+review. Edits you make in another editor *while* an agent works can't be told apart
+and show up too (keep them with `y`). It works with every CLI, needs no setup, and
+never writes to your repository: the snapshots go into Odin's own Git index and
+object store in your cache folder, deleted when Odin quits. `.gitignore`d files
+(build output, `node_modules`) are left out.
+
+The review needs a Git repository (`git init` makes one) and lasts while Odin runs.
+Set `review_changes = false` to turn it off.
 
 ### Editor: normal mode
 
@@ -953,6 +1019,7 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 :set rnu / :set nornu     Relative / absolute line numbers
 :run name                 Launch an explicitly configured command plugin
 :git / :git all           Git pane: open, focus, or maximize / show all branches
+:changes [keep|undo]      Review AI agents' changes / keep all / undo all (asks)
 :files / :git side        Focus sidebar section
 :session [save|forget]    Session status / save now / delete and stop saving
 :bn / :bp                 Next / previous buffer
@@ -1031,6 +1098,9 @@ the agent ringing the terminal bell, so it works with every CLI and needs no set
 Pick another sound with `ai_sound` (a system sound such as macOS `"Hero"` or Windows
 `"Windows Ding"`, a file, `"bell"`, or `"off"`);
 `:sound` plays it.
+
+**Review what it changed:** `Ctrl-b v` shows every file the AI panes changed as a
+diff, to keep or undo change by change ([Review AI changes](#review-ai-changes)).
 
 ### Bring your own model (local LLMs)
 
@@ -1189,6 +1259,7 @@ theme immediately. The configuration supports:
 | `ai_split` | `"right"` | Where AI panes open: `"right"` (side by side) or `"below"` (stacked) |
 | `mouse` | `true` | Wheel scrolls the pane under the pointer, a click focuses it ([Mouse](#mouse)); `false` leaves the mouse to the terminal |
 | `ai_sound` | `"default"` | Sound when an AI pane finishes a prompt: `"default"`, `"off"`, `"bell"`, a system sound name (macOS `"Hero"`, Windows `"chimes"`) or a sound file; `:sound` plays it |
+| `review_changes` | `true` | Track the files AI panes change, to [review, keep or undo](#review-ai-changes) them (`Ctrl-b v`) |
 | `format_on_save` | `["go"]` | Languages whose files get imports organized and formatting from their server on save ([Go: tidy on save](#go-tidy-on-save)) |
 | `ai_skill` | `true` | Keep the [Odin skill](#ask-your-ai-agent-about-odin) installed for the AI agents on this machine (at startup and when you launch one) |
 | `shell` | `$SHELL`, then `/bin/sh` | Executable path for interactive terminal panes |

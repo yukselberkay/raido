@@ -6,6 +6,7 @@ use crate::{
     lsp::Diagnostic,
     markdown,
     quickdiff::Change,
+    review::{self, ChangesView},
     workspace::{printable, Mark},
 };
 use ratatui::{
@@ -230,7 +231,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 }
             ),
             Some(Pane::Terminal(t)) => format!(
-                " {} {}{} ",
+                " {} {}{}{} ",
                 id + 1,
                 t.title,
                 if app.copy.as_ref().is_some_and(|c| c.pane == id) {
@@ -239,6 +240,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     " · exited"
                 } else {
                     " · live"
+                },
+                // An AI pane's changes waiting for review.
+                match app.changes.by(&t.title) {
+                    0 => String::new(),
+                    n => format!(" · ✎ {} · ^B v", review::files(n)),
                 }
             ),
             Some(Pane::Git(view)) => format!(
@@ -249,6 +255,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     None => "all branches".into(),
                 }
             ),
+            Some(Pane::Changes(_)) => {
+                let (added, removed) = app.changes.totals();
+                match app.changes.files.len() {
+                    0 => format!(" {} CHANGES · nothing to review ", id + 1),
+                    n => format!(
+                        " {} CHANGES · {} +{added} −{removed} ",
+                        id + 1,
+                        review::files(n)
+                    ),
+                }
+            }
             _ => format!(" {} AI / copilot ", id + 1),
         };
         let inner = if bare {
@@ -501,6 +518,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             }
             Some(Pane::Ai) => ai(frame, inner, &theme, &customs),
             Some(Pane::Git(view)) => git_view(frame, view, inner, &theme),
+            Some(Pane::Changes(view)) => changes_view(frame, &app.changes, view, inner, &theme),
             None => {}
         }
     }
@@ -1924,6 +1942,204 @@ fn commit_diff(frame: &mut Frame, diff: &mut gitgraph::Diff, area: Rect, theme: 
     }
 }
 
+/// The review of AI agents' changes: a heading with the totals and keys, then each
+/// changed file's hunks with old and new line numbers. The cursor row (a bar at the
+/// left edge) is what y keeps and x undoes: its hunk, or its file on a heading.
+fn changes_view(
+    frame: &mut Frame,
+    changes: &review::Changes,
+    view: &mut ChangesView,
+    area: Rect,
+    theme: &Theme,
+) {
+    use review::{Kind, Row, Status};
+    if area.height < 2 {
+        return;
+    }
+    view.sync(changes);
+    let fg = color(&theme.foreground);
+    let muted = color(&theme.muted);
+    let accent = color(&theme.accent);
+    let background = color(&theme.background);
+    let selection = color(&theme.selection);
+    let added = change_color(Change::Added, theme);
+    let removed = change_color(Change::Deleted, theme);
+    // The keys, as many as fit.
+    let keys = [
+        "── y keep  x undo  Y X whole file  A U all  n N next change  ⏎ open ",
+        "── y keep  x undo  Y X file  A U all  n N next  ⏎ open ",
+        "── y keep  x undo  Y X file  n N next ",
+        "── y keep  x undo ",
+    ];
+    let (heading, tone) = match &view.confirm {
+        Some((_, question)) => (format!("── {question} "), color(&theme.warning)),
+        None if changes.files.is_empty() => ("── Changes ".to_string(), color(&theme.border)),
+        None => (
+            keys.iter()
+                .find(|k| k.chars().count() + 2 <= area.width as usize)
+                .unwrap_or(&keys[3])
+                .to_string(),
+            color(&theme.border),
+        ),
+    };
+    text(
+        frame,
+        Rect::new(area.x, area.y, area.width, 1),
+        format!("{heading}{}", "─".repeat(area.width as usize)),
+        tone,
+    );
+    let rows = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
+    if changes.files.is_empty() {
+        let mut lines: Vec<String> = if let Some(problem) = &changes.problem {
+            vec![
+                "Agent changes are tracked in Git projects.".into(),
+                format!("This folder: {problem}. `git init` makes it one."),
+            ]
+        } else if changes.loading() {
+            vec!["Looking for changes…".into()]
+        } else {
+            vec![
+                "No changes from AI agents to review.".into(),
+                String::new(),
+                "While an AI pane works, the files it changes show up here:".into(),
+                "keep each change (y) or undo it (x).".into(),
+            ]
+        };
+        if let Some(error) = &changes.error {
+            lines.push(String::new());
+            lines.push(error.clone());
+        }
+        let top = rows.y + rows.height.saturating_sub(lines.len() as u16) / 3;
+        frame.render_widget(
+            Paragraph::new(lines.join("\n"))
+                .alignment(Alignment::Center)
+                .wrap(Wrap { trim: false })
+                .style(Style::default().fg(muted)),
+            Rect::new(rows.x, top, rows.width, rows.bottom() - top),
+        );
+        return;
+    }
+    view.height = rows.height as usize;
+    follow(&mut view.scroll, view.cursor, view.height);
+    view.scroll = view.scroll.min(view.rows.len().saturating_sub(view.height));
+    // Line numbers when there is room for them and the code.
+    let gutter = rows.width >= 60;
+    let tint = |c: Color| crate::markdown::mix(background, c, 0.14);
+    let number = |n: Option<usize>| n.map_or(String::new(), |n| n.to_string());
+    for (index, row) in view
+        .rows
+        .iter()
+        .enumerate()
+        .skip(view.scroll)
+        .take(view.height)
+    {
+        let y = rows.y + (index - view.scroll) as u16;
+        let current = index == view.cursor;
+        let mut row_bg = match *row {
+            Row::File(_) => Some(selection),
+            Row::Line(f, h, l) => match changes.files[f].hunks()[h].lines[l].kind {
+                Kind::Added => Some(tint(added)),
+                Kind::Removed => Some(tint(removed)),
+                Kind::Context => None,
+            },
+            _ => None,
+        };
+        if current {
+            row_bg = Some(crate::markdown::mix(selection, accent, 0.22));
+        }
+        let fill = Style::default().bg(row_bg.unwrap_or(background));
+        if let Some(bg) = row_bg {
+            frame.render_widget(
+                Block::default().style(Style::default().bg(bg)),
+                Rect::new(rows.x, y, rows.width, 1),
+            );
+        }
+        let mut spans = vec![Span::styled(
+            if current { "▌" } else { " " },
+            fill.fg(accent),
+        )];
+        let width = rows.width.saturating_sub(1) as usize;
+        let line = match *row {
+            Row::Gap => Line::from(spans),
+            Row::File(f) => {
+                let file = &changes.files[f];
+                spans.push(Span::styled(
+                    format!("{} ", printable(&file.name)),
+                    fill.fg(accent).add_modifier(Modifier::BOLD),
+                ));
+                let status = match file.status {
+                    Status::Added => "new file ",
+                    Status::Deleted => "deleted ",
+                    Status::Modified => "",
+                };
+                spans.push(Span::styled(status, fill.fg(muted)));
+                let mut right = format!("+{} −{}", file.added, file.removed);
+                if !file.by.is_empty() {
+                    right.push_str(&format!(" · {}", file.by.join(", ")));
+                }
+                let right = Span::styled(format!("{right} "), fill.fg(muted));
+                fit_line(spans, right, width + 1, fill)
+            }
+            Row::Hunk(f, h) => {
+                let span = changes.files[f].hunks()[h].span;
+                // Like Git: an empty range starts at the line before it.
+                let range = |(start, end): (usize, usize)| {
+                    let length = end - start;
+                    format!("{},{length}", if length == 0 { start } else { start + 1 })
+                };
+                spans.push(Span::styled(
+                    format!("@@ -{} +{} @@", range(span.old), range(span.new)),
+                    fill.fg(color(&theme.secondary)),
+                ));
+                // The hunk the cursor is in says what y and x do to it.
+                let inside = view.rows.get(view.cursor).and_then(|r| r.hunk()) == Some((f, h));
+                let right = if inside {
+                    Span::styled("y keep · x undo ", fill.fg(accent))
+                } else {
+                    Span::raw("")
+                };
+                fit_line(spans, right, width + 1, fill)
+            }
+            Row::Note(f) => {
+                let file = &changes.files[f];
+                let note = match (&file.body, file.status) {
+                    (review::Body::Binary, _) => "binary or very large: keep or undo it whole",
+                    (_, Status::Added) => "new empty file",
+                    (_, Status::Deleted) => "empty file deleted",
+                    _ => "only its line endings or mode changed",
+                };
+                spans.push(Span::styled(note, fill.fg(muted)));
+                Line::from(spans)
+            }
+            Row::Line(f, h, l) => {
+                let diff_line = &changes.files[f].hunks()[h].lines[l];
+                let (sign, style) = match diff_line.kind {
+                    Kind::Added => ("+", fill.fg(added)),
+                    Kind::Removed => ("-", fill.fg(removed)),
+                    Kind::Context => (" ", fill.fg(fg)),
+                };
+                if gutter {
+                    spans.push(Span::styled(
+                        format!("{:>4} {:>4} ", number(diff_line.old), number(diff_line.new)),
+                        fill.fg(muted),
+                    ));
+                }
+                spans.push(Span::styled(format!("{sign} "), style));
+                let body: String = printable(&diff_line.text.replace('\t', "    "))
+                    .chars()
+                    .skip(view.hscroll)
+                    .collect();
+                spans.push(Span::styled(body, style));
+                if diff_line.unterminated {
+                    spans.push(Span::styled("  ⏎ no newline at end", fill.fg(muted)));
+                }
+                Line::from(spans)
+            }
+        };
+        frame.render_widget(Paragraph::new(line), Rect::new(rows.x, y, rows.width, 1));
+    }
+}
+
 fn git_view(frame: &mut Frame, view: &mut GitView, area: Rect, theme: &Theme) {
     let fg = color(&theme.foreground);
     let muted = color(&theme.muted);
@@ -2287,6 +2503,7 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
             Some(Pane::Preview(_)) => "PREVIEW",
             Some(Pane::Ai) => "AI",
             Some(Pane::Git(_)) => "GIT",
+            Some(Pane::Changes(_)) => "REVIEW",
             _ => match app.mode {
                 Mode::Insert => "INSERT",
                 Mode::Visual => "VISUAL",
@@ -2359,7 +2576,7 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
         } else if app.copy.is_some() {
             " hjkl/arrows move   w b words   0 $ line   g G top/end   PgUp PgDn   v V select   y copy   / ? search   n N next   q leave"
         } else if app.prefix {
-            " % split  \" stack  c shell  a/A AI beside/below  m preview  t themes  arrows focus  ⇧arrows move  space flip  d dock  D docked  y mouse  r resize  z zoom  Z copy view  [ copy mode  +/-/0 text size  x close  ? help"
+            " % split  \" stack  c shell  a/A AI beside/below  m preview  v review AI changes  t themes  arrows focus  ⇧arrows move  space flip  d dock  D docked  y mouse  r resize  z zoom  Z copy view  [ copy mode  +/-/0 text size  x close  ? help"
         } else if app.sidebar_focus && !app.git_focus && app.explorer_search.is_some() {
             " type to search names and text   ↑ ↓ preview   Enter open at the line   ^U clear   Esc back to the tree"
         } else if app.sidebar_focus && !app.git_focus {
@@ -2368,6 +2585,14 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
             && !app.sidebar_focus
         {
             " j k scroll   Space PgDn page   n N next/previous file   h l sideways   g G top/end   y copy hash   Esc graph   ^B G maximize"
+        } else if matches!(app.panes.get(&app.focused), Some(Pane::Changes(v)) if v.confirm.is_some())
+            && !app.sidebar_focus
+        {
+            " y undo it   any other key keeps it"
+        } else if matches!(app.panes.get(&app.focused), Some(Pane::Changes(_)))
+            && !app.sidebar_focus
+        {
+            " j k move   n N next change   ] [ file   y keep   x undo   Y X whole file   A keep all   U undo all   Enter open   q close"
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Git(_))) && !app.sidebar_focus {
             " Tab branches/commits   j k move   Enter branch only / commit diff   d details   a all   y copy hash   r refresh   ^B G maximize"
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Preview(_)))
@@ -2510,6 +2735,14 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         (
             ":git  or  Ctrl-b G",
             "Git pane: branches, graph; Enter on a commit shows its diff",
+        ),
+        (
+            ":changes  or  Ctrl-b v",
+            "Review what AI agents changed: y keeps, x undoes a change",
+        ),
+        (
+            "  Y X / A U / Enter",
+            "Keep or undo the whole file / every file / open it there",
         ),
         (
             ":session [save|forget]",
