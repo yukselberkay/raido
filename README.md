@@ -397,8 +397,8 @@ the history graph appears after you make commits.
   up as a diff, like VS Code's agent edits; keep or undo each change, each file or
   all of them ([Review AI changes](#review-ai-changes)).
 - **AI panes see your editor:** as with its VS Code extension, Claude Code knows the
-  file you're on and the lines you select
-  ([AI panes see your editor](#ai-panes-see-your-editor)).
+  file you're on and the lines you select; `Ctrl-b i` hands any AI pane a reference
+  to them ([AI panes see your editor](#ai-panes-see-your-editor)).
 - **Git sidebar:** current branch, changed/untracked files, and recent ASCII
   commit graph. Enter opens a changed file. Git is read-only here; perform
   staging/commits in the terminal or your preferred Git TUI.
@@ -439,6 +439,7 @@ Shift on many keyboard layouts. On macOS, **Ctrl means Control, not Command**.
 | `Ctrl-b s` / `g` | Toggle sidebar / focus the sidebar's Git section |
 | `Ctrl-b G` | Open the [Git pane](#git-pane); again focuses it, and when focused maximizes / restores it |
 | `Ctrl-b v` | [Review what AI agents changed](#review-ai-changes): keep or undo each change; again focuses the review, and when focused maximizes / restores it |
+| `Ctrl-b i` | [Hand the AI pane where you are](#ai-panes-see-your-editor): the file and the lines you selected, typed into its prompt as `@file#L10-20`, and on to that pane |
 | `PageUp` / `PageDown` (Fn-↑/↓ on a Mac) | Scroll a terminal or AI pane's history half a page; then ↑/↓ one line, Home/End top/bottom, Esc or typing returns. Full-screen programs (vim, less) get the keys instead |
 | `Ctrl-b [` | [Copy mode](#copying-from-terminal-and-ai-panes) in a terminal or AI pane |
 | `Ctrl-b Z` | [Copy view](#copying-from-terminal-and-ai-panes): only the focused pane's text; again to return |
@@ -696,6 +697,19 @@ warnings, and open a file for you while you keep typing in its pane.
   [review](#review-ai-changes) has them afterwards.
 - Raido only listens when Claude Code is installed; `claude_ide = false` turns the
   connection off.
+
+**Any agent: `Ctrl-b i`.** In an editor, `Ctrl-b i` (or `:mention`) types a
+reference to the file, and to the lines you selected, into the AI pane on screen
+(the one you used last), then takes you there to type your question:
+
+| Agent | Gets |
+| --- | --- |
+| Claude Code | `@src/app.rs#L120-140`, its own format |
+| Codex, Gemini and others | `@src/app.rs (lines 120-140)` |
+
+With nothing selected it's the file alone. From the AI pane, `Ctrl-b i` refers to the
+editor you came from. The agent reads the file itself, and nothing is sent until you
+press Enter.
 
 ### Editor: normal mode
 
@@ -1121,6 +1135,7 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 :run name                 Launch an explicitly configured command plugin
 :git / :git all           Git pane: open, focus, or maximize / show all branches
 :changes [keep|undo]      Review AI agents' changes / keep all / undo all (asks)
+:mention                  Type a reference to your file and selection into the AI pane (Ctrl-b i)
 :ide                      Whether Claude Code is connected to Raido
 :files / :git side        Focus sidebar section
 :session [save|forget]    Session status / save now / delete and stop saving
@@ -1204,7 +1219,8 @@ Pick another sound with `ai_sound` (a system sound such as macOS `"Hero"` or Win
 **Review what it changed:** `Ctrl-b v` shows every file the AI panes changed as a
 diff, to keep or undo change by change ([Review AI changes](#review-ai-changes)).
 
-**Show it your code:** Claude Code sees the file you're on and the lines you select
+**Show it your code:** Claude Code sees the file you're on and the lines you select,
+and `Ctrl-b i` types a reference to them into any AI pane
 ([AI panes see your editor](#ai-panes-see-your-editor)).
 
 ### Bring your own model (local LLMs)

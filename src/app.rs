@@ -326,6 +326,8 @@ pub struct App {
     pub ide: Option<crate::ide::Server>,
     /// Where you were in the last focused editor: the file, cursor and selection.
     pub editor_spot: Option<crate::ide::Spot>,
+    /// The AI pane focused last, where Ctrl-b i sends a reference.
+    last_ai: Option<usize>,
     /// Quick diff gutter marks, by buffer.
     pub diffs: HashMap<usize, quickdiff::State>,
     /// Copy mode in a terminal pane (Ctrl-b [).
@@ -438,6 +440,7 @@ impl App {
             remote: None,
             ide: None,
             editor_spot: None,
+            last_ai: None,
             diffs: HashMap::new(),
             copy: None,
             find: None,
@@ -1298,6 +1301,9 @@ impl App {
     }
     pub fn tick(&mut self) {
         crate::ide::tick(self);
+        if matches!(self.panes.get(&self.focused), Some(Pane::Terminal(t)) if t.is_agent()) {
+            self.last_ai = Some(self.focused);
+        }
         let visible: Vec<usize> = self
             .panes
             .values()
@@ -2381,6 +2387,57 @@ impl App {
         }
         Ok(())
     }
+    /// Ctrl-b i (`:mention`): a reference to the file you're on and the lines you
+    /// selected, typed into the AI pane beside it for its agent to read, and that pane
+    /// focused for your question. Claude Code gets its own `@file#L10-20`; other
+    /// agents `@file (lines 10-20)`.
+    fn mention(&mut self) -> Result<()> {
+        let spot = crate::ide::Spot::of(self)
+            .or_else(|| self.editor_spot.clone())
+            .context("Open a file in an editor first: Ctrl-b i sends where you are in it")?;
+        let agents: Vec<usize> = self
+            .visible()
+            .into_iter()
+            .filter(|id| matches!(self.panes.get(id), Some(Pane::Terminal(t)) if t.is_agent()))
+            .collect();
+        let target = [Some(self.focused), self.last_ai]
+            .into_iter()
+            .flatten()
+            .find(|id| agents.contains(id))
+            .or(agents.first().copied())
+            .context(
+                "No AI pane on screen: Ctrl-b a starts one, Ctrl-b D brings back a docked one",
+            )?;
+        let Some(Pane::Terminal(terminal)) = self.panes.get_mut(&target) else {
+            unreachable!("an agent pane");
+        };
+        let file = spot
+            .path
+            .strip_prefix(&self.root)
+            .unwrap_or(&spot.path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let claude = matches!(&terminal.launch, Launch::Agent { name, .. } if name == "claude");
+        let (first, last) = (spot.start.0 + 1, spot.end.0 + 1);
+        let lines = match (spot.chars.is_some(), claude, first == last) {
+            (false, _, _) => String::new(),
+            (true, true, true) => format!("#L{first}"),
+            (true, true, false) => format!("#L{first}-{last}"),
+            (true, false, true) => format!(" (line {first})"),
+            (true, false, false) => format!(" (lines {first}-{last})"),
+        };
+        let reference = format!("@{file}{lines}");
+        terminal.paste(&format!("{reference} "))?;
+        let title = terminal.title.clone();
+        if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+            self.end_visual();
+            self.editor_spot = crate::ide::Spot::of(self).or(self.editor_spot.take());
+        }
+        self.focused = target;
+        self.sidebar_focus = false;
+        self.notice(format!("{reference} → {title}: type your question"));
+        Ok(())
+    }
     /// Ctrl-b Z: the focused pane alone, without borders, sidebar, line numbers or
     /// status lines, for selecting with the mouse; again to return.
     fn toggle_copy_view(&mut self) {
@@ -2417,6 +2474,7 @@ impl App {
             }
             KeyCode::Char('G') => self.git_pane()?,
             KeyCode::Char('v') => self.changes_pane()?,
+            KeyCode::Char('i') => self.mention()?,
             KeyCode::Char('z') => {
                 self.zoom = !self.zoom;
                 self.sidebar_focus = false;
@@ -4551,6 +4609,7 @@ impl App {
                 }
             }
             "theme" | "themes" => self.open_picker(),
+            "mention" => self.mention()?,
             // :ide, Claude Code's connection to Raido.
             "ide" => {
                 let status = match &self.ide {
@@ -6812,6 +6871,87 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
             start.elapsed() >= Duration::from_secs(4),
             "not before it went quiet"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ctrl_b_i_hands_the_ai_pane_where_you_are() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("src")).unwrap();
+        let path = root.join("src/main.rs");
+        let text: String = (1..=10).map(|n| format!("line {n}\n")).collect();
+        std::fs::write(&path, text).unwrap();
+        let mut app = App::new(root.clone(), Some(path), false).unwrap();
+        let editor = app.focused;
+        let prefix = |app: &mut App, c: char| {
+            press(app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+            press(app, KeyCode::Char(c), KeyModifiers::NONE);
+        };
+        prefix(&mut app, 'i');
+        assert!(app.message.contains("No AI pane"), "{}", app.message);
+        // Two stand-in agents that show what they're sent: Claude Code and Codex.
+        let agent = |app: &mut App, name: &str| {
+            app.open_terminal(
+                Some(("/bin/sh", vec!["-c".into(), "exec cat".into()])),
+                Some(Axis::Horizontal),
+            )
+            .unwrap();
+            let Some(Pane::Terminal(t)) = app.panes.get_mut(&app.focused) else {
+                unreachable!()
+            };
+            t.launch = Launch::Agent {
+                name: name.into(),
+                model: None,
+                session: None,
+            };
+            app.focused
+        };
+        let claude = agent(&mut app, "claude");
+        let codex = agent(&mut app, "codex");
+        let shows = |app: &mut App, pane: usize, wanted: &str| {
+            let start = Instant::now();
+            loop {
+                app.tick();
+                let Some(Pane::Terminal(t)) = app.panes.get(&pane) else {
+                    unreachable!()
+                };
+                if t.transcript().contains(wanted) {
+                    return true;
+                }
+                if start.elapsed() > Duration::from_secs(5) {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        // Lines 2 to 4 selected, Claude Code focused last: its own @file#L2-4.
+        app.focused = claude;
+        app.tick();
+        app.focused = editor;
+        app.command("2").unwrap();
+        press(&mut app, KeyCode::Char('V'), KeyModifiers::SHIFT);
+        press(&mut app, KeyCode::Char('j'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('j'), KeyModifiers::NONE);
+        prefix(&mut app, 'i');
+        assert!(shows(&mut app, claude, "@src/main.rs#L2-4 "));
+        assert_eq!(app.focused, claude, "on to type the question");
+        assert_eq!(app.mode, Mode::Normal, "the selection is used up");
+        // From Claude's pane itself, the editor it came from counts: nothing
+        // selected any more, so the file.
+        prefix(&mut app, 'i');
+        assert!(shows(&mut app, claude, "#L2-4 @src/main.rs "));
+        // Codex focused last: plain words for the lines; no selection, the file.
+        app.focused = codex;
+        app.tick();
+        app.focused = editor;
+        app.command("5").unwrap();
+        press(&mut app, KeyCode::Char('V'), KeyModifiers::SHIFT);
+        prefix(&mut app, 'i');
+        assert!(shows(&mut app, codex, "@src/main.rs (line 5) "));
+        app.focused = editor;
+        prefix(&mut app, 'i');
+        assert!(shows(&mut app, codex, "(line 5) @src/main.rs "));
     }
 
     #[cfg(unix)]

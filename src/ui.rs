@@ -2812,6 +2812,10 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
             "Keep or undo the whole file / every file / open it there",
         ),
         (
+            ":mention  or  Ctrl-b i",
+            "Type your file and selected lines into the AI pane (@file#L10-20)",
+        ),
+        (
             ":ide",
             "Whether Claude Code is connected: it sees your file and selection",
         ),

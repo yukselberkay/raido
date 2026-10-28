@@ -242,7 +242,7 @@ published.
   -D warnings` (clean); no Windows machine or linker was available, so the new
   `windows-latest` CI job is the first real Windows build and test run.
 
-## Claude Code's IDE connection
+## Claude Code's IDE connection and Ctrl-b i
 
 - New `src/ide.rs` and `src/websocket.rs`: a WebSocket server on 127.0.0.1 speaking
   the IDE protocol Claude Code uses with its VS Code extension (MCP's JSON-RPC). It
@@ -255,8 +255,9 @@ published.
 - Verified live with Claude Code 2.1.312 in an AI pane, driven through Raido's own
   draw code: it connected in 0.7 s; with lines 9–12 of `examples/beacon.rs`
   selected and focus in Claude's pane its prompt showed `⧉ 4 lines selected`, and
-  an `at_mentioned` message made it type `@examples/beacon.rs#L9-12` itself. No
-  prompt was submitted.
+  an `at_mentioned` message made it type `@examples/beacon.rs#L9-12`, the format
+  `Ctrl-b i` uses. `Ctrl-b i` typed exactly that into the real Claude Code prompt.
+  No prompt was submitted.
 - Not verified live: Claude Code proposing an edit while connected. Raido offers no
   `openDiff` tool, so edits are expected to stay in Claude's own pane; the tool list
   sent to Claude is covered by a test.
