@@ -1451,9 +1451,10 @@ fn editor(
         for d in &marks {
             let x0 = display_width(raw.chars().take(d.start), tab_width);
             let x1 = display_width(raw.chars().take(d.end), tab_width).max(x0 + 1);
-            let style = Style::default()
-                .add_modifier(Modifier::UNDERLINED)
-                .underline_color(severity_color(theme, d.severity));
+            let mut style = Style::default().add_modifier(Modifier::UNDERLINED);
+            if crate::platform::colored_underlines() {
+                style = style.underline_color(severity_color(theme, d.severity));
+            }
             for col in x0.max(buffer.hscroll)..x1.min(buffer.hscroll + width as usize) {
                 if let Some(cell) = frame
                     .buffer_mut()

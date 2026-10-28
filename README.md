@@ -974,7 +974,7 @@ the project root, and talks to it in the background. Install the server once:
 
 | Feature | How |
 | --- | --- |
-| Diagnostics | A `●` in the gutter, underlined code, and the message at the bottom of the pane when the cursor is on that line; `]d` / `[d` jump between them |
+| Diagnostics | A `●` in the gutter, underlined code, and the message at the bottom of the pane when the cursor is on that line; `]d` / `[d` jump between them. The underline takes the problem's color in terminals that color underlines (iTerm2, Ghostty, kitty, WezTerm, foot, VS Code, tmux); elsewhere, including macOS Terminal.app, it's plain and the `●` keeps the color |
 | Hover | `K` shows types and docs in a popup; any key closes it |
 | Go to definition | `gd` opens the definition (even in another file); `Ctrl-o` jumps back |
 | Completion | Pops up after two letters or `.`; `Ctrl-Space` or `Ctrl-n` asks; keywords and words from your files without a server |
@@ -1440,6 +1440,7 @@ plugins are intentionally not part of v0.1.
 | File changed on disk | Raido refuses to overwrite it. Save your buffer under a new name with `:w recovery-name`, then compare with the disk version. |
 | Read-only, binary or non-UTF-8 file | Raido respects read-only files and only edits UTF-8 text. Convert a copy externally if needed. |
 | Custom theme not found | Use a simple name with letters, digits, hyphens or underscores, and place its TOML in the user themes directory. |
+| Code turns faint near language-server problems (older Raido in macOS Terminal.app) | Update Raido. Terminal.app doesn't know the colored-underline code and read part of it as "faint"; Raido now draws plain underlines there. |
 
 Clean buffers refresh after external edits; buffers with unsaved changes do not.
 Raido does not provide automatic crash recovery in v0.1.

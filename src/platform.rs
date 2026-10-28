@@ -1,5 +1,6 @@
 //! The few places Linux, macOS and Windows differ: finding executables, the
-//! default shell, where user configuration lives, and what keys are called.
+//! default shell, where user configuration lives, and what keys are called; and
+//! the one way terminals differ that Raido draws around.
 use std::path::{Path, PathBuf};
 
 const MAC: bool = cfg!(target_os = "macos");
@@ -98,6 +99,27 @@ pub fn shell(configured: Option<&str>) -> (String, Vec<String>) {
 
 /// Base directory for Raido's config: `$XDG_CONFIG_HOME` if set, else
 /// `~/.config` on Linux and macOS, `%APPDATA%` on Windows.
+/// Whether the terminal colors underlines (SGR 58), for the editor's problem marks.
+/// One that doesn't know the code reads its numbers as other styles, `2` as faint,
+/// and dims text all over the screen (macOS Terminal.app), so only terminals known
+/// to support it get colored underlines; the rest get plain ones.
+pub fn colored_underlines() -> bool {
+    static KNOWN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *KNOWN.get_or_init(|| underline_colors(|name| std::env::var(name).ok()))
+}
+
+fn underline_colors(var: impl Fn(&str) -> Option<String>) -> bool {
+    let program = var("TERM_PROGRAM").unwrap_or_default();
+    let term = var("TERM").unwrap_or_default();
+    matches!(
+        program.as_str(),
+        "iTerm.app" | "WezTerm" | "ghostty" | "vscode" | "tmux"
+    ) || ["kitty", "ghostty", "wezterm", "foot"]
+        .iter()
+        .any(|name| term.contains(name))
+        || var("KITTY_WINDOW_ID").is_some()
+}
+
 pub fn config_base() -> PathBuf {
     if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
         return PathBuf::from(dir);
@@ -125,6 +147,32 @@ mod tests {
             resolve("raido-definitely-missing-tool"),
             "raido-definitely-missing-tool"
         );
+    }
+
+    #[test]
+    fn only_terminals_known_to_color_underlines_get_colored_ones() {
+        let with = |pairs: &[(&str, &str)]| {
+            let pairs: Vec<(String, String)> = pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            underline_colors(move |name| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| k == name)
+                    .map(|(_, v)| v.clone())
+            })
+        };
+        // macOS Terminal.app reads SGR 58's numbers as other styles (2 is faint).
+        assert!(!with(&[
+            ("TERM_PROGRAM", "Apple_Terminal"),
+            ("TERM", "xterm-256color")
+        ]));
+        assert!(!with(&[("TERM", "xterm-256color")]), "unknown: plain");
+        assert!(with(&[("TERM_PROGRAM", "iTerm.app")]));
+        assert!(with(&[("TERM_PROGRAM", "ghostty")]));
+        assert!(with(&[("TERM", "xterm-kitty")]));
+        assert!(with(&[("TERM", "foot")]));
     }
 
     #[test]
