@@ -185,7 +185,7 @@ fn send_unix(socket: &Path, path: &Path) -> Result<Reply> {
 
 /// A secret no other program can guess: hashed from fresh random keys, the time
 /// and the process.
-fn secret() -> String {
+pub(crate) fn secret() -> String {
     use std::hash::{BuildHasher, Hasher};
     let mut out = String::new();
     for round in 0..2u64 {

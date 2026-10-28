@@ -7,6 +7,7 @@ mod fonts;
 mod gitgraph;
 mod highlight;
 mod icons;
+mod ide;
 mod language;
 mod layout;
 mod local_ai;
@@ -28,6 +29,7 @@ mod terminal;
 mod textsize;
 mod ui;
 mod vscode;
+mod websocket;
 mod workspace;
 
 use anyhow::{bail, Context, Result};
@@ -185,8 +187,11 @@ fn main() -> Result<()> {
     let restore = !demo && !fresh;
     // Listen before any terminal pane starts, so every pane knows where Raido is.
     let server = remote::listen().ok();
+    let claude_ide = config::Config::load().is_ok_and(|c| c.claude_ide);
+    let ide = claude_ide.then(|| ide::listen(&root).ok()).flatten();
     let mut app = app::App::new(root, if restore { None } else { initial.clone() }, demo)?;
     app.remote = server;
+    app.ide = ide;
     if restore {
         app.restore_session();
         if let Some(path) = &initial {

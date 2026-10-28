@@ -149,6 +149,8 @@ pub struct Config {
     pub ai_sound: String,
     /// Track the files AI panes change, to review, keep or undo (Ctrl-b v).
     pub review_changes: bool,
+    /// Connect Claude Code to Raido as to VS Code: it sees your file and selection.
+    pub claude_ide: bool,
     /// Mouse wheel scrolls what's under the pointer and a click focuses it. Raido then
     /// owns the mouse: copy view (Ctrl-b Z) gives it back for selecting text.
     pub mouse: bool,
@@ -188,6 +190,7 @@ impl Default for Config {
             ai_skill: true,
             ai_sound: "default".into(),
             review_changes: true,
+            claude_ide: true,
             mouse: true,
             ai: BTreeMap::new(),
             plugins: BTreeMap::new(),

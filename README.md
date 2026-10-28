@@ -396,6 +396,9 @@ the history graph appears after you make commits.
 - **Review AI changes:** everything Codex, Claude Code or any AI pane changes shows
   up as a diff, like VS Code's agent edits; keep or undo each change, each file or
   all of them ([Review AI changes](#review-ai-changes)).
+- **AI panes see your editor:** as with its VS Code extension, Claude Code knows the
+  file you're on and the lines you select
+  ([AI panes see your editor](#ai-panes-see-your-editor)).
 - **Git sidebar:** current branch, changed/untracked files, and recent ASCII
   commit graph. Enter opens a changed file. Git is read-only here; perform
   staging/commits in the terminal or your preferred Git TUI.
@@ -672,6 +675,27 @@ object store in your cache folder, deleted when Raido quits. `.gitignore`d files
 
 The review needs a Git repository (`git init` makes one) and lasts while Raido runs.
 Set `review_changes = false` to turn it off.
+
+### AI panes see your editor
+
+As with Claude Code's VS Code extension, Claude Code in an AI pane knows where you
+are. Open a file, start Claude Code (`Ctrl-b a`, then 2) and it connects to Raido by
+itself: its prompt shows `⧉ In beacon.rs`, or `⧉ 4 lines selected` while you have
+lines selected (`v` / `V`), and that holds after you switch to its pane to type. Ask
+"what does this do?" or "fix this" without pasting anything. Claude Code can also
+ask Raido for the files you have open and your language servers' errors and
+warnings, and open a file for you while you keep typing in its pane.
+
+- Raido listens on 127.0.0.1 only. As VS Code's extension does, it writes the port
+  and a fresh secret to Claude Code's own folder (`~/.claude/ide/`, or
+  `$CLAUDE_CONFIG_DIR/ide`), readable only by you, and Claude must present the
+  secret to connect. The file goes when Raido quits.
+- `:ide` says whether Claude Code is connected. A Claude Code started outside Raido
+  connects with `/ide`, which lists Raido for this project.
+- Claude Code shows the edits it proposes in its own pane as usual, and the
+  [review](#review-ai-changes) has them afterwards.
+- Raido only listens when Claude Code is installed; `claude_ide = false` turns the
+  connection off.
 
 ### Editor: normal mode
 
@@ -1097,6 +1121,7 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 :run name                 Launch an explicitly configured command plugin
 :git / :git all           Git pane: open, focus, or maximize / show all branches
 :changes [keep|undo]      Review AI agents' changes / keep all / undo all (asks)
+:ide                      Whether Claude Code is connected to Raido
 :files / :git side        Focus sidebar section
 :session [save|forget]    Session status / save now / delete and stop saving
 :bn / :bp                 Next / previous buffer
@@ -1178,6 +1203,9 @@ Pick another sound with `ai_sound` (a system sound such as macOS `"Hero"` or Win
 
 **Review what it changed:** `Ctrl-b v` shows every file the AI panes changed as a
 diff, to keep or undo change by change ([Review AI changes](#review-ai-changes)).
+
+**Show it your code:** Claude Code sees the file you're on and the lines you select
+([AI panes see your editor](#ai-panes-see-your-editor)).
 
 ### Bring your own model (local LLMs)
 
@@ -1338,6 +1366,7 @@ theme immediately. The configuration supports:
 | `mouse` | `true` | Wheel scrolls the pane under the pointer, a click focuses it ([Mouse](#mouse)); `false` leaves the mouse to the terminal |
 | `ai_sound` | `"default"` | Sound when an AI pane finishes a prompt: `"default"`, `"off"`, `"bell"`, a system sound name (macOS `"Hero"`, Windows `"chimes"`) or a sound file; `:sound` plays it |
 | `review_changes` | `true` | Track the files AI panes change, to [review, keep or undo](#review-ai-changes) them (`Ctrl-b v`) |
+| `claude_ide` | `true` | Let Claude Code [see your editor](#ai-panes-see-your-editor) (the file and selection) as in VS Code |
 | `format_on_save` | `["go"]` | Languages whose files get imports organized and formatting from their server on save ([Go: tidy on save](#go-tidy-on-save)) |
 | `ai_skill` | `true` | Keep the [Raido skill](#ask-your-ai-agent-about-raido) installed for the AI agents on this machine (at startup and when you launch one) |
 | `shell` | `$SHELL`, then `/bin/sh` | Executable path for interactive terminal panes |

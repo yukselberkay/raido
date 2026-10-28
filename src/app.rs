@@ -322,6 +322,10 @@ pub struct App {
     text_size_repeat: Option<Instant>,
     /// `raido FILE` typed in a terminal pane arrives here.
     pub remote: Option<crate::remote::Server>,
+    /// Claude Code's IDE connection (see `ide`).
+    pub ide: Option<crate::ide::Server>,
+    /// Where you were in the last focused editor: the file, cursor and selection.
+    pub editor_spot: Option<crate::ide::Spot>,
     /// Quick diff gutter marks, by buffer.
     pub diffs: HashMap<usize, quickdiff::State>,
     /// Copy mode in a terminal pane (Ctrl-b [).
@@ -432,6 +436,8 @@ impl App {
             text_size: None,
             text_size_repeat: None,
             remote: None,
+            ide: None,
+            editor_spot: None,
             diffs: HashMap::new(),
             copy: None,
             find: None,
@@ -1291,6 +1297,7 @@ impl App {
         }
     }
     pub fn tick(&mut self) {
+        crate::ide::tick(self);
         let visible: Vec<usize> = self
             .panes
             .values()
@@ -4544,6 +4551,25 @@ impl App {
                 }
             }
             "theme" | "themes" => self.open_picker(),
+            // :ide, Claude Code's connection to Raido.
+            "ide" => {
+                let status = match &self.ide {
+                    Some(ide) if ide.connected() > 0 => format!(
+                        "Claude Code connected ({}) · it sees the file you're on and the lines you select · port {}",
+                        ide.connected(),
+                        ide.port()
+                    ),
+                    Some(ide) => format!(
+                        "Waiting for Claude Code on port {}: start it in an AI pane (Ctrl-b a, 2), or /ide in Claude elsewhere",
+                        ide.port()
+                    ),
+                    None if !self.config.claude_ide => {
+                        "Claude Code's IDE connection is off (claude_ide = false in config.toml)".into()
+                    }
+                    None => "No IDE connection: Claude Code wasn't found when Raido started".into(),
+                };
+                self.notice(status);
+            }
             "minimap" => {
                 self.config.minimap = match arg {
                     "" => !self.config.minimap,

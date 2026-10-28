@@ -241,3 +241,22 @@ published.
 - Verified here with `cargo clippy --target x86_64-pc-windows-gnu --all-targets
   -D warnings` (clean); no Windows machine or linker was available, so the new
   `windows-latest` CI job is the first real Windows build and test run.
+
+## Claude Code's IDE connection
+
+- New `src/ide.rs` and `src/websocket.rs`: a WebSocket server on 127.0.0.1 speaking
+  the IDE protocol Claude Code uses with its VS Code extension (MCP's JSON-RPC). It
+  is not published by Anthropic; the messages follow the reverse-engineered notes
+  in coder/claudecode.nvim's `PROTOCOL.md`. The lock file (`~/.claude/ide/PORT.lock`,
+  or under `$CLAUDE_CONFIG_DIR`) is written 0600 in a 0700 folder with a 128-bit
+  secret, and connections without it get `401`. Panes get `CLAUDE_CODE_SSE_PORT`
+  and `ENABLE_IDE_INTEGRATION`, removed when Raido has no server, so a Claude Code
+  in Raido never connects to an editor Raido itself runs in.
+- Verified live with Claude Code 2.1.312 in an AI pane, driven through Raido's own
+  draw code: it connected in 0.7 s; with lines 9–12 of `examples/beacon.rs`
+  selected and focus in Claude's pane its prompt showed `⧉ 4 lines selected`, and
+  an `at_mentioned` message made it type `@examples/beacon.rs#L9-12` itself. No
+  prompt was submitted.
+- Not verified live: Claude Code proposing an edit while connected. Raido offers no
+  `openDiff` tool, so edits are expected to stay in Claude's own pane; the tool list
+  sent to Claude is covered by a test.

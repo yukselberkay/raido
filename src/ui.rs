@@ -2812,6 +2812,10 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
             "Keep or undo the whole file / every file / open it there",
         ),
         (
+            ":ide",
+            "Whether Claude Code is connected: it sees your file and selection",
+        ),
+        (
             ":session [save|forget]",
             "Reopen this project as you left it (.raido/)",
         ),

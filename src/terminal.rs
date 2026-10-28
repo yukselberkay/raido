@@ -105,6 +105,17 @@ impl TerminalPane {
             Some(socket) => command.env(crate::remote::VAR, socket),
             None => command.env_remove(crate::remote::VAR),
         }
+        // Claude Code here connects to this Raido, never to an editor Raido runs in.
+        match crate::ide::port() {
+            Some(port) => {
+                command.env(crate::ide::PORT_VAR, port.to_string());
+                command.env(crate::ide::ENABLE_VAR, "true");
+            }
+            None => {
+                command.env_remove(crate::ide::PORT_VAR);
+                command.env_remove(crate::ide::ENABLE_VAR);
+            }
+        }
         for (key, value) in env {
             command.env(key, value);
         }
