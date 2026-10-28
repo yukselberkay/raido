@@ -2,8 +2,9 @@
 
 Eleven coordinated, built-in dark palettes, plus any theme you drop into your
 themes directory (Raido TOML or VS Code JSON — no rebuild), for editor panes, the sidebar, Git view,
-AI launcher, syntax highlighting, and embedded terminals. Phosphor remains Raido's
-default; Amber and the external Ice example remain compatible.
+AI launcher, syntax highlighting, and embedded terminals. Visual Studio Dark is
+Raido's default; Raido's original Phosphor and Amber, and the external Ice example,
+remain available.
 
 [Compare the themes in the live UI preview](../docs/raido-dark-themes.png).
 The preview shows actual Raido terminal output with C, Rust, and a running shell.

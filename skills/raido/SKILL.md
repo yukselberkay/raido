@@ -75,7 +75,7 @@ in the order the user presses them. Prefer showing over explaining.
 
 ## Config keys
 
-`theme`, `sidebar_width` (29), `tab_width` (4), `shell`, `relative_numbers` (false), `minimap` (true),
+`theme` ("visual-studio-dark"), `sidebar_width` (29), `tab_width` (4), `shell`, `relative_numbers` (false), `minimap` (true),
 `icons` (true), `show_hidden` (true), `ai_split` ("right"/"below"), `ai_skill`
 (true — installs this skill), `review_changes` (true — Ctrl-b v review of AI changes), `claude_ide` (true — Claude Code sees your file and selection), `lsp_enabled` (true), `[lsp.<rust|go|python|c>]`
 `program`/`args`, `[plugins.<name>]` `program`/`args`, `[ai.<name>]`

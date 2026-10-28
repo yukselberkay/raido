@@ -171,7 +171,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            theme: "phosphor".into(),
+            theme: "visual-studio-dark".into(),
             sidebar_width: 29,
             tab_width: 4,
             smart_indent: true,
@@ -550,6 +550,12 @@ mod tests {
         assert_eq!(config.font_size, 13.0);
         let example: Config = toml::from_str(include_str!("../config.example.toml")).unwrap();
         assert_eq!(example.font, DEFAULT_FONT);
+    }
+    #[test]
+    fn visual_studio_dark_is_the_default_theme() {
+        assert_eq!(Config::default().theme, "visual-studio-dark");
+        let example: Config = toml::from_str(include_str!("../config.example.toml")).unwrap();
+        assert_eq!(example.theme, "visual-studio-dark");
     }
     #[test]
     fn config_rejects_unknown_fields() {

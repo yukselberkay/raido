@@ -1274,7 +1274,8 @@ Raido never loads configuration or executable plugins from the project being ope
 
 These themes are embedded in the binary: **no downloads, plugins, or file copying
 are required**. Each coordinates the UI, syntax highlighting, and terminal's 16
-ANSI colors. The original `phosphor` (default) and `amber` also remain available.
+ANSI colors. **Visual Studio Dark is the default.** Raido's original `phosphor` and
+`amber` also remain available.
 
 | Theme | Command | Palette |
 | --- | --- | --- |
@@ -1366,7 +1367,7 @@ theme immediately. The configuration supports:
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `theme` | `"phosphor"` | Any bundled theme above, `phosphor`/`amber`, or a user theme name |
+| `theme` | `"visual-studio-dark"` | Any bundled theme above, `phosphor`/`amber`, or a user theme name |
 | `sidebar_width` | `29` | Columns, clamped to 18–60 |
 | `tab_width` | `4` | Indentation width when a file and its language don't decide it, clamped to 1–16 |
 | `smart_indent` | `true` | [Language-aware](#language-aware-typing) Enter, `o`, Tab/Shift-Tab and closers |
@@ -1389,7 +1390,7 @@ theme immediately. The configuration supports:
 | `[plugins.name]` | None | Explicit `program` and `args` for `:run name` |
 
 ```toml
-theme = "phosphor"
+theme = "visual-studio-dark"
 tab_width = 4
 
 [plugins.test]
