@@ -179,6 +179,37 @@ impl Syntax {
         }
         cache.lines.len() < target
     }
+    /// Whether the text just before column `col` (a char index) of `row` is inside a
+    /// string or a comment, by the language's grammar. Suggestions don't pop up
+    /// there by themselves.
+    pub fn in_string_or_comment(
+        &mut self,
+        id: usize,
+        buffer: &Buffer,
+        row: usize,
+        col: usize,
+    ) -> bool {
+        while self.prepare(id, buffer, row + 1) {}
+        let Some((parse, state)) = self.cache.get(&id).and_then(|c| c.starts.get(row)) else {
+            return false;
+        };
+        let (mut parse, mut scopes) = (parse.clone(), state.path.clone());
+        let line = buffer.text.line(row).to_string();
+        let byte = line.char_indices().nth(col).map_or(line.len(), |(i, _)| i);
+        let Ok(ops) = parse.parse_line(&line, &self.syntaxes) else {
+            return false;
+        };
+        for (offset, op) in ops {
+            if offset >= byte {
+                break;
+            }
+            let _ = scopes.apply(&op);
+        }
+        scopes.as_slice().iter().any(|scope| {
+            let name = scope.build_string();
+            name.starts_with("string") || name.starts_with("comment")
+        })
+    }
 }
 
 fn syntax_color(value: &str) -> Color {

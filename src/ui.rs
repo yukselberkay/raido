@@ -1470,13 +1470,23 @@ fn popup_room(at: (u16, u16), bounds: Rect) -> (u16, u16) {
     (below, above)
 }
 
-/// Place a popup of `width`×`height` below the cursor, or above it when there is
-/// more room there, never outside `bounds`.
+/// Rows a popup needs below the cursor to stay there (three items in a frame):
+/// with fewer it goes above, if there's more room above.
+const POPUP_BELOW: u16 = 5;
+
+/// Whether a popup `height` rows tall opens below the cursor: it does when it fits,
+/// or when a few rows fit there, so it doesn't cover the code you just read above.
+fn popup_below(height: u16, (below, above): (u16, u16)) -> bool {
+    below >= height.min(POPUP_BELOW) || below >= above
+}
+
+/// Place a popup of `width`×`height` below the cursor (shortened to the room there),
+/// or above it when there's hardly any room below, never outside `bounds`.
 fn popup_rect(at: (u16, u16), width: u16, height: u16, bounds: Rect) -> Rect {
     let width = width.min(bounds.width);
     let x = at.0.max(bounds.x).min(bounds.right().saturating_sub(width));
     let (below, above) = popup_room(at, bounds);
-    if below >= height || below >= above {
+    if popup_below(height, (below, above)) {
         Rect::new(x, at.1 + 1, width, height.min(below))
     } else {
         let height = height.min(above);
@@ -1493,11 +1503,14 @@ fn completion_menu(frame: &mut Frame, app: &App, at: (u16, u16), pane: Rect) {
     let theme = &app.theme;
     let (below, above) = popup_room(at, pane);
     let most = if menu.auto { 6 } else { 10 };
-    let rows = menu
-        .shown
-        .len()
-        .min(most)
-        .min(usize::from(below.max(above).saturating_sub(2)));
+    let wanted = menu.shown.len().min(most);
+    // The side it opens on decides how many rows fit.
+    let room = if popup_below(wanted as u16 + 2, (below, above)) {
+        below
+    } else {
+        above
+    };
+    let rows = wanted.min(usize::from(room.saturating_sub(2)));
     if rows == 0 || pane.width < 12 {
         return;
     }
@@ -2949,6 +2962,23 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn popups_open_below_the_cursor_unless_there_is_hardly_room() {
+        // (rows below, rows above)
+        assert!(popup_below(8, (8, 20)), "fits below");
+        assert!(
+            popup_below(8, (5, 20)),
+            "a short list below beats covering the code above"
+        );
+        assert!(!popup_below(8, (2, 20)), "no room below: above");
+        assert!(popup_below(3, (3, 1)), "small enough to fit");
+        let rect = popup_rect((10, 10), 20, 8, Rect::new(0, 0, 40, 16));
+        assert_eq!(
+            (rect.y, rect.height),
+            (11, 5),
+            "below, shortened to the room"
+        );
+    }
     #[test]
     fn explorer_hint_always_fits() {
         for width in 0..40 {

@@ -789,8 +789,11 @@ choose, **Tab** accepts, Escape closes the list, and typing keeps filtering it. 
 accepts a suggestion you picked with Up/Down (or one you asked for); otherwise it
 starts a new line, so a list that popped up never eats a newline.
 The list stays inside the pane you're typing in, never over another, and one that
-pops up by itself shows at most six suggestions. `autocomplete = false` keeps it to
-`Ctrl-Space` and `.`.
+pops up by itself shows at most six suggestions. It opens below the line you're on
+(above only when there's hardly any room below), so the code you just read stays in
+view, and it goes away once the word is typed out or you've moved past it. Inside
+strings and comments it doesn't pop up by itself; `Ctrl-Space` still asks there.
+`autocomplete = false` keeps it to `Ctrl-Space` and `.`.
 
 Mac-style moves work in insert and normal mode, as far as your terminal passes the
 keys on (`raido --keys` shows what arrives; a key that prints nothing never reaches

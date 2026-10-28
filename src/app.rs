@@ -348,6 +348,9 @@ pub struct App {
     /// The word (buffer, row, start column) completions were last asked for while
     /// typing, so each word asks the language server once.
     asked: Option<(usize, usize, usize)>,
+    /// The completions on their way were asked for by typing (not Ctrl-Space or a
+    /// trigger character like `.`): they're for that word only.
+    asked_by_typing: bool,
     /// Ctrl-b y: the mouse is handed back to the terminal (select, ⌘C) with the
     /// layout unchanged, until Ctrl-b y again.
     pub mouse_released: bool,
@@ -435,6 +438,7 @@ impl App {
             explorer_search: None,
             search_lines: Vec::new(),
             asked: None,
+            asked_by_typing: false,
             mouse_released: false,
             resizing: false,
             copy_view: None,
@@ -2825,6 +2829,7 @@ impl App {
         if ctrl && matches!(key.code, KeyCode::Char(' ' | '@' | 'n')) {
             let ready = self.buffer_id().is_some_and(|id| self.lsp.ready(id));
             if ready {
+                self.asked_by_typing = false;
                 return self.lsp_request(lsp::Kind::Completion);
             }
             if !self.suggest_words(true, false) {
@@ -2841,7 +2846,13 @@ impl App {
             self.menu_filter();
         }
         if let (Some(c), Some(id)) = (typed, self.buffer_id()) {
-            if self.menu.is_none() && self.lsp.is_trigger(id, c) {
+            // In a string or a comment, suggestions only come when asked (Ctrl-Space).
+            if self.in_string_or_comment(id) {
+                if self.menu.as_ref().is_some_and(|m| m.auto) {
+                    self.menu = None;
+                }
+            } else if self.menu.is_none() && self.lsp.is_trigger(id, c) {
+                self.asked_by_typing = false;
                 let _ = self.lsp_request(lsp::Kind::Completion);
             } else if self.menu.is_none() && self.config.autocomplete && is_word(c) {
                 self.autocomplete(id);
@@ -2862,6 +2873,11 @@ impl App {
     }
     /// After two letters of a word: ask the language server once for this word, or
     /// without one, suggest keywords and words from your files.
+    /// Whether the cursor of buffer `id` is inside a string or a comment.
+    fn in_string_or_comment(&mut self, id: usize) -> bool {
+        let b = &self.buffers[id];
+        self.syntax.in_string_or_comment(id, b, b.row, b.col)
+    }
     fn autocomplete(&mut self, id: usize) {
         let (start, word) = self.typed_word(id);
         if word.chars().count() < 2 || word.starts_with(|c: char| c.is_ascii_digit()) {
@@ -2871,6 +2887,7 @@ impl App {
             let here = (id, self.buffers[id].row, start);
             if self.asked != Some(here) {
                 self.asked = Some(here);
+                self.asked_by_typing = true;
                 let _ = self.lsp_request(lsp::Kind::Completion);
             }
             return;
@@ -3223,19 +3240,31 @@ impl App {
                 if self.mode != Mode::Insert || self.buffer_id() != Some(buffer) || b.row != row {
                     return;
                 }
+                // The word before the cursor now.
+                let line: Vec<char> = b.line(row).chars().collect();
+                let col = b.col.min(line.len());
+                let mut start = col;
+                while start > 0 && (line[start - 1].is_alphanumeric() || line[start - 1] == '_') {
+                    start -= 1;
+                }
+                // Asked for by typing a word: only for that word, while it's still being
+                // typed (a late answer after a space or a bracket is for nothing on
+                // screen any more), and never inside a string or a comment.
+                let typing = self.asked_by_typing;
+                if typing
+                    && (self.asked != Some((buffer, row, start))
+                        || start == col
+                        || self.in_string_or_comment(buffer))
+                {
+                    return;
+                }
                 if items.is_empty() {
                     // Nothing from the server: words from your files, quietly when
                     // it was asked for while typing.
-                    let typing = self.asked.is_some_and(|(b, r, _)| b == buffer && r == row);
                     if !self.suggest_words(false, typing) && !typing {
                         self.notice("No completions");
                     }
                     return;
-                }
-                let line: Vec<char> = b.line(row).chars().collect();
-                let mut start = b.col.min(line.len());
-                while start > 0 && (line[start - 1].is_alphanumeric() || line[start - 1] == '_') {
-                    start -= 1;
                 }
                 self.menu = Some(Menu {
                     shown: (0..items.len()).collect(),
@@ -3244,7 +3273,7 @@ impl App {
                     buffer,
                     row,
                     start,
-                    auto: self.asked == Some((buffer, row, start)),
+                    auto: typing,
                     picked: false,
                 });
                 self.menu_filter();
@@ -3292,7 +3321,16 @@ impl App {
             .filter(|&i| menu.items[i].matches(&prefix))
             .collect();
         menu.selected = 0;
-        if menu.shown.is_empty() {
+        // Nothing left to complete: no suggestions, or only the word already typed.
+        let done = match menu.shown[..] {
+            [] => true,
+            [only] => {
+                let item = &menu.items[only];
+                !prefix.is_empty() && (item.label == prefix || item.insert == prefix)
+            }
+            _ => false,
+        };
+        if done {
             self.menu = None;
         }
     }
@@ -4883,6 +4921,43 @@ mod tests {
         assert!(app.menu.is_none());
         press(&mut app, KeyCode::Char('n'), KeyModifiers::CONTROL);
         assert_eq!(labels(&app), vec!["totalCount"]);
+    }
+    #[test]
+    fn suggestions_stay_out_of_strings_and_comments_and_close_when_typed_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.go");
+        std::fs::write(
+            &path,
+            "package main\n\nfunc greeting() string {\n\treturn \"\"\n}\n",
+        )
+        .unwrap();
+        let mut app = App::new(dir.path().into(), Some(path), false).unwrap();
+        let keys = |app: &mut App, text: &str| {
+            for c in text.chars() {
+                let code = if c == '\n' {
+                    KeyCode::Enter
+                } else {
+                    KeyCode::Char(c)
+                };
+                press(app, code, KeyModifiers::NONE);
+            }
+        };
+        press(&mut app, KeyCode::Char('G'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('o'), KeyModifiers::NONE);
+        keys(&mut app, "x := gre");
+        assert!(app.menu.is_some(), "suggests greeting");
+        // The whole word typed: nothing left to suggest, the list goes away.
+        keys(&mut app, "eting");
+        assert!(app.menu.is_none(), "closed once typed out");
+        // Inside a string or a comment it doesn't pop up by itself.
+        keys(&mut app, "\ny := \"gre");
+        assert!(app.menu.is_none(), "not in a string");
+        press(&mut app, KeyCode::End, KeyModifiers::NONE);
+        keys(&mut app, " // gre");
+        assert!(app.menu.is_none(), "not in a comment");
+        // Asked for, it comes anyway.
+        press(&mut app, KeyCode::Char('n'), KeyModifiers::CONTROL);
+        assert!(app.menu.is_some(), "Ctrl-n still asks");
     }
     #[test]
     fn suggestions_stay_inside_the_pane_being_typed_in() {
