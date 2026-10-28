@@ -1,0 +1,30 @@
+# Visual Studio 2022 Light (the IDE, not VS Code) — Raido adaptation.
+# See themes/README.md for palette credits. VS Code users: :theme vscode-light-2026.
+# Built in: :theme visual-studio-light. Copy under a new name to customize.
+background = "#ffffff"
+foreground = "#000000"
+muted = "#6d6d6d"
+accent = "#007acc"
+secondary = "#267f99"
+warning = "#a86500"
+border = "#cccedb"
+selection = "#add6ff"
+line_number = "#2b91af"
+# ANSI 0–7, then bright 8–15: VS Code's light terminal colors, readable on white
+# ("white" is gray, so programs that print white text stay visible).
+ansi = [
+  "#000000", "#cd3131", "#107c10", "#949800", "#0451a5", "#bc05bc", "#0598bc", "#555555",
+  "#666666", "#cd3131", "#14ce14", "#b5ba00", "#0451a5", "#bc05bc", "#0598bc", "#a5a5a5",
+]
+
+[syntax_colors]
+comment = "#008000"
+keyword = "#0000ff"
+control = "#8f08c4"
+function = "#74531f"
+type = "#2b91af"
+string = "#a31515"
+number = "#098658"
+constant = "#0000ff"
+operator = "#000000"
+variable = "#1f377f"

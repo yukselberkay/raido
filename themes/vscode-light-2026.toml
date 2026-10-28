@@ -1,0 +1,27 @@
+# Visual Studio Code Light 2026 — Raido adaptation. See themes/README.md for credits.
+# Built in: :theme vscode-light-2026. Copy under a new name to customize.
+background = "#ffffff"
+foreground = "#202020"
+muted = "#606060"
+accent = "#0069cc"
+secondary = "#0550ae"
+warning = "#9a6700"
+border = "#d6d7d9"
+selection = "#dce8f5"
+line_number = "#606060"
+# ANSI 0–7, then bright 8–15: VS Code's light terminal colors.
+ansi = [
+  "#000000", "#cd3131", "#107c10", "#949800", "#0451a5", "#bc05bc", "#0598bc", "#555555",
+  "#666666", "#cd3131", "#14ce14", "#b5ba00", "#0451a5", "#bc05bc", "#0598bc", "#a5a5a5",
+]
+
+[syntax_colors]
+comment = "#6e7781"
+keyword = "#cf222e"
+function = "#8250df"
+type = "#953800"
+string = "#0a3069"
+number = "#0550ae"
+constant = "#0550ae"
+operator = "#cf222e"
+variable = "#1f2328"

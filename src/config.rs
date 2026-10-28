@@ -68,6 +68,28 @@ pub const BUNDLED_THEMES: &[(&str, &str)] = &[
     ),
     ("monokai", include_str!("../themes/monokai.toml")),
     ("github-dark", include_str!("../themes/github-dark.toml")),
+    (
+        "visual-studio-light",
+        include_str!("../themes/visual-studio-light.toml"),
+    ),
+    (
+        "vscode-light-2026",
+        include_str!("../themes/vscode-light-2026.toml"),
+    ),
+    ("github-light", include_str!("../themes/github-light.toml")),
+    ("one-light", include_str!("../themes/one-light.toml")),
+    (
+        "solarized-light",
+        include_str!("../themes/solarized-light.toml"),
+    ),
+    (
+        "catppuccin-latte",
+        include_str!("../themes/catppuccin-latte.toml"),
+    ),
+    (
+        "gruvbox-light",
+        include_str!("../themes/gruvbox-light.toml"),
+    ),
 ];
 
 impl Default for Theme {
@@ -563,15 +585,16 @@ mod tests {
     }
     #[test]
     fn all_bundled_themes_have_complete_valid_palettes() {
-        assert_eq!(BUNDLED_THEMES.len(), 11);
-        let mut backgrounds = std::collections::HashSet::new();
+        assert_eq!(BUNDLED_THEMES.len(), 18);
+        // Light themes may share white; no two share the whole look.
+        let mut palettes = std::collections::HashSet::new();
         for (name, _) in BUNDLED_THEMES {
             let theme = load_theme_from(name, None).unwrap();
             validate_theme(&theme).unwrap();
             assert!(theme.syntax_colors.is_some(), "{name}");
             assert!(theme.ansi.is_some(), "{name}");
             assert!(
-                backgrounds.insert(theme.background),
+                palettes.insert((theme.background, theme.foreground, theme.accent)),
                 "duplicate palette {name}"
             );
         }

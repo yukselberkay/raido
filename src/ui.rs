@@ -879,6 +879,35 @@ fn copy_mode(frame: &mut Frame, mode: &mut crate::copymode::CopyMode, area: Rect
 }
 
 /// Quick diff gutter colors, VS Code's: green added, blue modified, red removed.
+/// `tint`, moved toward the theme's text color until it stands out from the
+/// background: icon colors made for dark themes (Markdown's near white, the pale
+/// yellows) stay visible on light ones.
+pub(crate) fn legible(tint: Color, theme: &Theme) -> Color {
+    let (background, text) = (color(&theme.background), color(&theme.foreground));
+    let luminance = |c: Color| match c {
+        Color::Rgb(r, g, b) => {
+            let channel = |v: u8| {
+                let v = f32::from(v) / 255.0;
+                if v <= 0.03928 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            Some(0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b))
+        }
+        _ => None,
+    };
+    let contrast = |c: Color| match (luminance(c), luminance(background)) {
+        (Some(a), Some(b)) => (a.max(b) + 0.05) / (a.min(b) + 0.05),
+        _ => f32::MAX,
+    };
+    (0..=5)
+        .map(|step| markdown::mix(tint, text, step as f32 * 0.2))
+        .find(|c| contrast(*c) >= 2.5)
+        .unwrap_or(text)
+}
+
 pub(crate) fn change_color(change: Change, theme: &Theme) -> Color {
     let ansi = |index: usize| theme.ansi.as_ref().map(|a| color(&a[index]));
     match change {
@@ -1241,7 +1270,7 @@ fn sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
             };
             let folder_tint = entry.directory.then(|| color(&theme.secondary));
             let icon_style = match tint.or(folder_tint) {
-                Some(tint) => style.fg(tint),
+                Some(tint) => style.fg(legible(tint, theme)),
                 None => style,
             };
             let arrow = if entry.directory {
@@ -3017,6 +3046,19 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn icon_colors_stay_visible_on_light_backgrounds() {
+        let dark = crate::config::load_theme_from("visual-studio-dark", None).unwrap();
+        let light = crate::config::load_theme_from("visual-studio-light", None).unwrap();
+        let markdown = Color::Rgb(0xdd, 0xdd, 0xdd);
+        assert_eq!(legible(markdown, &dark), markdown, "fine on dark");
+        let Color::Rgb(r, _, _) = legible(markdown, &light) else {
+            panic!("rgb")
+        };
+        assert!(r < 0x90, "darkened toward black text on white: {r:#x}");
+        let rust = Color::Rgb(0xde, 0xa5, 0x84);
+        assert_ne!(legible(rust, &light), Color::Rgb(0, 0, 0), "keeps its hue");
+    }
     #[test]
     fn popups_open_below_the_cursor_unless_there_is_hardly_room() {
         // (rows below, rows above)

@@ -1,13 +1,14 @@
-# Raido dark themes
+# Raido themes
 
-Eleven coordinated, built-in dark palettes, plus any theme you drop into your
-themes directory (Raido TOML or VS Code JSON — no rebuild), for editor panes, the sidebar, Git view,
-AI launcher, syntax highlighting, and embedded terminals. Visual Studio Dark is
-Raido's default; Raido's original Phosphor and Amber, and the external Ice example,
-remain available.
+Eleven coordinated, built-in dark palettes and seven light ones, plus any theme you
+drop into your themes directory (Raido TOML or VS Code JSON — no rebuild), for
+editor panes, the sidebar, Git view, AI launcher, syntax highlighting, and embedded
+terminals. Visual Studio Dark is Raido's default; Raido's original Phosphor and
+Amber, and the external Ice example, remain available.
 
-[Compare the themes in the live UI preview](../docs/raido-dark-themes.png).
-The preview shows actual Raido terminal output with C, Rust, and a running shell.
+Compare them in the live UI: [dark themes](../docs/raido-dark-themes.png),
+[light themes](../docs/raido-light-themes.png). The previews are Raido's real UI
+with C source, the explorer and the Git sidebar.
 
 ## Select a theme
 
@@ -47,6 +48,22 @@ Names identify their inspiration; Raido is not affiliated with the original proj
 | [solarized-dark](solarized-dark.toml) | [Solarized](https://ethanschoonover.com/solarized/) | `#002b36` | `#2aa198` |
 | [monokai](monokai.toml) | [Monokai](https://monokai.pro/) | `#272822` | `#a6e22e` |
 | [github-dark](github-dark.toml) | [GitHub themes](https://github.com/primer/github-vscode-theme) | `#0d1117` | `#58a6ff` |
+
+Light:
+
+| Built-in name / editable source | Inspiration | Background | Accent |
+| --- | --- | --- | --- |
+| [visual-studio-light](visual-studio-light.toml) | [Visual Studio 2022](https://visualstudio.microsoft.com/) Light (the IDE's editor colors; VS Code's light terminal colors) | `#ffffff` | `#007acc` |
+| [vscode-light-2026](vscode-light-2026.toml) | [Visual Studio Code Light 2026](https://github.com/microsoft/vscode/blob/main/extensions/theme-defaults/themes/2026-light.json) | `#ffffff` | `#0069cc` |
+| [github-light](github-light.toml) | [GitHub themes](https://github.com/primer/github-vscode-theme) | `#ffffff` | `#0969da` |
+| [one-light](one-light.toml) | [Atom One Light](https://github.com/atom/one-light-syntax) | `#fafafa` | `#4078f2` |
+| [solarized-light](solarized-light.toml) | [Solarized](https://ethanschoonover.com/solarized/) | `#fdf6e3` | `#268bd2` |
+| [catppuccin-latte](catppuccin-latte.toml) | [Catppuccin](https://github.com/catppuccin/catppuccin) | `#eff1f5` | `#8839ef` |
+| [gruvbox-light](gruvbox-light.toml) | [Gruvbox](https://github.com/morhetz/gruvbox) | `#fbf1c7` | `#79740e` |
+
+On light themes the terminal's "white" ANSI colors are grays, so programs that print
+white text stay readable; Solarized keeps its standard table. Warning colors are a
+shade deeper than some palettes' yellows, so warning text reads on light backgrounds.
 
 ## Customize safely
 

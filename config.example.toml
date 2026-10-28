@@ -1,8 +1,10 @@
 # Copy to ~/.config/raido/config.toml (Linux and macOS).
 # Or set XDG_CONFIG_HOME and use $XDG_CONFIG_HOME/raido/config.toml.
 theme = "visual-studio-dark"
-# Also: vscode-dark-2026, dracula, nord, one-dark, gruvbox-dark, tokyo-night,
+# Dark: vscode-dark-2026, dracula, nord, one-dark, gruvbox-dark, tokyo-night,
 # catppuccin-mocha, solarized-dark, monokai, github-dark, phosphor, amber.
+# Light: visual-studio-light, vscode-light-2026, github-light, one-light,
+# solarized-light, catppuccin-latte, gruvbox-light.
 # Runtime switch: :theme dracula; :themes lists all. Drop NAME.toml or a VS Code
 # NAME.json into ~/.config/raido/themes/ to add a theme without rebuilding.
 sidebar_width = 29

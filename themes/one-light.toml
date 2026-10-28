@@ -1,0 +1,27 @@
+# Atom One Light — Raido adaptation. See themes/README.md for palette credits.
+# Built in: :theme one-light. Copy under a new name to customize.
+background = "#fafafa"
+foreground = "#383a42"
+muted = "#696c77"
+accent = "#4078f2"
+secondary = "#a626a4"
+warning = "#a06e00"
+border = "#dbdbdc"
+selection = "#e5e5e6"
+line_number = "#9d9d9f"
+# ANSI 0–7, then bright 8–15; the whites are grays, readable on the light background.
+ansi = [
+  "#383a42", "#e45649", "#50a14f", "#c18401", "#4078f2", "#a626a4", "#0184bc", "#696c77",
+  "#4f525e", "#ca1243", "#50a14f", "#986801", "#4078f2", "#a626a4", "#0184bc", "#9d9d9f",
+]
+
+[syntax_colors]
+comment = "#8e8f96"
+keyword = "#a626a4"
+function = "#4078f2"
+type = "#c18401"
+string = "#50a14f"
+number = "#986801"
+constant = "#986801"
+operator = "#0184bc"
+variable = "#e45649"

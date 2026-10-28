@@ -1,0 +1,27 @@
+# Solarized Light — Raido adaptation. See themes/README.md for palette credits.
+# Built in: :theme solarized-light. Copy under a new name to customize.
+background = "#fdf6e3"
+foreground = "#586e75"
+muted = "#657b83"
+accent = "#268bd2"
+secondary = "#2aa198"
+warning = "#b58900"
+border = "#93a1a1"
+selection = "#eee8d5"
+line_number = "#93a1a1"
+# ANSI 0–7, then bright 8–15: Solarized's standard terminal table.
+ansi = [
+  "#073642", "#dc322f", "#859900", "#b58900", "#268bd2", "#d33682", "#2aa198", "#eee8d5",
+  "#002b36", "#cb4b16", "#586e75", "#657b83", "#839496", "#6c71c4", "#93a1a1", "#fdf6e3",
+]
+
+[syntax_colors]
+comment = "#839496"
+keyword = "#859900"
+function = "#268bd2"
+type = "#b58900"
+string = "#2aa198"
+number = "#d33682"
+constant = "#cb4b16"
+operator = "#859900"
+variable = "#586e75"

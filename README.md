@@ -1291,7 +1291,25 @@ ANSI colors. **Visual Studio Dark is the default.** Raido's original `phosphor` 
 | Monokai | `:theme monokai` | Warm black, lime, hot pink, cyan |
 | GitHub Dark | `:theme github-dark` | Near-black, blue, coral, lavender |
 
-![All bundled themes side by side](docs/raido-dark-themes.png)
+![All bundled dark themes side by side](docs/raido-dark-themes.png)
+
+### Bundled light themes
+
+Light versions of the popular editor themes, built in the same way. On light
+backgrounds the terminal's "white" is a gray, so programs that print white text
+stay readable, and explorer icons darken where they would fade.
+
+| Theme | Command | Palette |
+| --- | --- | --- |
+| Visual Studio 2022 Light (the IDE) | `:theme visual-studio-light` | White, VS-blue accent, green comments, blue keywords, purple control flow |
+| VS Code Light 2026 | `:theme vscode-light-2026` | VS Code's newest built-in light theme: white, blue accent, red keywords, purple functions |
+| GitHub Light | `:theme github-light` | White, GitHub blue, red keywords, navy strings |
+| One Light | `:theme one-light` | Off-white, blue, violet, green, gold |
+| Solarized Light | `:theme solarized-light` | Cream, blue, green, yellow, magenta |
+| Catppuccin Latte | `:theme catppuccin-latte` | Pale lavender, mauve, blue, green, peach |
+| Gruvbox Light | `:theme gruvbox-light` | Warm cream, olive, deep red, teal |
+
+![All bundled light themes side by side](docs/raido-light-themes.png)
 
 In an editor, press **Esc**, type a command above, then **Enter**. From a terminal
 or AI pane, press **Ctrl-b**, then **:**, type `theme dracula` (without another
@@ -1367,7 +1385,7 @@ theme immediately. The configuration supports:
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `theme` | `"visual-studio-dark"` | Any bundled theme above, `phosphor`/`amber`, or a user theme name |
+| `theme` | `"visual-studio-dark"` | Any bundled dark or light theme above, `phosphor`/`amber`, or a user theme name |
 | `sidebar_width` | `29` | Columns, clamped to 18–60 |
 | `tab_width` | `4` | Indentation width when a file and its language don't decide it, clamped to 1–16 |
 | `smart_indent` | `true` | [Language-aware](#language-aware-typing) Enter, `o`, Tab/Shift-Tab and closers |

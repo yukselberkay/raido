@@ -1,0 +1,28 @@
+# Catppuccin Latte — Raido adaptation. See themes/README.md for palette credits.
+# Built in: :theme catppuccin-latte. Copy under a new name to customize.
+background = "#eff1f5"
+foreground = "#4c4f69"
+muted = "#6c6f85"
+accent = "#8839ef"
+secondary = "#04a5e5"
+# Deeper than Latte's yellow, so warning text stays readable on the light base.
+warning = "#b06d07"
+border = "#bcc0cc"
+selection = "#ccd0da"
+line_number = "#8c8fa1"
+# ANSI 0–7, then bright 8–15: Catppuccin Latte's terminal colors.
+ansi = [
+  "#5c5f77", "#d20f39", "#40a02b", "#df8e1d", "#1e66f5", "#ea76cb", "#179299", "#acb0be",
+  "#6c6f85", "#d20f39", "#40a02b", "#df8e1d", "#1e66f5", "#ea76cb", "#179299", "#bcc0cc",
+]
+
+[syntax_colors]
+comment = "#7c7f93"
+keyword = "#8839ef"
+function = "#1e66f5"
+type = "#df8e1d"
+string = "#40a02b"
+number = "#fe640b"
+constant = "#ea76cb"
+operator = "#04a5e5"
+variable = "#4c4f69"

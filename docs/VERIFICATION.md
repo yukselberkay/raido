@@ -25,7 +25,7 @@ Date: 2026-10-18. Host: Linux x86_64. Rust 1.99.1.
 
 The README screenshots (`raido.png`, `raido-c-tiles.png`, `raido-markdown.png`,
 `raido-lsp.png`, `raido-theme-picker.png`, `raido-field-guide.png`,
-`raido-dark-themes.png`, `raido-minimap.png`) are renders of Raido's real UI, made by
+`raido-dark-themes.png`, `raido-light-themes.png`, `raido-minimap.png`) are renders of Raido's real UI, made by
 `scripts/screenshots.sh`. The scenes in `src/shots.rs` (test-only, ignored in normal
 test runs) drive Raido with keys in a fresh clone of this repository named `raido`,
 wait until Git, the language servers and the terminals have answered, and draw the

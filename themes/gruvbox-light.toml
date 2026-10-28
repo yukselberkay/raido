@@ -1,0 +1,27 @@
+# Gruvbox Light — Raido adaptation. See themes/README.md for palette credits.
+# Built in: :theme gruvbox-light. Copy under a new name to customize.
+background = "#fbf1c7"
+foreground = "#3c3836"
+muted = "#7c6f64"
+accent = "#79740e"
+secondary = "#076678"
+warning = "#b57614"
+border = "#d5c4a1"
+selection = "#ebdbb2"
+line_number = "#928374"
+# ANSI 0–7, then bright 8–15: Gruvbox Light's terminal colors.
+ansi = [
+  "#fbf1c7", "#cc241d", "#98971a", "#d79921", "#458588", "#b16286", "#689d6a", "#7c6f64",
+  "#928374", "#9d0006", "#79740e", "#b57614", "#076678", "#8f3f71", "#427b58", "#3c3836",
+]
+
+[syntax_colors]
+comment = "#928374"
+keyword = "#9d0006"
+function = "#79740e"
+type = "#b57614"
+string = "#79740e"
+number = "#8f3f71"
+constant = "#8f3f71"
+operator = "#af3a03"
+variable = "#076678"

@@ -6120,7 +6120,7 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
             assert!(app.buffers[id].dirty);
         }
         assert!(app.command("theme ../../bad").is_err());
-        assert_eq!(app.config.theme, "github-dark");
+        assert_eq!(app.config.theme, config::BUNDLED_THEMES.last().unwrap().0);
     }
     #[test]
     fn git_pane_shows_every_branch_and_maximizes() {

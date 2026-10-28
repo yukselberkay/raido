@@ -485,25 +485,10 @@ fn shots_field_guide() {
     shot("raido-field-guide", &mut app, w, h);
 }
 
-#[test]
-#[ignore = "renders the README screenshots; run scripts/screenshots.sh"]
-fn shots_dark_themes() {
+/// The same C file in each of `themes`, three to a row, as one picture.
+fn theme_sheet(name: &str, themes: &[&str], backdrop: &str) {
     let (_dir, root) = setup();
     let (w, h, font) = (104, 30, 9.6);
-    let themes = [
-        "visual-studio-dark",
-        "vscode-dark-2026",
-        "phosphor",
-        "dracula",
-        "nord",
-        "one-dark",
-        "gruvbox-dark",
-        "tokyo-night",
-        "catppuccin-mocha",
-        "solarized-dark",
-        "monokai",
-        "github-dark",
-    ];
     let mut app = app(&root, themes[0]);
     app.command("e examples/forge.c").unwrap();
     ready(&mut app, w, h, "clangd");
@@ -521,12 +506,54 @@ fn shots_dark_themes() {
         );
     }
     let (cw, ch) = (w as f32 * font * 0.6, h as f32 * font * 1.25);
+    let rows = themes.len().div_ceil(3) as f32;
     page(
-        "raido-dark-themes",
+        name,
         &format!("<div class=sheet>{cells}</div>"),
         3.0 * cw,
-        4.0 * (ch + 12.0 + 46.0),
+        rows * (ch + 12.0 + 46.0),
+        backdrop,
+    );
+}
+
+#[test]
+#[ignore = "renders the README screenshots; run scripts/screenshots.sh"]
+fn shots_dark_themes() {
+    theme_sheet(
+        "raido-dark-themes",
+        &[
+            "visual-studio-dark",
+            "vscode-dark-2026",
+            "phosphor",
+            "dracula",
+            "nord",
+            "one-dark",
+            "gruvbox-dark",
+            "tokyo-night",
+            "catppuccin-mocha",
+            "solarized-dark",
+            "monokai",
+            "github-dark",
+        ],
         "#111",
+    );
+}
+
+#[test]
+#[ignore = "renders the README screenshots; run scripts/screenshots.sh"]
+fn shots_light_themes() {
+    theme_sheet(
+        "raido-light-themes",
+        &[
+            "visual-studio-light",
+            "vscode-light-2026",
+            "github-light",
+            "one-light",
+            "solarized-light",
+            "catppuccin-latte",
+            "gruvbox-light",
+        ],
+        "#e6e6e6",
     );
 }
 
