@@ -21,6 +21,8 @@ pub struct Cached {
     /// line, so an edit is highlighted again from its first changed line only.
     starts: Vec<(ParseState, HighlightState)>,
     hashes: Vec<u64>,
+    /// The minimap's colors for lines by their text.
+    pub shades: crate::minimap::Shades,
 }
 
 fn line_hash(line: ropey::RopeSlice) -> u64 {
@@ -107,6 +109,10 @@ impl Syntax {
     /// there's more to do. After an edit only the lines from the first changed one
     /// are done again, so typing never leaves the lines on screen uncolored.
     pub fn prepare(&mut self, id: usize, buffer: &Buffer, end: usize) -> bool {
+        self.prepare_lines(id, buffer, end, 512)
+    }
+    /// `prepare`, highlighting at most `budget` lines in this call.
+    pub fn prepare_lines(&mut self, id: usize, buffer: &Buffer, end: usize, budget: usize) -> bool {
         let name = buffer.name();
         if let Some(cache) = self
             .cache
@@ -150,13 +156,14 @@ impl Syntax {
                     lines: Vec::new(),
                     starts: Vec::new(),
                     hashes: Vec::new(),
+                    shades: Default::default(),
                 },
             );
         }
         let cache = self.cache.get_mut(&id).expect("cache just inserted");
         let highlighter = Highlighter::new(&self.theme);
         let target = end.min(buffer.lines());
-        let stop = target.min(cache.lines.len() + 512);
+        let stop = target.min(cache.lines.len() + budget);
         for row in cache.lines.len()..stop {
             let slice = buffer.text.line(row);
             cache

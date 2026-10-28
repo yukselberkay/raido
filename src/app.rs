@@ -280,6 +280,11 @@ pub struct App {
     pub git_focus: bool,
     pub git_selected: usize,
     pub rectangles: Vec<(usize, Rect)>,
+    /// The minimaps on screen, for clicks.
+    pub minimaps: Vec<crate::minimap::Placed>,
+    /// A minimap being dragged: the map, the row it was picked up at, and the
+    /// editor's scroll then.
+    minimap_drag: Option<(crate::minimap::Placed, u16, usize)>,
     pub redraw: bool,
     pub count: String,
     pending: Option<char>,
@@ -400,6 +405,8 @@ impl App {
             git_focus: false,
             git_selected: 0,
             rectangles: Vec::new(),
+            minimaps: Vec::new(),
+            minimap_drag: None,
             redraw: true,
             count: String::new(),
             pending: None,
@@ -1571,7 +1578,14 @@ impl App {
                     return Ok(());
                 }
                 self.close_find();
-                if inside(self.explorer_rows) && self.explorer_search.is_some() {
+                if let Some(map) = self.minimaps.iter().copied().find(|m| inside(m.area)) {
+                    if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+                        self.end_visual();
+                    }
+                    self.focused = map.pane;
+                    self.sidebar_focus = false;
+                    self.minimap_press(map, at.1);
+                } else if inside(self.explorer_rows) && self.explorer_search.is_some() {
                     let row = usize::from(at.1 - self.explorer_rows.y);
                     if let Some(Some(hit)) = self.search_lines.get(row).copied() {
                         if let Some(search) = self.explorer_search.as_mut() {
@@ -1611,9 +1625,46 @@ impl App {
                     }
                 }
             }
+            MouseEventKind::Drag(MouseButton::Left) => self.minimap_drag_to(at.1),
+            MouseEventKind::Up(MouseButton::Left) => self.minimap_drag = None,
             _ => {}
         }
         Ok(())
+    }
+    /// A click on a minimap: the view jumps there, the cursor on that line in the
+    /// middle of the screen. On the slider (the part on screen) it only picks the
+    /// slider up, to drag.
+    fn minimap_press(&mut self, map: crate::minimap::Placed, y: u16) {
+        let Some(Pane::Editor(id)) = self.panes.get(&map.pane) else {
+            return;
+        };
+        let b = &mut self.buffers[*id];
+        if !map.on_slider(y) {
+            b.row = map.line(y);
+            b.col = b
+                .line(b.row)
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .count();
+            b.scroll = b.row.saturating_sub(map.view / 2);
+        }
+        self.minimap_drag = Some((map, y, b.scroll));
+    }
+    /// Dragging the minimap's slider scrolls the editor, the cursor kept on screen.
+    fn minimap_drag_to(&mut self, y: u16) {
+        let Some((map, from, scroll)) = self.minimap_drag else {
+            return;
+        };
+        let Some(Pane::Editor(id)) = self.panes.get(&map.pane) else {
+            return;
+        };
+        let b = &mut self.buffers[*id];
+        let moved = (f64::from(y) - f64::from(from)) * map.pace();
+        let last = map.lines.saturating_sub(map.view).max(scroll);
+        b.scroll = (scroll as f64 + moved).round().clamp(0.0, last as f64) as usize;
+        let bottom = (b.scroll + map.view.max(1) - 1).min(b.lines().saturating_sub(1));
+        b.row = b.row.clamp(b.scroll.min(bottom), bottom);
+        b.clamp();
     }
     /// The wheel over pane `id` (drawn at `rect`, border included).
     fn wheel(&mut self, id: usize, rect: Rect, up: bool, at: (u16, u16)) -> Result<()> {
@@ -4493,6 +4544,19 @@ impl App {
                 }
             }
             "theme" | "themes" => self.open_picker(),
+            "minimap" => {
+                self.config.minimap = match arg {
+                    "" => !self.config.minimap,
+                    "on" => true,
+                    "off" => false,
+                    _ => bail!("Use :minimap, :minimap on or :minimap off"),
+                };
+                self.notice(if self.config.minimap {
+                    "Minimap on, beside editors wide enough for it · minimap = false in config.toml turns it off for good"
+                } else {
+                    "Minimap off · :minimap brings it back · minimap = false in config.toml keeps it off"
+                });
+            }
             "set" => match arg {
                 "rnu" | "relativenumber" => self.config.relative_numbers = true,
                 "nornu" | "norelativenumber" => self.config.relative_numbers = false,
@@ -6389,6 +6453,149 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
             app.remote_open(&root.join("blob.bin")),
             Reply::Failed(_)
         ));
+    }
+    #[test]
+    fn the_minimap_shows_the_file_where_you_are_and_what_changed() {
+        use crate::{minimap, quickdiff::Change, ui::change_color};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=Raido",
+                    "-c",
+                    "user.email=raido@example.com",
+                    "-C",
+                ])
+                .arg(&root)
+                .args(args)
+                .output()
+                .unwrap();
+        };
+        // 400 lines in a staircase: indented 0, 4, 8 and 12 columns in turn.
+        let path = root.join("long.rs");
+        let text: String = (0..400)
+            .map(|i| format!("{}let value_{i} = {i};\n", " ".repeat(i % 4 * 4)))
+            .collect();
+        std::fs::write(&path, text).unwrap();
+        git(&["init", "-q"]);
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "init"]);
+        let mut app = App::new(root.clone(), Some(path), false).unwrap();
+        app.sidebar_visible = false;
+        let id = app.buffer_id().unwrap();
+        let start = Instant::now();
+        while !app.diffs.get(&id).is_some_and(|d| d.computed_base())
+            && start.elapsed() < Duration::from_secs(10)
+        {
+            app.tick();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Line 21 edited, a line added after line 41.
+        let b = &mut app.buffers[id];
+        let at = |b: &Buffer, row: usize| b.text.line_to_char(row);
+        b.replace(at(b, 41), at(b, 41), "new();\n");
+        b.replace(at(b, 20), at(b, 20), "x");
+        (b.row, b.col) = (0, 0);
+        app.tick();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+        let mut draw = |app: &mut App| {
+            terminal.draw(|f| crate::ui::draw(f, app)).unwrap();
+            terminal.backend().buffer().clone()
+        };
+        let screen = draw(&mut app);
+        let map = app.minimaps[0];
+        assert_eq!(
+            (map.area.width, map.top, map.lines),
+            (minimap::SPACE, 0, 402)
+        );
+        // Column 0 holds the change marks, the map starts at 1.
+        let cell = |x: u16, y: usize| screen[(map.area.x + x, map.area.y + y as u16)].clone();
+        // The first four lines, a dot for every four columns: "let " and "valu"
+        // lit on the first, "    " and "let " on the second, the other two
+        // further right; in the next eight columns all but the last line's first.
+        assert_eq!(cell(1, 0).symbol(), "⠙");
+        assert_eq!(cell(2, 0).symbol(), "⢿");
+        // Changes since Git to the map's left: the row of four lines holding each,
+        // the half of the mark where it is.
+        let mark = |row: usize| cell(0, row);
+        assert_eq!(mark(5).symbol(), "▘", "line 21, first of lines 21-24");
+        assert_eq!(mark(5).fg, change_color(Change::Modified, &app.theme));
+        assert_eq!(mark(10).symbol(), "▘", "line 42, second of 41-44");
+        assert_eq!(mark(10).fg, change_color(Change::Added, &app.theme));
+        assert_eq!(mark(6).symbol(), " ");
+        // The slider shades the rows on screen; the cursor's row is stronger.
+        let theme = app.theme.clone();
+        let background = crate::config::color(&theme.background);
+        let slider = crate::markdown::mix(background, crate::config::color(&theme.foreground), 0.1);
+        let last = (map.view - 1) / minimap::LINES;
+        assert_eq!(cell(1, 0).bg, crate::config::color(&theme.selection));
+        assert_eq!(cell(1, last).bg, slider);
+        assert_eq!(cell(1, last + 1).bg, background);
+        let mouse = |app: &mut App, kind, row: u16| {
+            app.event(Event::Mouse(MouseEvent {
+                kind,
+                column: map.area.x + 3,
+                row: map.area.y + row,
+                modifiers: KeyModifiers::NONE,
+            }));
+        };
+        // A click below the slider: that line, on its first letter (indented 12
+        // since the added line), in the middle of the screen.
+        mouse(&mut app, MouseEventKind::Down(MouseButton::Left), 20);
+        mouse(&mut app, MouseEventKind::Up(MouseButton::Left), 20);
+        let b = &app.buffers[id];
+        assert_eq!((b.row, b.col, b.scroll), (80, 12, 80 - map.view / 2));
+        // Dragging the slider scrolls by the lines a row of map stands for; the
+        // cursor stays on screen.
+        let scroll = b.scroll;
+        draw(&mut app);
+        let map = app.minimaps[0];
+        let row = (scroll - map.top) / minimap::LINES + 1;
+        assert!(map.on_slider(map.area.y + row as u16));
+        mouse(
+            &mut app,
+            MouseEventKind::Down(MouseButton::Left),
+            row as u16,
+        );
+        assert_eq!(
+            app.buffers[id].scroll, scroll,
+            "picking it up moves nothing"
+        );
+        mouse(
+            &mut app,
+            MouseEventKind::Drag(MouseButton::Left),
+            row as u16 + 3,
+        );
+        let (dragged, cursor) = (app.buffers[id].scroll, app.buffers[id].row);
+        assert_eq!(dragged, scroll + (3.0 * map.pace()).round() as usize);
+        assert!((dragged..dragged + map.view).contains(&cursor));
+        mouse(
+            &mut app,
+            MouseEventKind::Up(MouseButton::Left),
+            row as u16 + 3,
+        );
+        mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), 0);
+        assert_eq!(app.buffers[id].scroll, dragged, "let go of, it stays");
+        // At the end of the file the map has scrolled to show the end.
+        app.buffers[id].row = 401;
+        draw(&mut app);
+        let map = app.minimaps[0];
+        assert_eq!(map.top + usize::from(map.area.height) * minimap::LINES, 402);
+        // :minimap turns it off; narrow editors go without.
+        app.command("minimap").unwrap();
+        draw(&mut app);
+        assert!(app.minimaps.is_empty());
+        app.command("minimap on").unwrap();
+        press(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('%'), KeyModifiers::NONE);
+        draw(&mut app);
+        assert!(
+            app.minimaps.is_empty(),
+            "two editors side by side at 120 columns"
+        );
     }
     #[test]
     fn edited_lines_are_marked_until_staged() {

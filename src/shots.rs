@@ -529,3 +529,30 @@ fn shots_dark_themes() {
         "#111",
     );
 }
+
+#[test]
+#[ignore = "renders the README screenshots; run scripts/screenshots.sh"]
+fn shots_minimap() {
+    let (_dir, root) = setup();
+    let (w, h) = (150, 42);
+    let mut app = app(&root, "visual-studio-dark");
+    app.command("e src/lsp.rs").unwrap();
+    // A few edits since the last commit, for the change marks.
+    app.command("402").unwrap();
+    keys(&mut app, "o// Servers start on first use.");
+    key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+    app.command("486").unwrap();
+    keys(&mut app, "A // and stays");
+    key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+    app.command("505").unwrap();
+    keys(&mut app, "dd");
+    keys(&mut app, "/diagnostics\n");
+    app.command("438").unwrap();
+    let id = app.buffer_id().unwrap();
+    app.buffers[id].scroll = 420;
+    ready(&mut app, w, h, "rust-analyzer");
+    settle(&mut app, w, h, Duration::from_millis(600));
+    app.message =
+        "Minimap: the file at a glance · where you are · what changed · click or drag to go".into();
+    shot("raido-minimap", &mut app, w, h);
+}

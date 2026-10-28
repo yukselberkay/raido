@@ -123,6 +123,8 @@ pub struct Config {
     pub autocomplete: bool,
     pub shell: Option<String>,
     pub relative_numbers: bool,
+    /// The minimap beside the code: the whole file small, where you are, what changed.
+    pub minimap: bool,
     /// File-type icons in the explorer: `true` (auto), `"nerd"`, `"basic"` or `false`.
     pub icons: Icons,
     /// Show dotfiles (`.github`, `.gitignore`, …) in the explorer.
@@ -175,6 +177,7 @@ impl Default for Config {
             autocomplete: true,
             shell: None,
             relative_numbers: false,
+            minimap: true,
             icons: Icons::Auto,
             show_hidden: true,
             git_pane: false,

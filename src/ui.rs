@@ -4,7 +4,7 @@ use crate::{
     editor::Buffer,
     gitgraph::{self, Focus as GitFocus, GitView, RefKind},
     lsp::Diagnostic,
-    markdown,
+    markdown, minimap,
     quickdiff::Change,
     review::{self, ChangesView},
     workspace::{printable, Mark},
@@ -199,6 +199,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         content
     };
     app.rectangles.clear();
+    app.minimaps.clear();
     if app.zoom || bare {
         app.rectangles.push((app.focused, content));
     } else {
@@ -321,9 +322,27 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 if buffer.row >= buffer.scroll + height as usize {
                     buffer.scroll = buffer.row.saturating_sub(height.saturating_sub(1) as usize);
                 }
-                app.redraw |=
-                    app.syntax
-                        .prepare(buffer_id, buffer, buffer.scroll + height as usize);
+                let more = app
+                    .syntax
+                    .prepare(buffer_id, buffer, buffer.scroll + height as usize);
+                // The minimap's lines are highlighted after the screen's, a little
+                // each frame (64 lines take about 5 ms); meanwhile they keep the
+                // colors they had.
+                let gutter = buffer.lines().to_string().len().max(3) as u16 + 2;
+                let map = app.config.minimap && !bare && minimap::fits(inner.width, gutter);
+                if map && !more {
+                    let top = minimap::top(buffer.lines(), buffer.scroll, height.into(), height);
+                    let end = top + usize::from(height) * minimap::LINES;
+                    app.redraw |= app.syntax.prepare_lines(buffer_id, buffer, end, 64);
+                } else {
+                    app.redraw |= more;
+                }
+                let code = Rect::new(
+                    inner.x,
+                    inner.y,
+                    inner.width - if map { minimap::SPACE } else { 0 },
+                    height,
+                );
                 let lines = app.syntax.cache.get(&buffer_id).map(|c| &c.lines);
                 let selection = if active { selection } else { None };
                 let diagnostics = app
@@ -344,7 +363,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     selection,
                     diagnostics,
                     changes,
-                    Rect::new(inner.x, inner.y, inner.width, height),
+                    code,
                     &theme,
                     active && app.input.is_none(),
                     app.config.relative_numbers,
@@ -353,6 +372,30 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 );
                 if active {
                     app.cursor_at = cursor;
+                }
+                if map {
+                    let area = Rect::new(code.right(), inner.y, minimap::SPACE, height);
+                    let cache = app.syntax.cache.get_mut(&buffer_id);
+                    let (highlight, shades) = match cache {
+                        Some(c) => (Some(&c.lines), Some(&mut c.shades)),
+                        None => (None, None),
+                    };
+                    let sources = minimap::Sources {
+                        highlight,
+                        shades,
+                        diagnostics,
+                        changes,
+                        tab: app.config.tab_width.max(1),
+                    };
+                    let top = minimap::draw(frame, area, buffer, height.into(), sources, &theme);
+                    app.minimaps.push(minimap::Placed {
+                        pane: id,
+                        area,
+                        top,
+                        lines: buffer.lines(),
+                        scroll: buffer.scroll,
+                        view: height.into(),
+                    });
                 }
                 if footer {
                     let area = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
@@ -1450,7 +1493,7 @@ fn editor(
     None
 }
 
-fn severity_color(theme: &Theme, severity: u8) -> Color {
+pub(crate) fn severity_color(theme: &Theme, severity: u8) -> Color {
     match severity {
         1 => theme
             .ansi
@@ -1699,7 +1742,7 @@ fn hover_popup(frame: &mut Frame, app: &App, hover: &str, at: (u16, u16), screen
     }
 }
 
-fn display_width(chars: impl Iterator<Item = char>, tab: usize) -> usize {
+pub(crate) fn display_width(chars: impl Iterator<Item = char>, tab: usize) -> usize {
     chars.fold(0, |column, c| {
         column
             + if c == '\t' {
@@ -2877,6 +2920,10 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         ),
         (":run name", "Launch a configured command plugin"),
         (":set rnu / :set nornu", "Relative / absolute line numbers"),
+        (
+            ":minimap [on|off]",
+            "Hide / show the minimap beside editors",
+        ),
     ];
     // Keys on the left, descriptions wrapped beside them; a key too long for its
     // column gets its own line.

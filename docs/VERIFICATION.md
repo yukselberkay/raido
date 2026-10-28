@@ -25,7 +25,7 @@ Date: 2026-10-18. Host: Linux x86_64. Rust 1.99.1.
 
 The README screenshots (`raido.png`, `raido-c-tiles.png`, `raido-markdown.png`,
 `raido-lsp.png`, `raido-theme-picker.png`, `raido-field-guide.png`,
-`raido-dark-themes.png`) are renders of Raido's real UI, made by
+`raido-dark-themes.png`, `raido-minimap.png`) are renders of Raido's real UI, made by
 `scripts/screenshots.sh`. The scenes in `src/shots.rs` (test-only, ignored in normal
 test runs) drive Raido with keys in a fresh clone of this repository named `raido`,
 wait until Git, the language servers and the terminals have answered, and draw the
@@ -34,7 +34,9 @@ HTML in JetBrainsMono Nerd Font and photographed by headless Chrome at 2×.
 
 Shell panes are real PTYs (`bash --norc` with a `raido $` prompt) running the
 `beacon` example and the `forge.c` build; the LSP image is a live clangd session on
-a small C file. Only the status-line message of each scene is set, to say what the
+a small C file. The minimap scene makes three edits to `src/lsp.rs` (a line added,
+one changed, one deleted) and searches for `diagnostics`, for its change marks and
+find matches. Only the status-line message of each scene is set, to say what the
 picture shows. No editor contents, terminal output or other UI labels are made up,
 and the AI pane shows the launcher, not a model's answer. Config is read from a
 scratch folder, so your own settings never appear and are never written.

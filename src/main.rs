@@ -12,6 +12,7 @@ mod layout;
 mod local_ai;
 mod lsp;
 mod markdown;
+mod minimap;
 mod omarchy;
 mod platform;
 mod quickdiff;
@@ -68,9 +69,10 @@ fn reset_terminal_colors() {
     let _ = out.flush();
 }
 
-/// Mouse clicks and the wheel, reported in SGR form; no motion events.
-const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1006h";
-const MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1000l";
+/// Mouse clicks and the wheel, reported in SGR form; motion only while a button is
+/// held (dragging the minimap).
+const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+const MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
 
 struct TerminalGuard;
 impl Drop for TerminalGuard {

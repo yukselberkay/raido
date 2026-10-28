@@ -401,6 +401,9 @@ the history graph appears after you make commits.
   staging/commits in the terminal or your preferred Git TUI.
 - **Changes in the gutter:** VS Code-style added / changed / removed line marks
   against Git, live as you type, with `]c` / `[c` to jump between them.
+- **Minimap:** the whole file from far away beside the code, as in VS Code: where
+  you are, what changed, find matches and errors; click or drag it to go there
+  ([Minimap](#minimap)).
 - **External-change refresh:** clean open files refresh when AI/shell tools edit
   them. Dirty buffers remain yours; saving detects conflicting disk changes.
 - **Extensions:** user-owned TOML themes and explicitly invoked command plugins.
@@ -773,6 +776,30 @@ The comparison is with the file's version in the Git index, as in VS Code and
 files outside Git have none. `]c` / `[c` jump to the next / previous change. Colors
 come from the theme's terminal palette (bright green, blue and red).
 
+### Minimap
+
+Beside the code, the minimap shows the whole file from far away, as in VS Code. Each
+character cell is a Braille block of four lines by eight columns, so the code keeps
+its shape at a quarter of its size, in the color most of that text has.
+
+![The minimap beside Rust source: the lighter band marks the lines on screen, change marks on its left edge, find matches in yellow](docs/raido-minimap.png)
+
+- **Where you are:** the lighter band is the part on screen; the cursor's row has
+  the current line's color.
+- **What changed:** lines that differ from Git are marked on its left edge, in the
+  [gutter's](#changes-in-the-gutter) colors. A mark's top or bottom half says which
+  two of the four lines.
+- **Find matches** show in yellow, **errors and warnings** in red and yellow, so you
+  see where they are in the whole file.
+- **Click** it to jump there: that line comes to the middle of the screen. **Drag**
+  the band to scroll, like a scrollbar. The wheel over it scrolls the editor.
+- A file longer than the map scrolls it along with the view, so both ends stay in
+  reach.
+
+An editor needs room for 60 columns of code beside it, so narrow splits go without.
+`:minimap` hides and shows it until you quit; `minimap = false` in config.toml keeps
+it off.
+
 ### Editor: insert mode
 
 Type normally. Enter indents for the language ([Language-aware
@@ -843,7 +870,8 @@ cursor stays on screen), a terminal's history, the Git pane, the Markdown previe
 the explorer or the guide. Programs that handle the mouse themselves get the wheel:
 Claude Code's full-screen mode, htop; other full-screen programs like `less` get
 arrow keys, as in a normal terminal. A click focuses a pane, puts the editor cursor
-on the character you clicked, or opens an explorer entry.
+on the character you clicked, or opens an explorer entry. A click on the
+[minimap](#minimap) jumps there; dragging its band scrolls.
 
 While Raido has the mouse, your terminal's click-and-drag selection is off. To select
 and copy with the mouse:
@@ -1065,6 +1093,7 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 :docs                     Open the full Raido manual (rendered)
 :skill [install|remove]   Install / remove the Raido skill for AI agents
 :set rnu / :set nornu     Relative / absolute line numbers
+:minimap [on|off]         Hide / show the minimap beside editors
 :run name                 Launch an explicitly configured command plugin
 :git / :git all           Git pane: open, focus, or maximize / show all branches
 :changes [keep|undo]      Review AI agents' changes / keep all / undo all (asks)
@@ -1300,6 +1329,7 @@ theme immediately. The configuration supports:
 | `auto_pairs` | `true` | Brackets and quotes close themselves; typing the closer steps over it |
 | `autocomplete` | `true` | Suggestions pop up after two letters of a word (language server, else keywords and words from your files) |
 | `relative_numbers` | `false` | Relative line numbers except the current line; type the shown number, then `j`/Enter (down) or `k`/`-` (up) |
+| `minimap` | `true` | The [minimap](#minimap) beside editors with room for it; `:minimap` hides it until you quit |
 | `icons` | `true` | Explorer file-type icons: `true` picks Nerd Font glyphs when a Nerd Font is available, else colored markers; `"nerd"`/`"basic"` force one; `false` for none |
 | `git_pane` | `false` | Open the Git pane (branches, commit graph, details) at startup |
 | `restore_session` | `true` | Save each project's panes, buffers and terminals to `.raido/` and reopen them |
