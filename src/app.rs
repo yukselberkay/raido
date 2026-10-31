@@ -2201,7 +2201,7 @@ impl App {
         let id = self.buffer_id().context("Focus an editor")?;
         let b = &mut self.buffers[id];
         let text = if cut {
-            b.delete_line()
+            b.delete_lines(1)
         } else {
             let start = b.char_index(b.row, 0);
             let end = b.char_index(b.row + 1, 0).max(start + b.line_len(b.row));
@@ -3181,14 +3181,27 @@ impl App {
                 ('[', KeyCode::Char('d')) => self.next_diagnostic(true),
                 (']', KeyCode::Char('c')) => self.next_change(false),
                 ('[', KeyCode::Char('c')) => self.next_change(true),
+                // 17dd / 17yy: that many lines from the cursor's, like Vim.
                 ('d', KeyCode::Char('d')) => {
-                    let line = b.delete_line();
-                    self.clipboard.copy(line, true);
+                    let lines = b.delete_lines(count);
+                    let n = lines.lines().count();
+                    self.clipboard.copy(lines, true);
+                    if n > 1 {
+                        self.notice(format!("{n} lines deleted · u undoes, p pastes them"));
+                    }
                 }
                 ('y', KeyCode::Char('y')) => {
-                    let line = format!("{}\n", b.line(b.row));
-                    self.clipboard.copy(line, true);
-                    self.notice("Line copied · p pastes below, P above");
+                    let (start, end) = b.line_span(count);
+                    let mut lines = b.slice(start, end);
+                    if !lines.ends_with('\n') {
+                        lines.push('\n');
+                    }
+                    let n = lines.lines().count();
+                    self.clipboard.copy(lines, true);
+                    self.notice(match n {
+                        1 => "Line copied · p pastes below, P above".into(),
+                        n => format!("{n} lines copied · p pastes below, P above"),
+                    });
                 }
                 _ => {}
             }
@@ -4779,6 +4792,34 @@ mod tests {
         press(&mut app, KeyCode::Char('n'), KeyModifiers::NONE);
         assert_eq!(app.active_buffer().unwrap().row, 1);
         assert!(app.quit(false).is_ok());
+    }
+    #[test]
+    fn a_count_before_dd_and_yy_takes_that_many_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, "1\n2\n3\n4\n5\n").unwrap();
+        let mut app = App::new(dir.path().into(), Some(path), false).unwrap();
+        let text = |app: &mut App| app.active_buffer().unwrap().text.to_string();
+        let keys = |app: &mut App, keys: &str| {
+            for c in keys.chars() {
+                press(app, KeyCode::Char(c), KeyModifiers::NONE);
+            }
+        };
+        keys(&mut app, "j3dd");
+        assert_eq!(text(&mut app), "1\n5\n");
+        assert_eq!(app.clipboard.paste(), ("2\n3\n4\n".into(), true));
+        // One undo brings all of them back; d3d counts like 3dd.
+        keys(&mut app, "ud3d");
+        assert_eq!(text(&mut app), "1\n5\n");
+        keys(&mut app, "u");
+        // A count past the end takes the lines that are left.
+        keys(&mut app, "4G99dd");
+        assert_eq!(text(&mut app), "1\n2\n3\n");
+        keys(&mut app, "ugg17dd");
+        assert_eq!(text(&mut app), "");
+        keys(&mut app, "ugg2yy");
+        assert_eq!(app.clipboard.paste(), ("1\n2\n".into(), true));
+        assert_eq!(text(&mut app), "1\n2\n3\n4\n5\n");
     }
     #[test]
     fn option_and_cmd_arrows_move_by_word_and_line_like_a_mac() {

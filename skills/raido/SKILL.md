@@ -56,6 +56,7 @@ in the order the user presses them. Prefer showing over explaining.
 | Search | `/text` Enter, then `n` / `N`. |
 | Search the whole project / find in files | **`Ctrl-e`** (explorer) then **`Ctrl-f`**: results as you type, file names first then matching lines grouped by file; ↑↓ preview, Enter or click opens at the match, Esc back to the tree. Skips git-ignored, binary and >2 MB files. |
 | Find / replace (VS Code style), find a variable | **`Ctrl-f`** (select the variable first, or put the cursor on it) opens a find bar with match count; Enter/↑↓ next/previous, **`Ctrl-w`** whole word, smart case. **`Ctrl-h`** (or Tab) adds Replace: Enter replaces one, **`Ctrl-a`** replaces all (one undo). Esc closes; `:noh` clears highlights. |
+| Delete / copy several lines | **`17dd`** cuts 17 lines from the cursor's down, **`17yy`** copies them (NORMAL mode; `p` pastes, `u` undoes). Or `V`, move, then `d` / `y`. |
 | Undo / redo | `u` / `Ctrl-r` (NORMAL mode). |
 | Jump to a line | `:42` or `42G`. With relative numbers (`:set rnu`): `15j` / `15k`, or `15` Enter / `15-`, or `:+15` / `:-15`. |
 | Run an AI agent | **`Ctrl-b a`** (beside) or **`Ctrl-b A`** (below) → 1 Codex, 2 Claude Code, 3 Gemini CLI, 4 Antigravity (`agy`), 5 Local LLM, 6–9 your own. Or `:ai claude below`. Default placement: `ai_split = "below"`. A chime plays when an AI pane finishes a prompt or stops to ask something; change it with `ai_sound = "Hero"` (macOS sound name, a file, `"bell"`, `"off"`), test with `:sound`. |

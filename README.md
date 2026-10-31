@@ -721,16 +721,16 @@ press Enter.
 | `gg` / `G` | First / last line |
 | `42G` or `:42` then Enter | Go to line 42 (line numbers are one-based) |
 | `15j` / `15k`, `15` Enter / `15-`, `:+15` / `:-15` | Jump 15 lines down / up — the numbers shown by `:set rnu` |
-| `10j`, `3w`, `5x` | Repeat a movement or character deletion |
+| `10j`, `3w`, `5x`, `3dd` | Repeat a movement, character or line deletion |
 | PageUp / PageDown | Move 20 lines up/down |
 | `Ctrl-u` / `Ctrl-d` | Move 15 lines up/down |
 | `i` / `a` | Insert at cursor / append after cursor |
 | `I` / `A` | Insert at line start / append at line end |
 | `o` / `O` | Open an indented line below / above and enter insert mode |
 | `x` / Delete | Delete character under cursor |
-| `dd` | Cut the line (to the clipboard) |
+| `dd` / `17dd` | Cut the line / 17 lines from the cursor's (to the clipboard; one `u` undoes) |
 | `D` / `C` | Delete to line end / delete to end and enter insert mode |
-| `yy` / `p` / `P` | Copy line / paste below (after cursor) / above (at cursor) |
+| `yy` / `17yy` / `p` / `P` | Copy the line / 17 lines / paste below (after cursor) / above (at cursor) |
 | `v` / `V` | Select characters / whole lines (see [Copy and paste](#copy-and-paste)) |
 | `K` / `gd` / `Ctrl-o` | Hover docs / go to definition / jump back |
 | `]d` / `[d` | Next / previous diagnostic |
@@ -795,8 +795,8 @@ the bar counts them ("3 of 12"). Typing replaces the filled-in text.
 you type a capital letter (`Count` then matches only `Count`; the bar shows `Aa`).
 
 Character movement is UTF-8-aware, not grapheme-cluster-aware. This is a documented
-Vim subset, not full Vim: block selection, arbitrary operators, macros and numeric
-counts for `dd` or `yy` are not implemented.
+Vim subset, not full Vim: block selection, arbitrary operators (`d3j`, `dw`) and
+macros are not implemented.
 
 ### Changes in the gutter
 

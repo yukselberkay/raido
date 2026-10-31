@@ -2884,8 +2884,8 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
             "Relative jump: the numbers shown with :set rnu",
         ),
         (
-            "x dd D C / yy p P",
-            "Delete / change / copy line / paste below, above",
+            "x 3dd D C / 3yy p P",
+            "Delete / change / copy lines (3 = count) / paste",
         ),
         (
             "v / V / Shift-arrows",

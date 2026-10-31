@@ -239,14 +239,22 @@ impl Buffer {
         self.text.remove(i..end);
         self.clamp();
     }
-    pub fn delete_line(&mut self) -> String {
-        self.checkpoint(false);
+    /// Char range of `count` whole lines from the cursor's, newlines included; fewer
+    /// at the end of the file, like Vim's `17dd` / `17yy`.
+    pub fn line_span(&self, count: usize) -> (usize, usize) {
         let start = self.text.line_to_char(self.row);
-        let end = if self.row + 1 < self.lines() {
-            self.text.line_to_char(self.row + 1)
+        let last = self.row + count.max(1);
+        let end = if last < self.lines() {
+            self.text.line_to_char(last)
         } else {
             self.text.len_chars()
         };
+        (start, end)
+    }
+    /// Delete `count` lines from the cursor's as one undo step; returns them.
+    pub fn delete_lines(&mut self, count: usize) -> String {
+        self.checkpoint(false);
+        let (start, end) = self.line_span(count);
         let removed = self.text.slice(start..end).to_string();
         self.text.remove(start..end);
         self.clamp();
