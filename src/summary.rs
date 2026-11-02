@@ -24,6 +24,18 @@ const TIMEOUT: Duration = Duration::from_secs(240);
 pub struct Note {
     pub key: u64,
     pub text: String,
+    /// Its changes were too large: it read only the first part of them.
+    pub partial: bool,
+}
+
+/// How much of a file's diff fit in a request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fit {
+    Whole,
+    /// The first part; the rest was cut off.
+    Part,
+    /// None of it: the request was full.
+    Out,
 }
 
 /// What the AI said about the changes.
@@ -39,6 +51,8 @@ pub struct Summary {
     pub by: String,
     /// Files whose diff went with the last request; the rest were explained before.
     pub sent: usize,
+    /// Files with new changes that didn't fit in the last request; `s` sends them.
+    pub left_out: Vec<String>,
 }
 
 impl Summary {
@@ -105,10 +119,12 @@ pub fn key(files: &[FileDiff]) -> u64 {
     hasher.finish()
 }
 
-/// The changes as a unified diff, cut down to a size worth sending.
-fn diff(files: &[&FileDiff]) -> String {
+/// The changes as a unified diff, cut down to a size worth sending, and how much
+/// of each file's went in.
+fn diff(files: &[&FileDiff]) -> (String, Vec<Fit>) {
     let mut out = String::new();
-    for file in files {
+    let mut fits = vec![Fit::Out; files.len()];
+    for (i, file) in files.iter().enumerate() {
         let status = match file.status {
             Status::Added => "new file",
             Status::Deleted => "deleted",
@@ -144,17 +160,20 @@ fn diff(files: &[&FileDiff]) -> String {
                 break;
             }
         }
+        fits[i] = Fit::Whole;
         if part.len() > MAX_FILE {
             part.truncate(floor(&part, MAX_FILE));
             part.push_str("\n[… rest of this file's changes left out]\n");
+            fits[i] = Fit::Part;
         }
         if out.len() + part.len() > MAX_DIFF {
+            fits[i] = Fit::Out;
             out.push_str("[… more files left out]\n");
             break;
         }
         out.push_str(&part);
     }
-    out
+    (out, fits)
 }
 
 fn floor(text: &str, mut at: usize) -> usize {
@@ -165,8 +184,9 @@ fn floor(text: &str, mut at: usize) -> usize {
 }
 
 /// The prompt for the diffs of `files`; `known` are other files under review and
-/// what was said about them before, for the overall account.
-pub fn prompt(files: &[&FileDiff], known: &[(&str, &str)]) -> String {
+/// what was said about them before, for the overall account. With it, how much
+/// of each file's diff went in.
+pub fn prompt(files: &[&FileDiff], known: &[(&str, &str)]) -> (String, Vec<Fit>) {
     let mut out = String::from(
         "An AI coding agent just changed a developer's project. Explain the changes \
 briefly to the developer, who is reviewing them to keep or undo.\n\n\
@@ -181,13 +201,16 @@ OVERALL: <two to four short sentences about the whole change, every file listed 
             out.push_str(&format!("FILE {path}: {said}\n"));
         }
     }
+    let mut fits = Vec::new();
     if files.is_empty() {
         out.push_str("\nNo file has new changes: write only the OVERALL line.\n");
     } else {
+        let (diff, fit) = diff(files);
         out.push('\n');
-        out.push_str(&diff(files));
+        out.push_str(&diff);
+        fits = fit;
     }
-    out
+    (out, fits)
 }
 
 /// Ask `agent` about the changes, off the UI thread: only the files whose changes
@@ -207,19 +230,35 @@ pub fn start(
         .iter()
         .filter_map(|f| said(f).map(|(text, _)| (f.path.as_str(), text)))
         .collect();
-    let prompt = prompt(&todo, &known);
+    let (prompt, fits) = prompt(&todo, &known);
     let key = key(files);
-    let keys: Vec<(String, u64)> = todo.iter().map(|f| (f.path.clone(), file_key(f))).collect();
+    let left_out: Vec<String> = todo
+        .iter()
+        .zip(&fits)
+        .filter(|(_, fit)| **fit == Fit::Out)
+        .map(|(f, _)| f.path.clone())
+        .collect();
+    let keys: Vec<(String, u64, bool)> = todo
+        .iter()
+        .zip(&fits)
+        .filter(|(_, fit)| **fit != Fit::Out)
+        .map(|(f, fit)| (f.path.clone(), file_key(f), *fit == Fit::Part))
+        .collect();
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         let answer = ask(&agent, &prompt).map(|text| {
-            let paths: Vec<String> = keys.iter().map(|(p, _)| p.clone()).collect();
+            let paths: Vec<String> = keys.iter().map(|(p, ..)| p.clone()).collect();
             let (said, overall) = parse(&text, &paths);
             let files = keys
                 .iter()
-                .filter_map(|(path, key)| {
+                .filter_map(|(path, key, partial)| {
                     let text = said.get(path)?.clone();
-                    Some((path.clone(), Note { key: *key, text }))
+                    let note = Note {
+                        key: *key,
+                        text,
+                        partial: *partial,
+                    };
+                    Some((path.clone(), note))
                 })
                 .collect();
             Summary {
@@ -228,6 +267,7 @@ pub fn start(
                 key,
                 by: agent.name(),
                 sent: keys.len(),
+                left_out,
             }
         });
         let _ = sender.send(answer);
@@ -414,11 +454,16 @@ mod tests {
             removed: 0,
             outline: Default::default(),
         };
-        let prompt = prompt(&[&file], &[]);
+        let (prompt, fits) = prompt(&[&file], &[]);
+        assert_eq!(fits, [Fit::Whole]);
         assert!(prompt.contains("=== x.txt (modified, +1 -0)\n@@ -8,3 +8,4 @@\n a\n a\n a\n+b\n"));
         let many = vec![file.clone(); 2000];
         assert!(prompt.len() < MAX_DIFF + 2000);
-        assert!(super::prompt(&many.iter().collect::<Vec<_>>(), &[]).len() < MAX_DIFF + 2000);
+        let (all, fits) = super::prompt(&many.iter().collect::<Vec<_>>(), &[]);
+        assert!(all.len() < MAX_DIFF + 2000);
+        // What didn't fit is known, to say so and to send next time.
+        let whole = fits.iter().filter(|f| **f == Fit::Whole).count();
+        assert!(whole > 100 && fits[whole..].iter().all(|f| *f == Fit::Out));
         assert_ne!(key(&many[..1]), key(&many[..2]));
         // Asked again, only what's new goes; with nothing new, nothing is asked.
         let mut other = file.clone();
@@ -429,6 +474,7 @@ mod tests {
                 Note {
                     key: file_key(&file),
                     text: "Adds b.".into(),
+                    partial: false,
                 },
             )]
             .into(),
@@ -438,7 +484,7 @@ mod tests {
         let both = [file.clone(), other];
         let said = |f: &FileDiff| before.note(f).filter(|(_, now)| *now).is_some();
         assert!(said(&both[0]) && !said(&both[1]));
-        let again = super::prompt(&[&both[1]], &[("x.txt", "Adds b.")]);
+        let (again, _) = super::prompt(&[&both[1]], &[("x.txt", "Adds b.")]);
         assert!(again.contains("unchanged since:\nFILE x.txt: Adds b.\n"));
         assert!(again.contains("=== y.txt") && !again.contains("=== x.txt"));
         assert!(start(Agent::Claude, std::slice::from_ref(&file), Some(&before)).is_none());

@@ -686,6 +686,10 @@ change did to the code, and at the end it sums up the whole change:
   new: the rest keep what was said about them, which goes along in a line each so
   the account of the whole change covers everything. With nothing new, `s` sends
   nothing. `S` explains everything again from scratch.
+- **When a change is too large for one request** (more than 60 KB of diff, or 16 KB
+  for one file), the review says so instead of looking complete: a file read only
+  in part is marked "read in part", and the summary says "Explained 6 of 9 files:
+  the rest didn't fit". Press `s` again and only the files it didn't read go.
 
 | Setting | Default | |
 | --- | --- | --- |

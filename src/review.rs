@@ -1288,11 +1288,19 @@ impl ChangesView {
         let mut out = Vec::new();
         if let Some((said, now)) = changes.summary.as_ref().and_then(|s| s.note(file)) {
             // Said about changes it has since gone past: kept, but dimmed.
-            let (tone, said) = if now {
+            let (tone, mut said) = if now {
                 (Tone::Ai, said.to_string())
             } else {
                 (Tone::Faint, format!("{said} (before newer changes · s)"))
             };
+            if changes
+                .summary
+                .as_ref()
+                .and_then(|s| s.files.get(&file.path))
+                .is_some_and(|n| n.partial)
+            {
+                said.push_str(" (read in part: its changes are too large to send whole)");
+            }
             for (i, line) in crate::ui::wrap_words(&said, self.room())
                 .into_iter()
                 .enumerate()
@@ -1370,8 +1378,24 @@ impl ChangesView {
             ),
             (Some(summary), ..) if !summary.overall.is_empty() => {
                 wrapped(Tone::Ai, "◆", &summary.overall, &mut out);
+                // A request too large to send whole: say what it didn't read.
+                let skipped = summary
+                    .left_out
+                    .iter()
+                    .filter(|p| files.iter().any(|f| &&f.path == p))
+                    .count();
+                if skipped > 0 {
+                    out.push((
+                        Tone::Changed,
+                        format!(
+                            "  Explained {} of {} files: the rest didn't fit in one request · s explains them",
+                            summary.sent,
+                            summary.sent + skipped
+                        ),
+                    ));
+                }
                 let mut when = format!("  by {}", summary.by);
-                if summary.sent < files.len() {
+                if summary.sent + skipped < files.len() {
                     // Asked again: only what was new went.
                     when.push_str(&format!(
                         " · read {} of {} this time, the rest from before",
@@ -1696,6 +1720,7 @@ pub(crate) mod tests {
         let note = crate::summary::Note {
             key: crate::summary::file_key(&changes.files[1]),
             text: "Main now greets you.".into(),
+            partial: false,
         };
         changes.summary = Some(crate::summary::Summary {
             files: [("src/main.rs".to_string(), note)].into(),
@@ -1703,6 +1728,7 @@ pub(crate) mod tests {
             key: crate::summary::key(&changes.files),
             by: "Claude".into(),
             sent: 2,
+            left_out: Vec::new(),
         });
         changes.version += 1;
         view.sync(&changes);
@@ -1731,6 +1757,20 @@ pub(crate) mod tests {
             "◆ Main now greets you. (before newer changes · s)"
         );
         assert!(notes(&view, None)[2].contains("read 1 of 2 this time"));
+        // Too large to send whole: it says what it didn't read.
+        let summary = changes.summary.as_mut().unwrap();
+        summary.left_out = vec!["src/door.py".into()];
+        summary.files.get_mut("src/main.rs").unwrap().partial = true;
+        changes.version += 1;
+        view.sync(&changes);
+        let overview = notes(&view, None);
+        assert!(
+            overview
+                .iter()
+                .any(|l| l.contains("Explained 1 of 2 files: the rest didn't fit")),
+            "{overview:#?}"
+        );
+        assert!(notes(&view, Some(1))[0].contains("read in part"));
         // Hidden: only the diff.
         view.show = false;
         view.sync(&changes);
