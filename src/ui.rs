@@ -580,7 +580,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             }
             Some(Pane::Ai) => ai(frame, inner, &theme, &customs),
             Some(Pane::Git(view)) => git_view(frame, view, inner, &theme),
-            Some(Pane::Changes(view)) => changes_view(frame, &app.changes, view, inner, &theme),
+            Some(Pane::Changes(view)) => {
+                view.show = view.notes.unwrap_or(app.config.review_summary);
+                changes_view(frame, &app.changes, view, inner, &theme, &app.syntax)
+            }
             None => {}
         }
     }
@@ -2107,11 +2110,13 @@ fn changes_view(
     view: &mut ChangesView,
     area: Rect,
     theme: &Theme,
+    syntax: &crate::highlight::Syntax,
 ) {
-    use review::{Kind, Row, Status};
+    use review::{Kind, Row, Status, Tone};
     if area.height < 2 {
         return;
     }
+    view.width = area.width.saturating_sub(1) as usize;
     view.sync(changes);
     let fg = color(&theme.foreground);
     let muted = color(&theme.muted);
@@ -2122,6 +2127,7 @@ fn changes_view(
     let removed = change_color(Change::Deleted, theme);
     // The keys, as many as fit.
     let keys = [
+        "── y keep  x undo  Y X whole file  A U all  n N next change  ⏎ open  s explain  i notes ",
         "── y keep  x undo  Y X whole file  A U all  n N next change  ⏎ open ",
         "── y keep  x undo  Y X file  A U all  n N next  ⏎ open ",
         "── y keep  x undo  Y X file  n N next ",
@@ -2133,7 +2139,7 @@ fn changes_view(
         None => (
             keys.iter()
                 .find(|k| k.chars().count() + 2 <= area.width as usize)
-                .unwrap_or(&keys[3])
+                .unwrap_or(&keys[4])
                 .to_string(),
             color(&theme.border),
         ),
@@ -2267,13 +2273,47 @@ fn changes_view(
                 spans.push(Span::styled(note, fill.fg(muted)));
                 Line::from(spans)
             }
+            Row::Text(_, t) => {
+                let (tone, value) = &view.texts[t];
+                let style = match tone {
+                    Tone::Ai => fill.fg(accent),
+                    Tone::New => fill.fg(added),
+                    Tone::Changed => fill.fg(color(&theme.warning)),
+                    Tone::Removed => fill.fg(removed),
+                    Tone::Plain => fill.fg(fg),
+                    Tone::Title => fill.fg(accent).add_modifier(Modifier::BOLD),
+                    Tone::Faint => fill.fg(muted).add_modifier(Modifier::ITALIC),
+                };
+                let indent = if *tone == Tone::Title { " " } else { "   " };
+                let mut value = format!("{indent}{}", printable(value));
+                if value.chars().count() > width {
+                    value = value
+                        .chars()
+                        .take(width.saturating_sub(1))
+                        .collect::<String>()
+                        + "…";
+                }
+                spans.push(Span::styled(value, style));
+                Line::from(spans)
+            }
             Row::Line(f, h, l) => {
-                let diff_line = &changes.files[f].hunks()[h].lines[l];
+                let file = &changes.files[f];
+                let hunk = &file.hunks()[h];
+                let diff_line = &hunk.lines[l];
                 let (sign, style) = match diff_line.kind {
                     Kind::Added => ("+", fill.fg(added)),
                     Kind::Removed => ("-", fill.fg(removed)),
                     Kind::Context => (" ", fill.fg(fg)),
                 };
+                // The code in its language's colors, the sign and tint saying what
+                // happened to it.
+                let colored = view
+                    .colors
+                    .entry((f, h))
+                    .or_insert_with(|| syntax.hunk(&file.name, &hunk.lines))
+                    .as_ref()
+                    .and_then(|lines| lines.get(l))
+                    .filter(|regions| !regions.is_empty());
                 if gutter {
                     spans.push(Span::styled(
                         format!("{:>4} {:>4} ", number(diff_line.old), number(diff_line.new)),
@@ -2281,11 +2321,34 @@ fn changes_view(
                     ));
                 }
                 spans.push(Span::styled(format!("{sign} "), style));
-                let body: String = printable(&diff_line.text.replace('\t', "    "))
-                    .chars()
-                    .skip(view.hscroll)
-                    .collect();
-                spans.push(Span::styled(body, style));
+                match colored {
+                    Some(regions) => {
+                        let mut column = 0;
+                        let room = width.saturating_sub(if gutter { 12 } else { 2 });
+                        for (look, value) in regions {
+                            let c = look.foreground;
+                            let mut piece = fill.fg(Color::Rgb(c.r, c.g, c.b));
+                            if look
+                                .font_style
+                                .contains(syntect::highlighting::FontStyle::BOLD)
+                            {
+                                piece = piece.add_modifier(Modifier::BOLD);
+                            }
+                            let clipped =
+                                clip(&printable(value), &mut column, view.hscroll, room, 4);
+                            if !clipped.is_empty() {
+                                spans.push(Span::styled(clipped, piece));
+                            }
+                        }
+                    }
+                    None => {
+                        let body: String = printable(&diff_line.text.replace('\t', "    "))
+                            .chars()
+                            .skip(view.hscroll)
+                            .collect();
+                        spans.push(Span::styled(body, style));
+                    }
+                }
                 if diff_line.unterminated {
                     spans.push(Span::styled("  ⏎ no newline at end", fill.fg(muted)));
                 }
@@ -2748,7 +2811,7 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Changes(_)))
             && !app.sidebar_focus
         {
-            " j k move   n N next change   ] [ file   y keep   x undo   Y X whole file   A keep all   U undo all   Enter open   q close"
+            " j k move   n N next change   ] [ file   y keep   x undo   Y X whole file   A keep all   U undo all   Enter open   s AI explains   i notes   q close"
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Git(_))) && !app.sidebar_focus {
             " Tab branches/commits   j k move   Enter branch only / commit diff   d details   a all   y copy hash   r refresh   ^B G maximize"
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Preview(_)))
@@ -2773,7 +2836,7 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 /// Greedy word wrap for plain text.
-fn wrap_words(text: &str, width: usize) -> Vec<String> {
+pub(crate) fn wrap_words(text: &str, width: usize) -> Vec<String> {
     let width = width.max(8);
     let mut lines = vec![String::new()];
     for word in text.split_whitespace() {
@@ -3118,6 +3181,50 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_review_shows_code_in_its_language_colors() {
+        let (_dir, root, mut changes) = crate::review::tests::project();
+        crate::review::tests::feature(&mut changes, &root);
+        let theme = crate::config::load_theme_from("visual-studio-dark", None).unwrap();
+        let syntax = crate::highlight::Syntax::new(&theme);
+        let mut view = crate::review::ChangesView::default();
+        view.show = true;
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 40)).unwrap();
+        terminal
+            .draw(|f| super::changes_view(f, &changes, &mut view, f.area(), &theme, &syntax))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = |text: &str| {
+            (0..40)
+                .find(|&y| {
+                    (0..100)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                        .contains(text)
+                })
+                .unwrap()
+        };
+        let fg = |text: &str, word: &str| {
+            let y = row(text);
+            let line: Vec<&str> = (0..100).map(|x| buffer[(x, y)].symbol()).collect();
+            let x = line.concat().find(word).unwrap();
+            let x = line.concat()[..x].chars().count() as u16;
+            buffer[(x, y)].fg
+        };
+        let colors = theme.syntax_colors.as_ref().unwrap();
+        // An added line in the editor's colors (Rust's `fn` is a storage type), not green.
+        assert_eq!(fg("+ fn greet", "fn"), color(&colors.r#type));
+        assert_ne!(color(&colors.r#type), change_color(Change::Added, &theme));
+        assert_eq!(fg("println!(\"hi", "\"hi"), color(&colors.string));
+        // Python in Python's colors, a removed Rust line in Rust's.
+        assert_eq!(fg("+ class Door:", "Door"), color(&colors.r#type));
+        assert_eq!(fg("-     two();", "two"), color(&colors.function));
+        // The summary under the file and at the end.
+        row("+ function greet — Says hello to `name`.");
+        row("Summary");
+    }
+
     #[test]
     fn icon_colors_stay_visible_on_light_backgrounds() {
         let dark = crate::config::load_theme_from("visual-studio-dark", None).unwrap();

@@ -186,6 +186,60 @@ impl Syntax {
         }
         cache.lines.len() < target
     }
+    /// The grammar for a file named `name`, unless it's plain text.
+    pub fn grammar(&self, name: &str) -> Option<&syntect::parsing::SyntaxReference> {
+        let extension = std::path::Path::new(name).extension()?.to_str()?;
+        self.syntaxes.find_syntax_by_extension(extension)
+    }
+    /// A review hunk's lines in the colors of file `name`'s language. The lines as
+    /// they were (context and removed) and as they are (context and added) each go
+    /// through a parser of their own from the hunk's start, so both versions color
+    /// as they read. `None` for plain text.
+    pub fn hunk(
+        &self,
+        name: &str,
+        lines: &[crate::review::Line],
+    ) -> Option<Vec<Vec<(Style, String)>>> {
+        use crate::review::Kind;
+        // A huge new file stays plain rather than holding up the screen.
+        if lines.len() > 5_000 {
+            return None;
+        }
+        let grammar = self.grammar(name)?;
+        let highlighter = Highlighter::new(&self.theme);
+        let fresh = || {
+            (
+                ParseState::new(grammar),
+                HighlightState::new(&highlighter, ScopeStack::new()),
+            )
+        };
+        let (mut before, mut after) = (fresh(), fresh());
+        let mut out = Vec::with_capacity(lines.len());
+        for line in lines {
+            let text = format!("{}\n", line.text);
+            let color = |(parse, state): &mut (ParseState, HighlightState)| {
+                if text.len() > 16_384 {
+                    return Vec::new();
+                }
+                match parse.parse_line(&text, &self.syntaxes) {
+                    Ok(ops) => HighlightIterator::new(state, &ops, &text, &highlighter)
+                        .map(|(style, piece)| (style, piece.trim_end_matches('\n').to_owned()))
+                        .filter(|(_, piece)| !piece.is_empty())
+                        .collect(),
+                    Err(_) => Vec::new(),
+                }
+            };
+            out.push(match line.kind {
+                Kind::Removed => color(&mut before),
+                Kind::Added => color(&mut after),
+                Kind::Context => {
+                    color(&mut before);
+                    color(&mut after)
+                }
+            });
+        }
+        Some(out)
+    }
     /// Whether the text just before column `col` (a char index) of `row` is inside a
     /// string or a comment, by the language's grammar. Suggestions don't pop up
     /// there by themselves.

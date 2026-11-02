@@ -229,6 +229,17 @@ impl Store {
 
 /// Run `command`, feeding it `input`, and return what it printed.
 fn run(command: &mut Command, input: Option<&[u8]>) -> Result<Vec<u8>, String> {
+    run_for(command, input, TIMEOUT, "git")
+}
+
+/// Run `command` (`what`, in errors) with `input` and give its output, stopping it
+/// after `timeout`.
+pub(crate) fn run_for(
+    command: &mut Command,
+    input: Option<&[u8]>,
+    timeout: Duration,
+    what: &str,
+) -> Result<Vec<u8>, String> {
     let mut child = command
         .stdin(if input.is_some() {
             Stdio::piped()
@@ -238,15 +249,15 @@ fn run(command: &mut Command, input: Option<&[u8]>) -> Result<Vec<u8>, String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("git: {e}"))?;
+        .map_err(|e| format!("{what}: {e}"))?;
     if let (Some(mut stdin), Some(input)) = (child.stdin.take(), input) {
         let input = input.to_vec();
         thread::spawn(move || {
             let _ = stdin.write_all(&input);
         });
     }
-    let mut stdout = child.stdout.take().ok_or("git: no output")?;
-    let mut stderr = child.stderr.take().ok_or("git: no output")?;
+    let mut stdout = child.stdout.take().ok_or(format!("{what}: no output"))?;
+    let mut stderr = child.stderr.take().ok_or(format!("{what}: no output"))?;
     let reader = thread::spawn(move || {
         let mut bytes = Vec::new();
         let _ = stdout.read_to_end(&mut bytes);
@@ -261,11 +272,11 @@ fn run(command: &mut Command, input: Option<&[u8]>) -> Result<Vec<u8>, String> {
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if start.elapsed() < TIMEOUT => thread::sleep(Duration::from_millis(5)),
+            Ok(None) if start.elapsed() < timeout => thread::sleep(Duration::from_millis(5)),
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err("git took too long".into());
+                return Err(format!("{what} took too long"));
             }
         }
     };
@@ -274,8 +285,11 @@ fn run(command: &mut Command, input: Option<&[u8]>) -> Result<Vec<u8>, String> {
     if status.success() {
         Ok(bytes)
     } else {
-        let line = errors.lines().next().unwrap_or("failed").to_string();
-        Err(format!("git: {line}"))
+        let line = errors
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("failed");
+        Err(format!("{what}: {}", line.trim()))
     }
 }
 
@@ -376,6 +390,8 @@ pub struct FileDiff {
     pub body: Body,
     pub added: usize,
     pub removed: usize,
+    /// What the change did, read from the code (see `outline`).
+    pub outline: crate::outline::Outline,
 }
 
 impl FileDiff {
@@ -463,10 +479,10 @@ fn compare(
         _ => Status::Modified,
     };
     let (old, new) = (old.unwrap_or_default(), new.unwrap_or_default());
-    let body = if is_text(old) && is_text(new) {
-        Body::Text(hunks(&lines(old), &lines(new)))
+    let (body, text) = if is_text(old) && is_text(new) {
+        (Body::Text(hunks(&lines(old), &lines(new))), true)
     } else {
-        Body::Binary
+        (Body::Binary, false)
     };
     let count = |kind| match &body {
         Body::Text(hunks) => hunks
@@ -481,7 +497,17 @@ fn compare(
         .strip_prefix(&store.root)
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .unwrap_or_else(|_| path.to_string());
+    let outline = match &body {
+        Body::Text(hunks) if text => crate::outline::outline(
+            &name,
+            std::str::from_utf8(old).unwrap_or_default(),
+            std::str::from_utf8(new).unwrap_or_default(),
+            hunks,
+        ),
+        _ => Default::default(),
+    };
     Some(FileDiff {
+        outline,
         added: count(Kind::Added),
         removed: count(Kind::Removed),
         path: path.to_string(),
@@ -619,6 +645,11 @@ pub struct Changes {
     written: HashMap<String, Option<u64>>,
     /// Files kept or undone while a snapshot ran; what it says about them is stale.
     acted: BTreeSet<String>,
+    /// The AI's reading of the changes (`s` in the review), the one on its way and
+    /// the agent asked, and why the last one failed.
+    pub summary: Option<crate::summary::Summary>,
+    summary_job: Option<(Receiver<Result<crate::summary::Summary, String>>, String)>,
+    pub summary_error: Option<String>,
 }
 
 impl Changes {
@@ -651,6 +682,9 @@ impl Changes {
             wanted: false,
             written: HashMap::new(),
             acted: BTreeSet::new(),
+            summary: None,
+            summary_job: None,
+            summary_error: None,
         }
     }
 
@@ -658,7 +692,7 @@ impl Changes {
     /// while AI panes wait (`agents`), and while the review is `watching`. `busy`
     /// names the AI panes working now. True when the review changed.
     pub fn tick(&mut self, busy: &[String], agents: bool, watching: bool) -> bool {
-        let mut changed = false;
+        let mut changed = self.summary_arrived();
         if let Some(receiver) = &self.job {
             match receiver.try_recv() {
                 Ok(result) => {
@@ -762,6 +796,59 @@ impl Changes {
             return false;
         }
         self.files = diffs;
+        self.version += 1;
+        true
+    }
+
+    /// Ask the AI named by config `review_ai` to explain the changes under review.
+    pub fn summarize(&mut self, setting: &str) -> Result<String, String> {
+        if self.files.is_empty() {
+            return Err("No agent changes to summarize".into());
+        }
+        if let Some((_, by)) = &self.summary_job {
+            return Ok(format!("{by} is still reading the changes…"));
+        }
+        let Some(agent) = crate::summary::Agent::from_setting(setting)? else {
+            return Err(
+                "AI summaries are off (review_ai = \"off\" in config.toml); the outline needs no AI"
+                    .into(),
+            );
+        };
+        let name = agent.name();
+        self.summary_error = None;
+        self.summary_job = Some((crate::summary::start(agent, &self.files), name.clone()));
+        self.version += 1;
+        Ok(format!(
+            "Asked {name} to explain the changes · it shows here when done"
+        ))
+    }
+
+    /// The AI asked to summarize is still reading: its name.
+    pub fn summarizing(&self) -> Option<&str> {
+        self.summary_job.as_ref().map(|(_, by)| by.as_str())
+    }
+
+    /// Whether the summary describes the changes as they are now.
+    pub fn summary_current(&self) -> bool {
+        self.summary
+            .as_ref()
+            .is_some_and(|s| s.key == crate::summary::key(&self.files))
+    }
+
+    fn summary_arrived(&mut self) -> bool {
+        let Some((receiver, by)) = &self.summary_job else {
+            return false;
+        };
+        let result = match receiver.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return false,
+            Err(mpsc::TryRecvError::Disconnected) => Err(format!("{by} stopped")),
+        };
+        self.summary_job = None;
+        match result {
+            Ok(summary) => self.summary = Some(summary),
+            Err(error) => self.summary_error = Some(error),
+        }
         self.version += 1;
         true
     }
@@ -1032,14 +1119,33 @@ pub enum Row {
     Line(usize, usize, usize),
     /// A file without lines to show (binary, empty).
     Note(usize),
+    /// A line of the summary (`ChangesView::texts`): under a file's heading, or of
+    /// the whole change at the end (no file).
+    Text(Option<usize>, usize),
     /// Space between files.
     Gap,
+}
+
+/// How a summary line reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tone {
+    /// Written by the AI.
+    Ai,
+    New,
+    Changed,
+    Removed,
+    Plain,
+    /// The summary's heading.
+    Title,
+    /// Hints and states.
+    Faint,
 }
 
 impl Row {
     pub fn file(self) -> Option<usize> {
         match self {
             Row::File(f) | Row::Hunk(f, _) | Row::Line(f, _, _) | Row::Note(f) => Some(f),
+            Row::Text(f, _) => f,
             Row::Gap => None,
         }
     }
@@ -1061,7 +1167,19 @@ pub struct ChangesView {
     pub hscroll: usize,
     /// Rows on screen, recorded at draw time for paging.
     pub height: usize,
-    version: Option<u64>,
+    /// Columns for the rows, recorded at draw time to wrap the summary.
+    pub width: usize,
+    /// Summaries shown: `notes` when you toggled them (`i`), else config's
+    /// `review_summary`; `show` is what the rows were built with.
+    pub notes: Option<bool>,
+    pub show: bool,
+    /// The summary's lines, for `Row::Text`.
+    pub texts: Vec<(Tone, String)>,
+    /// Each hunk's lines in its language's colors (`None`: plain text), by (file, hunk).
+    #[allow(clippy::type_complexity)]
+    pub colors: HashMap<(usize, usize), Option<Vec<Vec<(syntect::highlighting::Style, String)>>>>,
+    /// What the rows were built from: changes version, width, summaries shown.
+    built: Option<(u64, usize, bool)>,
     /// The files' paths when the rows were built, to find them again.
     paths: Vec<String>,
     /// An undo waiting for `y`: what, and the question asked.
@@ -1072,21 +1190,30 @@ impl ChangesView {
     /// Rebuild the rows when the changes did, keeping the cursor on the same file
     /// and hunk (or the one that took its place).
     pub fn sync(&mut self, changes: &Changes) {
-        if self.version == Some(changes.version) {
+        let wanted = (changes.version, self.width, self.show);
+        if self.built == Some(wanted) {
             return;
         }
         let anchor = self.rows.get(self.cursor).copied().map(|row| {
             let path = row.file().and_then(|f| self.paths.get(f).cloned());
             (row, path)
         });
-        self.version = Some(changes.version);
+        self.built = Some(wanted);
         self.paths = changes.files.iter().map(|f| f.path.clone()).collect();
         self.rows.clear();
+        self.texts.clear();
+        self.colors.clear();
         for (f, file) in changes.files.iter().enumerate() {
             if f > 0 {
                 self.rows.push(Row::Gap);
             }
             self.rows.push(Row::File(f));
+            if self.show {
+                for line in self.file_notes(changes, file) {
+                    self.texts.push(line);
+                    self.rows.push(Row::Text(Some(f), self.texts.len() - 1));
+                }
+            }
             let hunks = file.hunks();
             if hunks.is_empty() {
                 self.rows.push(Row::Note(f));
@@ -1095,6 +1222,13 @@ impl ChangesView {
                 self.rows.push(Row::Hunk(f, h));
                 self.rows
                     .extend((0..hunk.lines.len()).map(|l| Row::Line(f, h, l)));
+            }
+        }
+        if self.show && !changes.files.is_empty() {
+            self.rows.push(Row::Gap);
+            for line in self.overview(changes) {
+                self.texts.push(line);
+                self.rows.push(Row::Text(None, self.texts.len() - 1));
             }
         }
         let Some((row, path)) = anchor else {
@@ -1111,6 +1245,7 @@ impl ChangesView {
             let at = |wanted: Row| self.rows.iter().position(|r| *r == wanted);
             let hunks = changes.files.get(f)?.hunks().len();
             match row {
+                Row::Text(None, _) => None,
                 Row::Hunk(_, h) | Row::Line(_, h, _) if hunks > 0 => {
                     let h = h.min(hunks - 1);
                     let offset = match row {
@@ -1124,6 +1259,199 @@ impl ChangesView {
             }
         });
         self.cursor = target.unwrap_or(self.cursor.min(self.rows.len().saturating_sub(1)));
+    }
+
+    /// Room for summary text after its indent.
+    fn room(&self) -> usize {
+        self.width.saturating_sub(6).max(20)
+    }
+
+    /// Under a file's heading: what the AI said about it, then what the code shows
+    /// was added, changed and removed.
+    fn file_notes(&self, changes: &Changes, file: &FileDiff) -> Vec<(Tone, String)> {
+        let mut out = Vec::new();
+        if let Some(said) = changes
+            .summary
+            .as_ref()
+            .and_then(|s| s.files.get(&file.path))
+        {
+            for (i, line) in crate::ui::wrap_words(said, self.room())
+                .into_iter()
+                .enumerate()
+            {
+                out.push((
+                    Tone::Ai,
+                    format!("{} {line}", if i == 0 { "◆" } else { " " }),
+                ));
+            }
+        }
+        let outline = &file.outline;
+        const SHOWN: usize = 5;
+        for d in outline.added.iter().take(SHOWN) {
+            let doc = d
+                .doc
+                .as_ref()
+                .map(|doc| format!(" — {doc}"))
+                .unwrap_or_default();
+            out.push((Tone::New, format!("+ {} {}{doc}", d.kind, d.name)));
+        }
+        if outline.added.len() > SHOWN {
+            let rest: Vec<&str> = outline.added[SHOWN..]
+                .iter()
+                .map(|d| d.name.as_str())
+                .collect();
+            out.push((
+                Tone::New,
+                format!("+ {} more: {}", rest.len(), rest.join(", ")),
+            ));
+        }
+        if outline.tests > 0 {
+            let tests = outline.tests;
+            out.push((
+                Tone::New,
+                format!("+ {tests} test{}", if tests == 1 { "" } else { "s" }),
+            ));
+        }
+        if !outline.changed.is_empty() {
+            out.push((
+                Tone::Changed,
+                format!("~ changed {}", outline.changed.join(", ")),
+            ));
+        }
+        if !outline.removed.is_empty() {
+            out.push((
+                Tone::Removed,
+                format!("− removed {}", outline.removed.join(", ")),
+            ));
+        }
+        if !outline.imports.is_empty() {
+            out.push((Tone::Plain, format!("↳ {}", outline.imports.join(" · "))));
+        }
+        out
+    }
+
+    /// At the end: the AI's account of the whole change (or how to ask for one), and
+    /// what the code shows across all files.
+    fn overview(&self, changes: &Changes) -> Vec<(Tone, String)> {
+        let files = &changes.files;
+        let mut out = vec![(Tone::Title, "Summary".to_string())];
+        let room = self.room();
+        let wrapped = |tone, mark: &str, text: &str, out: &mut Vec<(Tone, String)>| {
+            for (i, line) in crate::ui::wrap_words(text, room).into_iter().enumerate() {
+                out.push((tone, format!("{} {line}", if i == 0 { mark } else { " " })));
+            }
+        };
+        match (
+            &changes.summary,
+            changes.summarizing(),
+            &changes.summary_error,
+        ) {
+            (_, Some(by), _) => out.push((Tone::Faint, format!("◆ {by} is reading the changes…"))),
+            (_, _, Some(error)) => wrapped(
+                Tone::Removed,
+                "◆",
+                &format!("The AI summary failed: {error}"),
+                &mut out,
+            ),
+            (Some(summary), ..) if !summary.overall.is_empty() => {
+                wrapped(Tone::Ai, "◆", &summary.overall, &mut out);
+                let when = if changes.summary_current() {
+                    format!("  by {} · s asks again", summary.by)
+                } else {
+                    format!(
+                        "  by {}, before the latest changes · s asks again",
+                        summary.by
+                    )
+                };
+                out.push((Tone::Faint, when));
+            }
+            _ => out.push((
+                Tone::Faint,
+                "◆ s: an AI explains these changes (uses tokens · review_ai in config.toml)".into(),
+            )),
+        }
+        let (added, removed) = changes.totals();
+        let mut agents: Vec<&str> = files
+            .iter()
+            .flat_map(|f| f.by.iter().map(String::as_str))
+            .collect();
+        agents.sort_unstable();
+        agents.dedup();
+        let mut line = format!(
+            "{} · +{added} −{removed}",
+            crate::review::files(files.len())
+        );
+        if !agents.is_empty() {
+            line.push_str(&format!(" · by {}", agents.join(", ")));
+        }
+        out.push((Tone::Plain, line));
+        let new: Vec<&str> = files
+            .iter()
+            .filter(|f| f.status == Status::Added)
+            .map(|f| f.name.as_str())
+            .collect();
+        if !new.is_empty() {
+            out.push((Tone::New, format!("+ new: {}", new.join(", "))));
+        }
+        let gone: Vec<&str> = files
+            .iter()
+            .filter(|f| f.status == Status::Deleted)
+            .map(|f| f.name.as_str())
+            .collect();
+        if !gone.is_empty() {
+            out.push((Tone::Removed, format!("− deleted: {}", gone.join(", "))));
+        }
+        // Definitions by what they are.
+        let count = |kinds: &[&str]| {
+            files
+                .iter()
+                .flat_map(|f| &f.outline.added)
+                .filter(|d| kinds.contains(&d.kind.as_str()))
+                .count()
+        };
+        let plural = |n: usize, one: &str, many: &str| match n {
+            0 => None,
+            1 => Some(format!("1 {one}")),
+            n => Some(format!("{n} {many}")),
+        };
+        let types = [
+            "struct",
+            "class",
+            "enum",
+            "trait",
+            "interface",
+            "type",
+            "union",
+        ];
+        let changed: usize = files.iter().map(|f| f.outline.changed.len()).sum();
+        let dropped: usize = files.iter().map(|f| f.outline.removed.len()).sum();
+        let tests: usize = files.iter().map(|f| f.outline.tests).sum();
+        let parts: Vec<String> = [
+            plural(count(&["function"]), "function", "functions").map(|p| format!("adds {p}")),
+            plural(count(&types), "type", "types").map(|p| format!("adds {p}")),
+            plural(count(&["section"]), "section", "sections").map(|p| format!("adds {p}")),
+            plural(changed, "definition changed", "definitions changed"),
+            plural(dropped, "removed", "removed"),
+            plural(tests, "new test", "new tests"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if !parts.is_empty() {
+            out.push((Tone::Plain, parts.join(" · ")));
+        }
+        // What's new, in the words of the comments written for it.
+        let documented: Vec<_> = files
+            .iter()
+            .flat_map(|f| &f.outline.added)
+            .filter(|d| d.doc.is_some() && d.kind != "section")
+            .take(8)
+            .collect();
+        for d in documented {
+            let doc = d.doc.as_deref().unwrap_or_default();
+            out.push((Tone::New, format!("+ {} — {doc}", d.name)));
+        }
+        out
     }
 
     pub fn move_by(&mut self, delta: isize) {
@@ -1202,7 +1530,7 @@ impl ChangesView {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn git(root: &Path, args: &[&str]) {
@@ -1238,7 +1566,7 @@ mod tests {
     }
 
     /// One agent turn: a snapshot while it waits, then it works (`edit`) and goes quiet.
-    fn turn(changes: &mut Changes, agent: &str, edit: impl FnOnce(&mut Changes)) {
+    pub(crate) fn turn(changes: &mut Changes, agent: &str, edit: impl FnOnce(&mut Changes)) {
         changes.last = Instant::now() - WAITING;
         changes.tick(&[], true, false);
         settle(changes, &[]);
@@ -1253,7 +1581,7 @@ mod tests {
         settle(changes, &[]);
     }
 
-    fn project() -> (tempfile::TempDir, PathBuf, Changes) {
+    pub(crate) fn project() -> (tempfile::TempDir, PathBuf, Changes) {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("project");
         fs::create_dir_all(root.join("src")).unwrap();
@@ -1275,6 +1603,100 @@ mod tests {
         fs::write(root.join("mine.txt"), "draft\n").unwrap();
         let changes = Changes::with_store(root.clone(), dir.path().join("store"));
         (dir, root, changes)
+    }
+
+    /// An agent turn that adds a documented function, changes `main` and adds a file.
+    pub(crate) fn feature(changes: &mut Changes, root: &Path) {
+        turn(changes, "Claude", |_| {
+            fs::write(
+                root.join("src/main.rs"),
+                "fn main() {\n    one();\n    greet(\"you\");\n}\n\n/// Says hello to `name`.\nfn greet(name: &str) {\n    println!(\"hi {name}\");\n}\n",
+            )
+            .unwrap();
+            fs::write(
+                root.join("src/door.py"),
+                "class Door:\n    def open(self):\n        \"\"\"Swing it wide.\"\"\"\n        return 1\n",
+            )
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn the_review_sums_up_each_file_and_the_whole_change() {
+        let (_dir, root, mut changes) = project();
+        feature(&mut changes, &root);
+        let mut view = ChangesView {
+            width: 100,
+            show: true,
+            ..Default::default()
+        };
+        view.sync(&changes);
+        let notes = |view: &ChangesView, file: Option<usize>| -> Vec<String> {
+            view.rows
+                .iter()
+                .filter_map(|row| match *row {
+                    Row::Text(f, t) if f == file => Some(view.texts[t].1.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        // Files in path order: src/door.py, then src/main.rs.
+        assert_eq!(
+            notes(&view, Some(0)),
+            ["+ class Door", "+ function Door.open — Swing it wide."]
+        );
+        assert_eq!(
+            notes(&view, Some(1)),
+            ["+ function greet — Says hello to `name`.", "~ changed main"]
+        );
+        let overview = notes(&view, None);
+        assert_eq!(overview[0], "Summary");
+        assert!(overview[1].starts_with("◆ s: an AI explains"));
+        assert!(
+            overview.contains(&"2 files · +10 −1 · by Claude".to_string()),
+            "{overview:#?}"
+        );
+        assert!(overview.contains(&"+ new: src/door.py".to_string()));
+        assert!(
+            overview.contains(&"adds 2 functions · adds 1 type · 1 definition changed".to_string())
+        );
+        assert!(overview.contains(&"+ greet — Says hello to `name`.".to_string()));
+        // The summary rows belong to their file: y and x there act on all of it.
+        let first = view
+            .rows
+            .iter()
+            .position(|r| matches!(r, Row::Text(Some(1), _)))
+            .unwrap();
+        view.cursor = first;
+        assert_eq!(
+            view.target(&changes, false),
+            Some(Target::File("src/main.rs".into()))
+        );
+        // An AI's summary goes first, until the changes move on from it.
+        changes.summary = Some(crate::summary::Summary {
+            files: [(
+                "src/main.rs".to_string(),
+                "Main now greets you.".to_string(),
+            )]
+            .into(),
+            overall: "Adds a greeting.".into(),
+            key: crate::summary::key(&changes.files),
+            by: "Claude".into(),
+        });
+        changes.version += 1;
+        view.sync(&changes);
+        assert_eq!(notes(&view, Some(1))[0], "◆ Main now greets you.");
+        let overview = notes(&view, None);
+        assert_eq!(overview[1], "◆ Adds a greeting.");
+        assert_eq!(overview[2], "  by Claude · s asks again");
+        changes.summary.as_mut().unwrap().key += 1;
+        changes.version += 1;
+        view.sync(&changes);
+        assert!(notes(&view, None)[2].contains("before the latest changes"));
+        // Hidden: only the diff.
+        view.show = false;
+        view.sync(&changes);
+        assert!(!view.rows.iter().any(|r| matches!(r, Row::Text(..))));
     }
 
     #[test]

@@ -620,8 +620,12 @@ more room.
 Like VS Code shows what Copilot or Claude changed, Raido shows what your AI panes
 change, whichever CLI runs in them (Codex, Claude Code, Gemini, a local model):
 **`Ctrl-b v`** or `:changes` opens the review. Each changed file is listed with its
-hunks, old and new line numbers, added lines in green and removed lines in red, and
-the agent that made it. It updates live while the agent works.
+hunks, old and new line numbers and the agent that made it. The code keeps its
+language's colors from your theme, as in the editor; a green or red tint and the
+`+` / `-` sign say whether a line was added or removed. It updates live while the
+agent works.
+
+![The review of an agent's change: a new file in Rust's colors, with what it adds listed under its name](docs/raido-review.png)
 
 ```text
 ╭ ◉ 4 CHANGES · 2 files +2 −1 ─────────────────────────────╮
@@ -655,8 +659,36 @@ opens the file at that line.
 | `A` / `U` | Keep / undo every file (`:changes keep`, `:changes undo`) |
 | Enter or `o` | Open the file at that line |
 | `h` / `l` | Scroll long lines sideways |
+| `s` | Ask an AI to explain the changes (uses tokens; see below) |
+| `i` | Hide / show the summaries |
 | `r` | Look again now |
 | `q` | Close the review |
+
+**What changed, at a glance.** Under each file's name the review lists what the
+change did to the code, and at the end it sums up the whole change:
+
+- **Without any AI (free, always on):** Raido reads the code with the same grammars it
+  highlights with and lists the functions, types and sections that are new (`+`),
+  changed inside (`~`) and gone (`−`), the imports added and the tests added. A new
+  definition shows the first sentence of the comment written above it, which agents
+  nearly always write, so you read *what* it's for, not just its name. The summary
+  at the end counts it all up, names new and deleted files, and lists the new
+  definitions with their comments.
+- **With an AI, when you ask (`s`):** an AI reads the diff and writes a sentence per
+  file and a few sentences about the change as a whole: what it does, how the
+  pieces fit together, and what's worth checking. They appear above the outline,
+  marked `◆`. Nothing is sent until you press `s`, and only the diff goes, cut to
+  60 KB. Raido runs the CLI you have without tools or a saved session, from
+  outside the project: Claude Code on its small model (Haiku, a few seconds and a
+  few thousand tokens), or Codex. When the agent changes more afterwards, the
+  summary says it's from before the latest changes; `s` asks again.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `review_summary` | `true` | The outline under each file and at the end; `false` hides it (`i` toggles it in the review) |
+| `review_ai` | `"auto"` | Who explains on `s`: `"auto"` (Claude Code, else Codex), `"claude"`, `"codex"`, a command that reads the prompt on its input and answers on its output (`"ollama run llama3.2"` keeps it on your machine, at no cost), or `"off"` |
+
+![The end of the review: the summary of the whole change](docs/raido-review-summary.png)
 
 When an AI pane finishes a prompt, the status line says how many files it changed
 (`Claude finished · 3 files to review: Ctrl-b v`), and its title shows
@@ -1425,6 +1457,8 @@ theme immediately. The configuration supports:
 | `mouse` | `true` | Wheel scrolls the pane under the pointer, a click focuses it, a drag selects and copies inside that pane ([Mouse](#mouse)); `false` leaves the mouse to the terminal |
 | `ai_sound` | `"default"` | Sound when an AI pane finishes a prompt: `"default"`, `"off"`, `"bell"`, a system sound name (macOS `"Hero"`, Windows `"chimes"`) or a sound file; `:sound` plays it |
 | `review_changes` | `true` | Track the files AI panes change, to [review, keep or undo](#review-ai-changes) them (`Ctrl-b v`) |
+| `review_summary` | `true` | In the review, list what each file's change added, changed and removed, and sum it up at the end, read from the code without AI |
+| `review_ai` | `"auto"` | Which AI explains the changes when you press `s` in the review: `"auto"`, `"claude"`, `"codex"`, a command, or `"off"` |
 | `claude_ide` | `true` | Let Claude Code [see your editor](#ai-panes-see-your-editor) (the file and selection) as in VS Code |
 | `format_on_save` | `["go"]` | Languages whose files get imports organized and formatting from their server on save ([Go: tidy on save](#go-tidy-on-save)) |
 | `ai_skill` | `true` | Keep the [Raido skill](#ask-your-ai-agent-about-raido) installed for the AI agents on this machine (at startup and when you launch one) |

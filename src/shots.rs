@@ -583,3 +583,31 @@ fn shots_minimap() {
         "Minimap: the file at a glance · where you are · what changed · click or drag to go".into();
     shot("raido-minimap", &mut app, w, h);
 }
+
+#[test]
+#[ignore = "renders the README screenshots; run scripts/screenshots.sh"]
+fn shots_review() {
+    let (_dir, root, mut changes) = crate::review::tests::project();
+    // An agent adds a link opener and wires it into main.
+    let link = fs::read_to_string("src/link.rs").unwrap();
+    let link = &link[..link.find("#[cfg(test)]").unwrap()];
+    crate::review::tests::turn(&mut changes, "Claude", |_| {
+        fs::write(root.join("src/link.rs"), link).unwrap();
+        fs::write(
+            root.join("src/main.rs"),
+            "mod link;\n\nfn main() {\n    one();\n    // Open the docs, as asked.\n    if let Err(error) = link::open(\"https://docs.rs\") {\n        eprintln!(\"no browser: {error}\");\n    }\n}\n",
+        )
+        .unwrap();
+    });
+    let (w, h) = (150, 46);
+    let mut app = app(&root, "visual-studio-dark");
+    app.changes = changes;
+    app.command("changes").unwrap();
+    app.zoom = true;
+    settle(&mut app, w, h, Duration::from_millis(300));
+    app.message = "Review AI changes · syntax colors · what changed, read from the code".into();
+    shot("raido-review", &mut app, w, h);
+    key(&mut app, KeyCode::Char('G'), KeyModifiers::SHIFT);
+    settle(&mut app, w, h, Duration::from_millis(100));
+    shot("raido-review-summary", &mut app, w, h);
+}

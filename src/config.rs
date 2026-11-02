@@ -171,6 +171,13 @@ pub struct Config {
     pub ai_sound: String,
     /// Track the files AI panes change, to review, keep or undo (Ctrl-b v).
     pub review_changes: bool,
+    /// Under each reviewed file and at the end: what was added, changed and removed,
+    /// read from the code without any AI (`i` in the review toggles it).
+    pub review_summary: bool,
+    /// The AI that explains the changes when you press `s` in the review: "auto"
+    /// (Claude Code, else Codex), "claude", "codex", a command that reads the prompt
+    /// on its input (`"ollama run llama3.2"`), or "off".
+    pub review_ai: String,
     /// Connect Claude Code to Raido as to VS Code: it sees your file and selection.
     pub claude_ide: bool,
     /// Mouse wheel scrolls what's under the pointer, a click focuses it and a drag
@@ -213,6 +220,8 @@ impl Default for Config {
             ai_skill: true,
             ai_sound: "default".into(),
             review_changes: true,
+            review_summary: true,
+            review_ai: "auto".into(),
             claude_ide: true,
             mouse: true,
             ai: BTreeMap::new(),
