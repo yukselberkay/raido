@@ -911,8 +911,22 @@ arrow keys, as in a normal terminal. A click focuses a pane, puts the editor cur
 on the character you clicked, or opens an explorer entry. A click on the
 [minimap](#minimap) jumps there; dragging its band scrolls.
 
-While Raido has the mouse, your terminal's click-and-drag selection is off. To select
-and copy with the mouse:
+**Drag to select and copy.** The selection stays inside the pane you started in, so
+running past its edge never picks up the explorer, borders or the pane next to it.
+Let go and the text is on the clipboard; paste it anywhere.
+
+- In a **terminal or AI pane** (and the preview, Git and review panes) the drag
+  selects what's on screen there, highlighted until your next key or click. Lines
+  the terminal wrapped are copied as one line, and the padding at line ends is
+  dropped.
+- In an **editor** the drag is a normal selection of the file's text: line numbers
+  and change marks are never copied, dragging past the top or bottom scrolls, and the
+  selection stays so you can type over it, delete it (`d`), or clear it with Escape.
+- **Double-click** copies a word: in an editor the word under the pointer, in other
+  panes the whole name, path or URL.
+
+To use your terminal's own selection instead (for rectangle selection, or to copy
+across panes):
 
 - **`Ctrl-b y`** (or `:mouse off`) hands the mouse back to the terminal and leaves the
   layout as it is: drag to select, ⌘C (Ctrl-Shift-C on Linux), paste anywhere. A
@@ -926,8 +940,8 @@ and copy with the mouse:
 
 ### Copying from terminal and AI panes
 
-Your terminal's mouse selection copies whole screen rows, so in a split layout it
-also picks up the explorer, borders and line numbers. Two ways around that:
+Dragging with the mouse selects and copies inside one pane (see [Mouse](#mouse)). For
+the keyboard, or text that has scrolled off screen, there are two more ways:
 
 **Copy mode (`Ctrl-b [`, or `:copymode`)** freezes the focused terminal or AI pane,
 including its scrollback (2,000 lines), and gives you a cursor, like tmux:
@@ -1398,7 +1412,7 @@ theme immediately. The configuration supports:
 | `restore_session` | `true` | Save each project's panes, buffers and terminals to `.raido/` and reopen them |
 | `[ai.name]` | None | Your own AI launcher: `program`, `args` (`{model}`), `model`, `env`; `[ai.local]` backs the Local LLM entry |
 | `ai_split` | `"right"` | Where AI panes open: `"right"` (side by side) or `"below"` (stacked) |
-| `mouse` | `true` | Wheel scrolls the pane under the pointer, a click focuses it ([Mouse](#mouse)); `false` leaves the mouse to the terminal |
+| `mouse` | `true` | Wheel scrolls the pane under the pointer, a click focuses it, a drag selects and copies inside that pane ([Mouse](#mouse)); `false` leaves the mouse to the terminal |
 | `ai_sound` | `"default"` | Sound when an AI pane finishes a prompt: `"default"`, `"off"`, `"bell"`, a system sound name (macOS `"Hero"`, Windows `"chimes"`) or a sound file; `:sound` plays it |
 | `review_changes` | `true` | Track the files AI panes change, to [review, keep or undo](#review-ai-changes) them (`Ctrl-b v`) |
 | `claude_ide` | `true` | Let Claude Code [see your editor](#ai-panes-see-your-editor) (the file and selection) as in VS Code |
@@ -1475,7 +1489,7 @@ another way in:
 | `Ctrl-b Shift-arrows` (move a pane) | Konsole (Shift+←/→) | `Ctrl-b H J K L` |
 | Alt+←/→ (word left/right) | Windows Terminal (moving between its panes) | Ctrl+←/→ |
 | Ctrl-V (paste) | Windows Terminal (its own paste) | works the same: the paste replaces a selection |
-| Mouse drag (select) | Raido, while it has the mouse | `Ctrl-b y` or `Ctrl-b Z` |
+| Your terminal's own mouse selection | Raido, while it has the mouse (drag selects in Raido instead) | `Ctrl-b y` or `Ctrl-b Z` |
 
 `raido --keys` shows exactly what your terminal sends, to check any other shortcut.
 
@@ -1496,7 +1510,7 @@ another way in:
   as host escape commands (no host OSC-52 clipboard execution).
 
 **v0.1 intentionally omits:** LSP rename/references/code actions, debugger, block selection,
-full Vim emulation, mouse selection and drag in the editor, remote collaboration,
+full Vim emulation, remote collaboration,
 and a marketplace. UTF-8 character movement is not grapheme-cluster editing.
 The terminal implements a practical VT100/xterm subset, not every Kitty/sixel/
 graphics protocol. Standard Codex/Claude CLI operation still depends on the installed

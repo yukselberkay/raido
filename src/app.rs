@@ -285,6 +285,13 @@ pub struct App {
     /// A minimap being dragged: the map, the row it was picked up at, and the
     /// editor's scroll then.
     minimap_drag: Option<(crate::minimap::Placed, u16, usize)>,
+    /// The left button went down in this pane (drawn at this rect, at this cell);
+    /// a drag from there selects text in it.
+    press: Option<(usize, Rect, (u16, u16))>,
+    /// The last click's time and cell, to tell a double click.
+    last_click: Option<(Instant, (u16, u16))>,
+    /// Text selected with the mouse in a pane other than an editor.
+    pub grab: Option<crate::grab::Grab>,
     pub redraw: bool,
     pub count: String,
     pending: Option<char>,
@@ -413,6 +420,9 @@ impl App {
             rectangles: Vec::new(),
             minimaps: Vec::new(),
             minimap_drag: None,
+            press: None,
+            last_click: None,
+            grab: None,
             redraw: true,
             count: String::new(),
             pending: None,
@@ -1550,7 +1560,8 @@ impl App {
                 crate::platform::COPY_KEY
             )
         } else {
-            "Mouse back: wheel scrolls, click focuses · Ctrl-b y releases it again".into()
+            "Mouse back: wheel scrolls, click focuses, drag copies · Ctrl-b y releases it again"
+                .into()
         });
     }
     /// The wheel scrolls what's under the pointer; a click focuses it, puts the
@@ -1570,6 +1581,10 @@ impl App {
         }
         match mouse.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                // What a mouse selection covered has moved.
+                if self.grab.as_ref().is_some_and(|g| g.done) {
+                    self.grab = None;
+                }
                 let up = mouse.kind == MouseEventKind::ScrollUp;
                 let step: isize = if up { -3 } else { 3 };
                 if self.help && inside(self.help_area) {
@@ -1587,9 +1602,16 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
+                self.grab = None;
+                self.press = None;
                 if self.input.is_some() || self.picker.is_some() || self.copy.is_some() {
                     return Ok(());
                 }
+                // A second click on the same cell soon after the first is a double click.
+                let double = self
+                    .last_click
+                    .is_some_and(|(when, cell)| cell == at && when.elapsed() < DOUBLE_CLICK);
+                self.last_click = (!double).then(|| (Instant::now(), at));
                 self.close_find();
                 if let Some(map) = self.minimaps.iter().copied().find(|m| inside(m.area)) {
                     if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
@@ -1626,7 +1648,12 @@ impl App {
                     }
                     self.focused = id;
                     self.sidebar_focus = false;
+                    self.press = Some((id, rect, at));
                     self.click_editor(id, rect, at);
+                    if double {
+                        self.press = None;
+                        self.double_click(id, rect, at);
+                    }
                     // A click in the review picks the row (below the pane's own heading).
                     if let Some(Pane::Changes(view)) = self.panes.get_mut(&id) {
                         if at.1 >= rect.y + 2 {
@@ -1638,8 +1665,21 @@ impl App {
                     }
                 }
             }
-            MouseEventKind::Drag(MouseButton::Left) => self.minimap_drag_to(at.1),
-            MouseEventKind::Up(MouseButton::Left) => self.minimap_drag = None,
+            MouseEventKind::Drag(MouseButton::Left) if self.minimap_drag.is_some() => {
+                self.minimap_drag_to(at.1)
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                // A drag between two clicks keeps them from making a double click.
+                self.last_click = None;
+                self.drag_select(at)
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.minimap_drag = None;
+                if self.press.take().is_some() {
+                    self.drag_select(at);
+                    self.copy_mouse_selection();
+                }
+            }
             _ => {}
         }
         Ok(())
@@ -1726,19 +1766,61 @@ impl App {
         let Some(Pane::Editor(buffer)) = self.panes.get(&id) else {
             return;
         };
+        let buffer = *buffer;
+        let Some((row, col)) = self.editor_point(id, buffer, rect, at, false) else {
+            return;
+        };
+        let b = &mut self.buffers[buffer];
+        b.end_group();
+        b.row = row;
+        b.col = col;
+        b.clamp();
+    }
+    /// The character of editor pane `id` (drawn at `rect`) at screen cell `at`.
+    /// With `follow`, a point outside the text is taken to the nearest character,
+    /// and above or below it to the line just off screen, so a drag past the edge
+    /// scrolls.
+    fn editor_point(
+        &self,
+        id: usize,
+        buffer: usize,
+        rect: Rect,
+        at: (u16, u16),
+        follow: bool,
+    ) -> Option<(usize, usize)> {
         let tab = self.config.tab_width.max(1);
-        let b = &mut self.buffers[*buffer];
+        let b = &self.buffers[buffer];
         let gutter = b.lines().to_string().len().max(3) as u16 + 2;
         let (left, top) = (rect.x + 1 + gutter, rect.y + 1);
-        if at.0 < left || at.1 < top {
-            return;
-        }
-        let row = b.scroll + usize::from(at.1 - top);
+        let inner = rect.height.saturating_sub(2);
+        let height = (inner - u16::from(inner > 3)).max(1);
+        // The code ends where its minimap begins.
+        let right = self
+            .minimaps
+            .iter()
+            .find(|m| m.pane == id)
+            .map_or(rect.right().saturating_sub(1), |m| m.area.x)
+            .max(left + 1);
+        let row = if follow {
+            if at.1 < top {
+                b.scroll.saturating_sub(1)
+            } else if at.1 >= top + height {
+                b.scroll + usize::from(height)
+            } else {
+                b.scroll + usize::from(at.1 - top)
+            }
+            .min(b.lines().saturating_sub(1))
+        } else {
+            if at.0 < left || at.1 < top {
+                return None;
+            }
+            b.scroll + usize::from(at.1 - top)
+        };
         if row >= b.lines() {
-            return;
+            return None;
         }
         // Screen column to character, with tabs as wide as they are drawn.
-        let target = b.hscroll + usize::from(at.0 - left);
+        let target = b.hscroll + usize::from(at.0.clamp(left, right - 1) - left);
         let mut x = 0;
         let mut col = 0;
         for c in b.line(row).chars() {
@@ -1753,10 +1835,107 @@ impl App {
             x += width;
             col += 1;
         }
-        b.end_group();
-        b.row = row;
-        b.col = col;
-        b.clamp();
+        Some((row, col))
+    }
+    /// A drag from a click selects: in an editor, its text as a Visual selection
+    /// (past the top or bottom it scrolls); elsewhere, the cells drawn in that pane
+    /// only, whatever the drag runs over.
+    fn drag_select(&mut self, at: (u16, u16)) {
+        let Some((id, rect, from)) = self.press else {
+            return;
+        };
+        if let Some(Pane::Editor(buffer)) = self.panes.get(&id) {
+            let buffer = *buffer;
+            if self.mode != Mode::Visual {
+                if at == from {
+                    return;
+                }
+                self.start_visual(Mode::Visual);
+            }
+            if let Some((row, col)) = self.editor_point(id, buffer, rect, at, true) {
+                // Normal mode's selection takes the character under the cursor: past
+                // the end of a line, that's its last one, not the line break.
+                let inclusive = self.visual_from != Mode::Insert;
+                let b = &mut self.buffers[buffer];
+                b.row = row;
+                b.col = col.min(b.line_len(row).saturating_sub(usize::from(inclusive)));
+                b.clamp();
+            }
+            return;
+        }
+        match self.grab.as_mut() {
+            Some(grab) => grab.drag(at),
+            None if at != from => {
+                let mut grab = crate::grab::Grab::new(id, self.text_area(rect), from);
+                grab.drag(at);
+                self.grab = Some(grab);
+            }
+            None => {}
+        }
+    }
+    /// A pane's inside, where its text is drawn: all of it in copy view.
+    fn text_area(&self, rect: Rect) -> Rect {
+        if self.copy_view.is_some() {
+            return rect;
+        }
+        Rect::new(
+            rect.x + 1,
+            rect.y + 1,
+            rect.width.saturating_sub(2),
+            rect.height.saturating_sub(2),
+        )
+    }
+    /// A double click takes the word under it: in an editor, as a Visual selection;
+    /// elsewhere the name, path or URL drawn there.
+    fn double_click(&mut self, id: usize, rect: Rect, at: (u16, u16)) {
+        if let Some(Pane::Editor(buffer)) = self.panes.get(&id) {
+            let b = &self.buffers[*buffer];
+            let Some((word, start)) = word_at(b) else {
+                return;
+            };
+            let end = start + word.chars().count();
+            self.start_visual(Mode::Visual);
+            let inclusive = self.visual_from != Mode::Insert;
+            if let Some(b) = self.active_buffer() {
+                b.anchor = Some(start);
+                let last = end - usize::from(inclusive);
+                b.row = b.text.char_to_line(last);
+                b.col = last - b.text.line_to_char(b.row);
+            }
+        } else {
+            let mut grab = crate::grab::Grab::new(id, self.text_area(rect), at);
+            grab.words = true;
+            self.grab = Some(grab);
+        }
+        self.copy_mouse_selection();
+    }
+    /// The button is up: copy what the mouse selected. An editor's selection stays
+    /// for typing over, deleting or Esc; another pane's is copied when next drawn
+    /// (it's taken from the screen).
+    fn copy_mouse_selection(&mut self) {
+        if let Some(grab) = self.grab.as_mut() {
+            grab.done = true;
+            return;
+        }
+        if self.mode != Mode::Visual || self.buffer_id().is_none() {
+            return;
+        }
+        if let Some((start, end)) = self.selection() {
+            let text = self.buffers[self.buffer_id().expect("editor")].slice(start, end);
+            let what = crate::grab::describe(&text);
+            self.clipboard.copy(text, false);
+            self.notice(format!("Copied {what} · Ctrl-v or p pastes · Esc clears"));
+        }
+    }
+    /// Called with the grab's text once it's drawn after the button came up.
+    pub fn copy_grab(&mut self, text: String) {
+        if text.is_empty() {
+            self.grab = None;
+            return;
+        }
+        let what = crate::grab::describe(&text);
+        self.clipboard.copy(text, false);
+        self.notice(format!("Copied {what} to the clipboard"));
     }
     fn input_start(&mut self, kind: InputKind) {
         self.input = Some(Input {
@@ -1767,6 +1946,7 @@ impl App {
         self.count.clear();
     }
     fn key(&mut self, key: KeyEvent) -> Result<()> {
+        self.grab = None;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         // F1 opens the guide focused, refocuses an open one, and closes a focused one.
         // Everything else keeps working while it is open.
@@ -4690,6 +4870,8 @@ impl App {
 /// Entries PgUp / PgDn move in the sidebar's lists (files, Git changes, search
 /// results): a short hop that keeps your place, not a whole screenful.
 const SIDEBAR_PAGE: isize = 5;
+/// Two clicks on one cell within this make a double click.
+const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
 /// The word (letters, digits, `_`) under or just before the cursor, and where it
 /// starts (a char index).
@@ -7094,6 +7276,107 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
     }
 
     #[cfg(unix)]
+    #[test]
+    fn a_mouse_drag_selects_and_copies_only_the_pane_it_began_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        std::fs::write(&path, "first line here\nsecond line\nthird\n").unwrap();
+        let mut app = App::new(dir.path().into(), Some(path), false).unwrap();
+        let id = app.buffer_id().unwrap();
+        let editor = app.focused;
+        let mouse = |app: &mut App, kind, (column, row): (u16, u16)| {
+            app.event(Event::Mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            }));
+        };
+        let drag = |app: &mut App, from, to| {
+            mouse(app, MouseEventKind::Down(MouseButton::Left), from);
+            mouse(app, MouseEventKind::Drag(MouseButton::Left), to);
+            mouse(app, MouseEventKind::Up(MouseButton::Left), to);
+        };
+        let script = "printf 'alpha beta\\nsrc/main.rs gamma\\n'; exec cat".to_string();
+        app.open_terminal(
+            Some(("/bin/sh", vec!["-c".into(), script])),
+            Some(Axis::Horizontal),
+        )
+        .unwrap();
+        let shell = app.focused;
+        for _ in 0..300 {
+            app.tick();
+            let Some(Pane::Terminal(t)) = app.panes.get(&shell) else {
+                unreachable!()
+            };
+            if t.transcript().contains("gamma") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let lines = screen(&mut app, 120, 30);
+        let find = |text: &str| {
+            let y = lines.iter().position(|l| l.contains(text)).unwrap();
+            let x = lines[y].find(text).unwrap();
+            // Columns count cells; everything before these is single-width ASCII
+            // or box drawing, one cell per char.
+            let x = lines[y][..x].chars().count();
+            (x as u16, y as u16)
+        };
+        let rect = |app: &App, id| app.rectangles.iter().find(|(i, _)| *i == id).unwrap().1;
+        // From "beta" in the shell, dragged down and left, over the editor beside it.
+        let (x, y) = find("beta");
+        let e = rect(&app, editor);
+        drag(&mut app, (x, y), (e.x + 3, y + 1));
+        assert!(app.grab.as_ref().is_some_and(|g| g.done));
+        screen(&mut app, 120, 30);
+        // The drag ended over the editor, so the shell's own first column.
+        assert_eq!(app.clipboard.paste().0, "beta\ns");
+        assert!(app.message.contains("Copied 2 lines"));
+        // A double click takes a whole path.
+        let (x, y) = find("main.rs");
+        mouse(&mut app, MouseEventKind::Down(MouseButton::Left), (x, y));
+        mouse(&mut app, MouseEventKind::Up(MouseButton::Left), (x, y));
+        mouse(&mut app, MouseEventKind::Down(MouseButton::Left), (x, y));
+        mouse(&mut app, MouseEventKind::Up(MouseButton::Left), (x, y));
+        screen(&mut app, 120, 30);
+        assert_eq!(app.clipboard.paste().0, "src/main.rs");
+        // A key clears the highlight.
+        assert!(app.grab.is_some());
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert!(app.grab.is_none());
+        // In the editor: a Visual selection of its own text, from "line" on the
+        // first row to "second li" below it (Normal mode takes the last character too).
+        let (x, y) = find("line here");
+        let t = rect(&app, shell);
+        drag(&mut app, (x, y), (x + 2, y + 1));
+        assert_eq!(app.focused, editor);
+        assert_eq!(app.mode, Mode::Visual);
+        assert_eq!(app.clipboard.paste().0, "line here\nsecond li");
+        // Past the pane's right edge, the selection stops at the end of the line.
+        drag(&mut app, (x, y), (t.x + 5, y));
+        assert_eq!(app.clipboard.paste().0, "line here");
+        assert_eq!(app.buffers[id].row, 0);
+        // A double click takes the word.
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        let (x, y) = find("second");
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            mouse(&mut app, kind, (x + 2, y));
+        }
+        assert_eq!(app.clipboard.paste().0, "second");
+        // A plain click selects nothing.
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        std::thread::sleep(DOUBLE_CLICK);
+        mouse(&mut app, MouseEventKind::Down(MouseButton::Left), (x, y));
+        mouse(&mut app, MouseEventKind::Up(MouseButton::Left), (x, y));
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.grab.is_none());
+    }
     #[test]
     fn mouse_wheel_scrolls_and_clicks_focus_what_is_under_the_pointer() {
         let dir = tempfile::tempdir().unwrap();

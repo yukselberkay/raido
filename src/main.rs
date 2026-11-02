@@ -5,6 +5,7 @@ mod copymode;
 mod editor;
 mod fonts;
 mod gitgraph;
+mod grab;
 mod highlight;
 mod icons;
 mod ide;

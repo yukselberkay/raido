@@ -173,8 +173,9 @@ pub struct Config {
     pub review_changes: bool,
     /// Connect Claude Code to Raido as to VS Code: it sees your file and selection.
     pub claude_ide: bool,
-    /// Mouse wheel scrolls what's under the pointer and a click focuses it. Raido then
-    /// owns the mouse: copy view (Ctrl-b Z) gives it back for selecting text.
+    /// Mouse wheel scrolls what's under the pointer, a click focuses it and a drag
+    /// selects and copies inside one pane. Ctrl-b y or copy view (Ctrl-b Z) give the
+    /// mouse back to the terminal for its own selection.
     pub mouse: bool,
     /// Your own AI launchers: `[ai.<name>] program = "…" args = […] env = {…}`.
     /// `[ai.local]` is used by the launcher's "Local LLM" entry.

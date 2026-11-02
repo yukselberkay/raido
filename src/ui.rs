@@ -208,6 +208,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let rectangles = app.rectangles.clone();
     let selection = app.selection();
     let customs = app.custom_agents();
+    // The terminal rows a mouse selection is on that run on into the next row.
+    let mut wrapped = Vec::new();
     for (id, rect) in rectangles {
         let active = id == app.focused && !app.sidebar_focus;
         let title = match app.panes.get(&id) {
@@ -450,6 +452,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     } else {
                         0
                     };
+                    if app.grab.as_ref().is_some_and(|g| g.pane == id) {
+                        wrapped = (0..inner.height)
+                            .map(|row| screen.row_wrapped(row + top))
+                            .collect();
+                    }
                     for row in 0..inner.height {
                         for col in 0..inner.width {
                             if let Some(cell) = screen.cell(row + top, col) {
@@ -576,6 +583,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             None => {}
         }
     }
+    mouse_selection(frame, app, &wrapped, &theme);
     if let Some(find) = &app.find {
         let pane = app.rectangles.iter().find(|(id, _)| *id == app.focused);
         if let Some(&(_, rect)) = pane {
@@ -1521,6 +1529,37 @@ fn editor(
         return Some(at);
     }
     None
+}
+
+/// Text selected with the mouse outside an editor: highlighted where it was drawn,
+/// and copied once the button is up.
+fn mouse_selection(frame: &mut Frame, app: &mut App, wrapped: &[bool], theme: &Theme) {
+    let Some(grab) = app.grab.as_mut() else {
+        return;
+    };
+    // Its pane closed, docked or moved: the selection is gone with it.
+    if !app
+        .rectangles
+        .iter()
+        .any(|&(id, rect)| id == grab.pane && rect.intersection(grab.area) == grab.area)
+    {
+        app.grab = None;
+        return;
+    }
+    grab.grow(frame.buffer_mut());
+    let text = (grab.done && !grab.copied).then(|| grab.text(frame.buffer_mut(), wrapped));
+    let bg = crate::markdown::mix(color(&theme.selection), color(&theme.accent), 0.45);
+    for y in grab.area.y..grab.area.bottom() {
+        for x in grab.columns(y).into_iter().flatten() {
+            if let Some(cell) = frame.buffer_mut().cell_mut((x, y)) {
+                cell.set_bg(bg);
+            }
+        }
+    }
+    if let Some(text) = text {
+        grab.copied = true;
+        app.copy_grab(text);
+    }
 }
 
 pub(crate) fn severity_color(theme: &Theme, severity: u8) -> Color {
@@ -2823,6 +2862,10 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         (
             "Mouse wheel / click",
             "Scroll what's under the pointer / focus, place cursor, open",
+        ),
+        (
+            "Mouse drag / double-click",
+            "Select and copy in that pane only / copy a word",
         ),
         ("Ctrl-b g", "Focus the Git sidebar"),
         (
