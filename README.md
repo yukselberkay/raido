@@ -1570,7 +1570,15 @@ another way in:
 
 - Ropey text storage with structural-sharing undo (200 snapshots).
 - Cached Syntect highlighting, incremental work budgets and long-line bounds.
-- Ratatui redraws only on input/output/state change, not on every timer tick.
+- Ratatui redraws only on input/output/state change, not on every timer tick, at
+  most 120 frames a second. Input waiting together (a burst of wheel turns, a held
+  key, a typed paste) is handled before one frame. While you type or a terminal
+  prints, Raido looks for more every 4 ms, so a terminal's echo and output show at
+  once; after a quarter second of quiet it looks every 33 ms. Windows' timer rounds
+  the 4 ms up to about 16 ms. Each frame is sent as one synchronized update (DEC
+  mode 2026), so terminals that support it (iTerm2, WezTerm, kitty, Ghostty, foot,
+  Alacritty, recent Windows Terminal) never show half a frame; the others, macOS
+  Terminal among them, ignore it.
 - PTY I/O runs off the UI thread. Git refreshes on a worker with process timeouts.
 - UTF-8 text only; 16 MiB open-file limit; binary files are rejected.
 - Atomic same-directory saves preserve Unix permission bits. The original file

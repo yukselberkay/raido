@@ -41,14 +41,32 @@ use crossterm::{
     cursor::{Hide, Show},
     event::{self, DisableBracketedPaste, EnableBracketedPaste},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{
+        disable_raw_mode, enable_raw_mode, BeginSynchronizedUpdate, EndSynchronizedUpdate,
+        EnterAlternateScreen, LeaveAlternateScreen,
+    },
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{
     io::{self, IsTerminal, Write},
     path::PathBuf,
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+/// The shortest time between two frames (120 a second): output that comes faster
+/// is drawn together.
+const FRAME: Duration = Duration::from_millis(8);
+/// How long to wait for input while something just happened (a key, a terminal's
+/// output): its echo or the next lines show within a few milliseconds. Windows'
+/// timer rounds this up to about 16 ms.
+const LIVELY: Duration = Duration::from_millis(4);
+/// How long it stays lively after the last thing that happened.
+const SETTLE: Duration = Duration::from_millis(250);
+/// How long to wait while nothing happens; terminals that start printing again are
+/// noticed within this.
+const IDLE: Duration = Duration::from_millis(33);
+/// Input handled before the next frame at most, so a flood still shows.
+const BATCH: usize = 512;
 
 /// Point the terminal's own default background/foreground (OSC 11/10) at the theme,
 /// so a light terminal profile can't show through the window padding or any cell
@@ -241,8 +259,14 @@ fn main() -> Result<()> {
     terminal.clear()?;
     let mut applied_colors = None;
     let mut mouse = false;
+    let mut drawn = Instant::now() - FRAME;
+    let mut lively = Instant::now();
     while app.running {
         app.tick();
+        // Output, an answer from a server, a key: something's moving.
+        if app.redraw {
+            lively = Instant::now();
+        }
         // Follow runtime theme switches (`:theme NAME`).
         let colors = (app.theme.background.clone(), app.theme.foreground.clone());
         if applied_colors.as_ref() != Some(&colors) {
@@ -257,15 +281,42 @@ fn main() -> Result<()> {
             write!(out, "{}", if mouse { MOUSE_ON } else { MOUSE_OFF })?;
             out.flush()?;
         }
-        if app.redraw {
+        let due = FRAME.saturating_sub(drawn.elapsed());
+        if app.redraw && due.is_zero() {
             app.redraw = false;
-            terminal.draw(|frame| ui::draw(frame, &mut app))?;
+            drawn = Instant::now();
+            // One frame reaches the screen whole, never half drawn, in terminals that
+            // support it; the others ignore the request.
+            execute!(io::stdout(), BeginSynchronizedUpdate)?;
+            let frame = terminal.draw(|frame| ui::draw(frame, &mut app));
+            execute!(io::stdout(), EndSynchronizedUpdate)?;
+            frame?;
         }
-        if event::poll(Duration::from_millis(33))? {
+        if event::poll(wait(app.redraw, drawn.elapsed(), lively.elapsed()))? {
+            // Everything already waiting is handled before the next frame: a burst of
+            // wheel turns, a held key or a typed-out paste draws once, not per event.
             app.event(event::read()?);
+            let mut handled = 1;
+            while handled < BATCH && app.running && event::poll(Duration::ZERO)? {
+                app.event(event::read()?);
+                handled += 1;
+            }
+            lively = Instant::now();
         }
     }
     Ok(())
+}
+
+/// How long to wait for input: until the next frame is due when one is waiting,
+/// briefly while things are moving, else a while.
+fn wait(redraw: bool, since_frame: Duration, since_lively: Duration) -> Duration {
+    if redraw {
+        FRAME.saturating_sub(since_frame)
+    } else if since_lively < SETTLE {
+        LIVELY
+    } else {
+        IDLE
+    }
 }
 
 /// `raido --keys`: print every key and click as Raido receives it. A combination
@@ -334,4 +385,22 @@ fn show_keys() -> Result<()> {
     write!(out, "{MOUSE_OFF}")?;
     disable_raw_mode()?;
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn waits_for_the_next_frame_briefly_when_lively_and_longer_when_idle() {
+        let ms = Duration::from_millis;
+        // A frame waiting: drawn as soon as the last one is a frame old.
+        assert_eq!(wait(true, ms(3), ms(0)), ms(5));
+        assert_eq!(wait(true, ms(50), ms(0)), Duration::ZERO);
+        // Output or a key just now: a quick look for the next.
+        assert_eq!(wait(false, ms(50), ms(100)), LIVELY);
+        // Quiet for a while: idle, as before.
+        assert_eq!(wait(false, ms(50), ms(400)), IDLE);
+        assert!(LIVELY < FRAME && FRAME < IDLE);
+    }
 }
