@@ -690,6 +690,10 @@ change did to the code, and at the end it sums up the whole change:
   for one file), the review says so instead of looking complete: a file read only
   in part is marked "read in part", and the summary says "Explained 6 of 9 files:
   the rest didn't fit". Press `s` again and only the files it didn't read go.
+- **What it cost** shows under the summary, as the AI reports it: `3.9k tokens
+  ($0.004)` from Claude Code (tokens and price), tokens only from Codex, and the
+  total for every explanation since Raido started. Most of a small request is the
+  CLI's own instructions: about 3.5k tokens for Claude Code, about 13k for Codex.
 
 | Setting | Default | |
 | --- | --- | --- |

@@ -650,6 +650,10 @@ pub struct Changes {
     pub summary: Option<crate::summary::Summary>,
     summary_job: Option<(Receiver<Result<crate::summary::Summary, String>>, String)>,
     pub summary_error: Option<String>,
+    /// What all the explanations asked for since Raido started cost.
+    pub spent: crate::summary::Usage,
+    /// How many there were.
+    pub asked: usize,
 }
 
 impl Changes {
@@ -685,6 +689,8 @@ impl Changes {
             summary: None,
             summary_job: None,
             summary_error: None,
+            spent: Default::default(),
+            asked: 0,
         }
     }
 
@@ -852,6 +858,10 @@ impl Changes {
         self.summary_job = None;
         match result {
             Ok(mut summary) => {
+                self.asked += 1;
+                if let Some(usage) = summary.usage {
+                    self.spent.add(usage);
+                }
                 // What it said before about files it wasn't sent stays, for the files
                 // still under review.
                 if let Some(before) = self.summary.take() {
@@ -1408,6 +1418,18 @@ impl ChangesView {
                 }
                 when.push_str(" · s asks again");
                 out.push((Tone::Faint, when));
+                // What it cost, when the AI says, and all the asking since Raido started.
+                if let Some(usage) = summary.usage {
+                    let mut cost = format!("  {}", usage.describe());
+                    if changes.asked > 1 {
+                        cost.push_str(&format!(
+                            " · {} for {} explanations since Raido started",
+                            changes.spent.describe(),
+                            changes.asked
+                        ));
+                    }
+                    out.push((Tone::Faint, cost));
+                }
             }
             _ => out.push((
                 Tone::Faint,
@@ -1729,6 +1751,11 @@ pub(crate) mod tests {
             by: "Claude".into(),
             sent: 2,
             left_out: Vec::new(),
+            usage: Some(crate::summary::Usage {
+                input: 3400,
+                output: 120,
+                cost: Some(0.004),
+            }),
         });
         changes.version += 1;
         view.sync(&changes);
@@ -1736,6 +1763,7 @@ pub(crate) mod tests {
         let overview = notes(&view, None);
         assert_eq!(overview[1], "◆ Adds a greeting.");
         assert_eq!(overview[2], "  by Claude · s asks again");
+        assert_eq!(overview[3], "  3.5k tokens ($0.004)");
         changes.summary.as_mut().unwrap().key += 1;
         changes.version += 1;
         view.sync(&changes);

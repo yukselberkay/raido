@@ -53,6 +53,42 @@ pub struct Summary {
     pub sent: usize,
     /// Files with new changes that didn't fit in the last request; `s` sends them.
     pub left_out: Vec<String>,
+    /// What the last request cost, when the AI says.
+    pub usage: Option<Usage>,
+}
+
+/// Tokens a request used, and its price when the AI tells it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Usage {
+    /// Everything read, cached parts included.
+    pub input: u64,
+    pub output: u64,
+    pub cost: Option<f64>,
+}
+
+impl Usage {
+    pub fn add(&mut self, other: Usage) {
+        self.input += other.input;
+        self.output += other.output;
+        self.cost = match (self.cost, other.cost) {
+            (None, None) => None,
+            (a, b) => Some(a.unwrap_or(0.0) + b.unwrap_or(0.0)),
+        };
+    }
+    /// "3.6k tokens ($0.003)".
+    pub fn describe(&self) -> String {
+        let total = self.input + self.output;
+        let tokens = match total {
+            0..1_000 => total.to_string(),
+            1_000..1_000_000 => format!("{:.1}k", total as f64 / 1e3),
+            _ => format!("{:.1}M", total as f64 / 1e6),
+        };
+        match self.cost {
+            Some(cost) if cost >= 0.01 => format!("{tokens} tokens (${cost:.2})"),
+            Some(cost) => format!("{tokens} tokens (${cost:.3})"),
+            None => format!("{tokens} tokens"),
+        }
+    }
 }
 
 impl Summary {
@@ -246,7 +282,7 @@ pub fn start(
         .collect();
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
-        let answer = ask(&agent, &prompt).map(|text| {
+        let answer = ask(&agent, &prompt).map(|(text, usage)| {
             let paths: Vec<String> = keys.iter().map(|(p, ..)| p.clone()).collect();
             let (said, overall) = parse(&text, &paths);
             let files = keys
@@ -268,6 +304,7 @@ pub fn start(
                 by: agent.name(),
                 sent: keys.len(),
                 left_out,
+                usage,
             }
         });
         let _ = sender.send(answer);
@@ -276,7 +313,7 @@ pub fn start(
 }
 
 /// Run the agent outside the project, so it reads nothing but the prompt.
-fn ask(agent: &Agent, prompt: &str) -> Result<String, String> {
+fn ask(agent: &Agent, prompt: &str) -> Result<(String, Option<Usage>), String> {
     let quiet = std::env::temp_dir();
     let mut answer_file: Option<PathBuf> = None;
     let mut command = match agent {
@@ -292,6 +329,8 @@ fn ask(agent: &Agent, prompt: &str) -> Result<String, String> {
                 "",
                 "--strict-mcp-config",
                 "--no-session-persistence",
+                "--output-format",
+                "json",
             ]);
             command
         }
@@ -308,6 +347,7 @@ fn ask(agent: &Agent, prompt: &str) -> Result<String, String> {
                     "read-only",
                     "--color",
                     "never",
+                    "--json",
                     "-o",
                 ])
                 .arg(&file)
@@ -331,19 +371,63 @@ fn ask(agent: &Agent, prompt: &str) -> Result<String, String> {
         TIMEOUT,
         &agent.name(),
     );
-    let text = match &answer_file {
-        Some(file) => {
+    let (text, usage) = match (agent, &answer_file) {
+        (Agent::Codex, Some(file)) => {
             let text = std::fs::read_to_string(file);
             let _ = std::fs::remove_file(file);
-            output?;
-            text.map_err(|e| e.to_string())?
+            let events = String::from_utf8_lossy(&output?).into_owned();
+            (text.map_err(|e| e.to_string())?, codex_usage(&events))
         }
-        None => String::from_utf8_lossy(&output?).into_owned(),
+        (Agent::Claude, _) => {
+            let (text, usage) = claude_answer(&String::from_utf8_lossy(&output?))?;
+            (text, Some(usage))
+        }
+        _ => (String::from_utf8_lossy(&output?).into_owned(), None),
     };
     if text.trim().is_empty() {
         return Err(format!("{} answered nothing", agent.name()));
     }
-    Ok(text)
+    Ok((text, usage))
+}
+
+/// Claude Code's JSON answer: the text, and the tokens and price it took.
+fn claude_answer(json: &str) -> Result<(String, Usage), String> {
+    let value: serde_json::Value =
+        serde_json::from_str(json.trim()).map_err(|_| "Claude answered in an unexpected form")?;
+    let text = value["result"].as_str().unwrap_or_default().to_string();
+    if value["is_error"].as_bool() == Some(true) {
+        return Err(format!(
+            "Claude: {}",
+            text.lines().next().unwrap_or("failed")
+        ));
+    }
+    let usage = &value["usage"];
+    let count = |key: &str| usage[key].as_u64().unwrap_or(0);
+    let usage = Usage {
+        input: count("input_tokens")
+            + count("cache_creation_input_tokens")
+            + count("cache_read_input_tokens"),
+        output: count("output_tokens"),
+        cost: value["total_cost_usd"].as_f64(),
+    };
+    Ok((text, usage))
+}
+
+/// The tokens in Codex's events (`--json`), from the turn that finished.
+fn codex_usage(events: &str) -> Option<Usage> {
+    events.lines().rev().find_map(|line| {
+        let value: serde_json::Value = serde_json::from_str(line).ok()?;
+        if value["type"] != "turn.completed" {
+            return None;
+        }
+        let usage = &value["usage"];
+        let count = |key: &str| usage[key].as_u64().unwrap_or(0);
+        Some(Usage {
+            input: count("input_tokens"),
+            output: count("output_tokens") + count("reasoning_output_tokens"),
+            cost: None,
+        })
+    })
 }
 
 /// The FILE lines by path, and the OVERALL text. An answer not in that form is
@@ -405,6 +489,34 @@ mod tests {
         println!("{summary:#?}");
         assert_eq!(summary.files.len(), 2);
         assert!(!summary.overall.is_empty());
+    }
+
+    #[test]
+    fn token_use_is_read_from_claude_and_codex() {
+        let claude = r#"{"type":"result","is_error":false,"result":"FILE a: b","total_cost_usd":0.0034,
+            "usage":{"input_tokens":2,"cache_creation_input_tokens":2873,"cache_read_input_tokens":649,"output_tokens":120}}"#;
+        let (text, usage) = claude_answer(claude).unwrap();
+        assert_eq!(text, "FILE a: b");
+        assert_eq!((usage.input, usage.output), (3524, 120));
+        assert_eq!(usage.describe(), "3.6k tokens ($0.003)");
+        let failed =
+            r#"{"type":"result","is_error":true,"result":"Not logged in · Please run /login"}"#;
+        assert_eq!(
+            claude_answer(failed).unwrap_err(),
+            "Claude: Not logged in · Please run /login"
+        );
+        let codex = "{\"type\":\"thread.started\"}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":12782,\"cached_input_tokens\":10496,\"output_tokens\":5,\"reasoning_output_tokens\":40}}\n";
+        let usage = codex_usage(codex).unwrap();
+        assert_eq!((usage.input, usage.output, usage.cost), (12782, 45, None));
+        assert_eq!(usage.describe(), "12.8k tokens");
+        assert_eq!(codex_usage("not json"), None);
+        let mut total = usage;
+        total.add(Usage {
+            input: 1_000_000,
+            output: 0,
+            cost: Some(0.5),
+        });
+        assert_eq!(total.describe(), "1.0M tokens ($0.50)");
     }
 
     #[test]
