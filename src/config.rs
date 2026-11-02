@@ -174,10 +174,13 @@ pub struct Config {
     /// Under each reviewed file and at the end: what was added, changed and removed,
     /// read from the code without any AI (`i` in the review toggles it).
     pub review_summary: bool,
-    /// The AI that explains the changes when you press `s` in the review: "auto"
-    /// (Claude Code, else Codex), "claude", "codex", a command that reads the prompt
-    /// on its input (`"ollama run llama3.2"`), or "off".
-    pub review_ai: String,
+    /// The AI that explains the changes when you press `s` in the review, or a list
+    /// of them to try in order (the first installed answers): "auto" (Claude Code,
+    /// Codex, Gemini, a local model), "claude", "codex", "gemini", "local", each
+    /// optionally with a model (`"claude:sonnet"`, `"local:llama3.2"`), a command
+    /// that reads the prompt on its input, or "off".
+    #[serde(deserialize_with = "one_or_more")]
+    pub review_ai: Vec<String>,
     /// Connect Claude Code to Raido as to VS Code: it sees your file and selection.
     pub claude_ide: bool,
     /// Mouse wheel scrolls what's under the pointer, a click focuses it and a drag
@@ -221,7 +224,7 @@ impl Default for Config {
             ai_sound: "default".into(),
             review_changes: true,
             review_summary: true,
-            review_ai: "auto".into(),
+            review_ai: vec!["auto".into()],
             claude_ide: true,
             mouse: true,
             ai: BTreeMap::new(),
@@ -231,6 +234,20 @@ impl Default for Config {
             lsp: BTreeMap::new(),
         }
     }
+}
+
+/// A setting that's one string or a list of them.
+fn one_or_more<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        One(String),
+        More(Vec<String>),
+    }
+    Ok(match Raw::deserialize(deserializer)? {
+        Raw::One(one) => vec![one],
+        Raw::More(more) => more,
+    })
 }
 
 /// Explorer icon style. `Auto` resolves to `Nerd` or `Basic` when the config loads.
@@ -533,6 +550,15 @@ mod tests {
         assert_eq!(theme.background, "#0a0b0c");
         assert!(load_theme_from("mine", None).is_err());
         assert!(load_theme_from("missing", Some(dir.path())).is_err());
+    }
+    #[test]
+    fn review_ai_takes_one_ai_or_a_list_to_try_in_order() {
+        let config: Config = toml::from_str("review_ai = \"claude:sonnet\"").unwrap();
+        assert_eq!(config.review_ai, ["claude:sonnet"]);
+        let config: Config = toml::from_str("review_ai = [\"local\", \"claude\"]").unwrap();
+        assert_eq!(config.review_ai, ["local", "claude"]);
+        assert_eq!(Config::default().review_ai, ["auto"]);
+        assert!(toml::from_str::<Config>("review_ai = 3").is_err());
     }
     #[test]
     fn saving_a_theme_edits_only_the_theme_line() {

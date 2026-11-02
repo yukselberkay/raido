@@ -1,13 +1,13 @@
 //! An AI's reading of the changes under review, asked for only when you press `s`
 //! in the review (it costs tokens): a sentence per file and a short account of the
 //! whole change. It runs the AI CLI you have, without tools or a session: Claude
-//! Code on its small, quick model, or Codex. Asked again, it's sent only the files
-//! whose changes it hasn't read; what it said about the others is kept.
+//! Code on its small, quick model, Codex, Gemini, or a local model with Ollama, on
+//! the model you choose. Asked again, it's sent only the files whose changes it
+//! hasn't read; what it said about the others is kept.
 use crate::review::{run_for, Body, FileDiff, Kind, Status};
 use std::{
     collections::HashMap,
     hash::{Hash, Hasher},
-    path::PathBuf,
     process::Command,
     sync::mpsc::{self, Receiver},
     thread,
@@ -99,40 +99,109 @@ impl Summary {
     }
 }
 
-/// The AI CLI that summarizes.
+/// Which AI summarizes, and on which model (`None`: its own default; Claude
+/// Code's is Haiku here, the local one the first model Ollama has).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Agent {
-    Claude,
-    Codex,
+    Claude(Option<String>),
+    Codex(Option<String>),
+    Gemini(Option<String>),
+    /// Ollama, the way the AI launcher's Local LLM entry finds it.
+    Local(Option<String>),
     /// A command of your own: the prompt on its input, the answer on its output.
     Command(Vec<String>),
 }
 
+/// What `"auto"` tries, in order.
+const AUTO: [&str; 4] = ["claude", "codex", "gemini", "local"];
+
 impl Agent {
-    /// From config `review_ai`: "auto" (Claude Code, else Codex), "claude",
-    /// "codex", a command, or "off" (`None`).
-    pub fn from_setting(setting: &str) -> Result<Option<Self>, String> {
-        let installed = |name| crate::platform::which(name).is_some();
-        match setting.trim() {
-            "" | "off" | "false" | "none" => Ok(None),
-            "auto" if installed("claude") => Ok(Some(Self::Claude)),
-            "auto" if installed("codex") => Ok(Some(Self::Codex)),
-            "auto" => Err("AI summaries need Claude Code or Codex installed, or review_ai set to a command in config.toml".into()),
-            "claude" => Ok(Some(Self::Claude)),
-            "codex" => Ok(Some(Self::Codex)),
-            command => Ok(Some(Self::Command(
-                command.split_whitespace().map(str::to_string).collect(),
-            ))),
+    /// One `review_ai` entry: `"claude"`, `"codex"`, `"gemini"` or `"local"`,
+    /// each optionally with `:model`, or a command.
+    pub fn parse(entry: &str) -> Self {
+        let entry = entry.trim();
+        let (name, model) = match entry.split_once(':') {
+            Some((name, model)) => (
+                name,
+                Some(model.trim().to_string()).filter(|m| !m.is_empty()),
+            ),
+            None => (entry, None),
+        };
+        match name {
+            "claude" => Self::Claude(model),
+            "codex" => Self::Codex(model),
+            "gemini" => Self::Gemini(model),
+            "local" | "ollama" => Self::Local(model),
+            _ => Self::Command(entry.split_whitespace().map(str::to_string).collect()),
         }
     }
-    pub fn name(&self) -> String {
+    /// The first of config's `review_ai` entries installed here (`"auto"`: Claude
+    /// Code, Codex, Gemini, a local model). `None` when they're off.
+    pub fn choose(entries: &[String]) -> Result<Option<Self>, String> {
+        let entries: Vec<&str> = entries
+            .iter()
+            .map(|e| e.trim())
+            .filter(|e| !e.is_empty())
+            .collect();
+        if entries.is_empty()
+            || entries
+                .iter()
+                .any(|e| matches!(*e, "off" | "false" | "none"))
+        {
+            return Ok(None);
+        }
+        let tried: Vec<&str> = entries
+            .iter()
+            .flat_map(|e| {
+                if *e == "auto" {
+                    AUTO.to_vec()
+                } else {
+                    vec![*e]
+                }
+            })
+            .collect();
+        tried
+            .iter()
+            .map(|e| Self::parse(e))
+            .find(Self::installed)
+            .map(Some)
+            .ok_or_else(|| {
+                format!(
+                    "No AI to explain with: {} not installed · set review_ai in config.toml",
+                    tried.join(", ")
+                )
+            })
+    }
+    fn program(&self) -> &str {
         match self {
-            Self::Claude => "Claude".into(),
-            Self::Codex => "Codex".into(),
-            Self::Command(words) => words.first().cloned().unwrap_or_default(),
+            Self::Claude(_) => "claude",
+            Self::Codex(_) => "codex",
+            Self::Gemini(_) => "gemini",
+            Self::Local(_) => "ollama",
+            Self::Command(words) => words.first().map_or("", String::as_str),
+        }
+    }
+    fn installed(&self) -> bool {
+        crate::platform::which(self.program()).is_some()
+    }
+    /// "Claude (haiku)", "Codex", "Local (llama3.2)".
+    pub fn name(&self) -> String {
+        let (name, model) = match self {
+            Self::Claude(model) => ("Claude", Some(model.as_deref().unwrap_or(CLAUDE_MODEL))),
+            Self::Codex(model) => ("Codex", model.as_deref()),
+            Self::Gemini(model) => ("Gemini", model.as_deref()),
+            Self::Local(model) => ("Local", model.as_deref()),
+            Self::Command(_) => (self.program(), None),
+        };
+        match model {
+            Some(model) => format!("{name} ({model})"),
+            None => name.to_string(),
         }
     }
 }
+
+/// Claude Code's model unless you choose one: quick, and cheap for a summary.
+const CLAUDE_MODEL: &str = "haiku";
 
 /// Which changes a file has, to tell whether what was said about it still holds.
 pub fn file_key(file: &FileDiff) -> u64 {
@@ -282,7 +351,7 @@ pub fn start(
         .collect();
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
-        let answer = ask(&agent, &prompt).map(|(text, usage)| {
+        let answer = ask(&agent, &prompt).map(|(text, usage, by)| {
             let paths: Vec<String> = keys.iter().map(|(p, ..)| p.clone()).collect();
             let (said, overall) = parse(&text, &paths);
             let files = keys
@@ -301,7 +370,7 @@ pub fn start(
                 files,
                 overall,
                 key,
-                by: agent.name(),
+                by,
                 sent: keys.len(),
                 left_out,
                 usage,
@@ -312,19 +381,21 @@ pub fn start(
     Some(receiver)
 }
 
-/// Run the agent outside the project, so it reads nothing but the prompt.
-fn ask(agent: &Agent, prompt: &str) -> Result<(String, Option<Usage>), String> {
-    let quiet = std::env::temp_dir();
-    let mut answer_file: Option<PathBuf> = None;
-    let mut command = match agent {
-        Agent::Claude => {
-            let mut command = Command::new(
-                crate::platform::which("claude").ok_or("Claude Code isn't installed")?,
-            );
+/// Run the agent outside the project, in an empty folder, so it reads nothing but
+/// the prompt: the answer, what it cost when the AI says, and who answered.
+fn ask(agent: &Agent, prompt: &str) -> Result<(String, Option<Usage>, String), String> {
+    let quiet = std::env::temp_dir().join(format!("raido-summary-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&quiet);
+    let answer_file = quiet.join("answer.txt");
+    let found = |program: &str| {
+        crate::platform::which(program).ok_or_else(|| format!("{program} isn't installed"))
+    };
+    let mut by = agent.name();
+    let mut command = Command::new(found(agent.program())?);
+    match agent {
+        Agent::Claude(model) => {
+            command.args(["-p", "--model", model.as_deref().unwrap_or(CLAUDE_MODEL)]);
             command.args([
-                "-p",
-                "--model",
-                "haiku",
                 "--tools",
                 "",
                 "--strict-mcp-config",
@@ -332,62 +403,90 @@ fn ask(agent: &Agent, prompt: &str) -> Result<(String, Option<Usage>), String> {
                 "--output-format",
                 "json",
             ]);
-            command
         }
-        Agent::Codex => {
-            let file = quiet.join(format!("raido-summary-{}.txt", std::process::id()));
-            let mut command =
-                Command::new(crate::platform::which("codex").ok_or("Codex isn't installed")?);
-            command
-                .args([
-                    "exec",
-                    "--ephemeral",
-                    "--skip-git-repo-check",
-                    "--sandbox",
-                    "read-only",
-                    "--color",
-                    "never",
-                    "--json",
-                    "-o",
-                ])
-                .arg(&file)
-                .arg("-");
-            answer_file = Some(file);
-            command
+        Agent::Codex(model) => {
+            command.args(["exec", "--ephemeral", "--skip-git-repo-check"]);
+            command.args(["--sandbox", "read-only", "--color", "never", "--json"]);
+            if let Some(model) = model {
+                command.args(["--model", model]);
+            }
+            command.arg("-o").arg(&answer_file).arg("-");
+        }
+        Agent::Gemini(model) => {
+            // The prompt goes on its input; this line is added after it.
+            command.args(["-p", "Answer as asked above.", "-o", "json"]);
+            command.args(["--approval-mode", "plan"]);
+            if let Some(model) = model {
+                command.args(["--model", model]);
+            }
+        }
+        Agent::Local(model) => {
+            let model = match model {
+                Some(model) => model.clone(),
+                None => crate::local_ai::ollama_models()
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .next()
+                    .ok_or("Ollama has no models yet · pull one: ollama pull qwen3")?,
+            };
+            by = format!("Local ({model})");
+            command.args(["run", &model, "--hidethinking", "--nowordwrap"]);
         }
         Agent::Command(words) => {
-            let (program, args) = words.split_first().ok_or("review_ai is empty")?;
-            let mut command = Command::new(
-                crate::platform::which(program).ok_or(format!("{program} isn't installed"))?,
-            );
-            command.args(args);
-            command
+            command.args(&words[1..]);
         }
-    };
-    command.current_dir(&quiet);
-    let output = run_for(
-        &mut command,
-        Some(prompt.as_bytes()),
-        TIMEOUT,
-        &agent.name(),
-    );
-    let (text, usage) = match (agent, &answer_file) {
-        (Agent::Codex, Some(file)) => {
-            let text = std::fs::read_to_string(file);
-            let _ = std::fs::remove_file(file);
-            let events = String::from_utf8_lossy(&output?).into_owned();
-            (text.map_err(|e| e.to_string())?, codex_usage(&events))
-        }
-        (Agent::Claude, _) => {
-            let (text, usage) = claude_answer(&String::from_utf8_lossy(&output?))?;
-            (text, Some(usage))
-        }
-        _ => (String::from_utf8_lossy(&output?).into_owned(), None),
-    };
-    if text.trim().is_empty() {
-        return Err(format!("{} answered nothing", agent.name()));
     }
-    Ok((text, usage))
+    command.current_dir(&quiet);
+    let output = run_for(&mut command, Some(prompt.as_bytes()), TIMEOUT, &by);
+    let answer = (|| -> Result<(String, Option<Usage>), String> {
+        let stdout = String::from_utf8_lossy(&output?).into_owned();
+        Ok(match agent {
+            Agent::Claude(_) => {
+                let (text, usage) = claude_answer(&stdout)?;
+                (text, Some(usage))
+            }
+            Agent::Codex(_) => {
+                let text = std::fs::read_to_string(&answer_file).map_err(|e| e.to_string())?;
+                (text, codex_usage(&stdout))
+            }
+            Agent::Gemini(_) => {
+                let (text, usage) = gemini_answer(&stdout)?;
+                (text, Some(usage))
+            }
+            Agent::Local(_) | Agent::Command(_) => (stdout, None),
+        })
+    })();
+    let _ = std::fs::remove_dir_all(&quiet);
+    let (text, usage) = answer?;
+    if text.trim().is_empty() {
+        return Err(format!("{by} answered nothing"));
+    }
+    Ok((text, usage, by))
+}
+
+/// Gemini CLI's JSON answer (`-o json`): the text, and the tokens of every model it
+/// used.
+fn gemini_answer(json: &str) -> Result<(String, Usage), String> {
+    // Anything it prints before the JSON (warnings) is skipped.
+    let json = json.find('{').map_or(json, |at| &json[at..]);
+    let value: serde_json::Value =
+        serde_json::from_str(json.trim()).map_err(|_| "Gemini answered in an unexpected form")?;
+    if let Some(message) = value["error"]["message"].as_str() {
+        return Err(format!("Gemini: {message}"));
+    }
+    let mut usage = Usage::default();
+    if let Some(models) = value["stats"]["models"].as_object() {
+        for model in models.values() {
+            let tokens = &model["tokens"];
+            let count = |key: &str| tokens[key].as_u64().unwrap_or(0);
+            usage.input += count("prompt");
+            usage.output += count("candidates") + count("thoughts");
+        }
+    }
+    Ok((
+        value["response"].as_str().unwrap_or_default().to_string(),
+        usage,
+    ))
 }
 
 /// Claude Code's JSON answer: the text, and the tokens and price it took.
@@ -476,12 +575,14 @@ pub fn parse(text: &str, paths: &[String]) -> (HashMap<String, String>, String) 
 mod tests {
     use super::*;
 
+    /// A real change explained by `agent` (`RAIDO_AI`, default Claude Code).
     #[test]
-    #[ignore = "asks Claude Code (uses tokens)"]
-    fn claude_summarizes_a_real_change() {
+    #[ignore = "asks an AI (uses tokens): RAIDO_AI=codex cargo test real_ai -- --ignored"]
+    fn real_ai_summarizes_a_real_change() {
+        let agent = Agent::parse(&std::env::var("RAIDO_AI").unwrap_or("claude".into()));
         let (_dir, root, mut changes) = crate::review::tests::project();
         crate::review::tests::feature(&mut changes, &root);
-        let summary = start(Agent::Claude, &changes.files, None)
+        let summary = start(agent, &changes.files, None)
             .unwrap()
             .recv_timeout(TIMEOUT)
             .unwrap()
@@ -489,6 +590,7 @@ mod tests {
         println!("{summary:#?}");
         assert_eq!(summary.files.len(), 2);
         assert!(!summary.overall.is_empty());
+        assert!(summary.usage.is_some_and(|u| u.input > 0));
     }
 
     #[test]
@@ -533,16 +635,64 @@ mod tests {
     }
 
     #[test]
-    fn settings_name_the_agent() {
-        assert_eq!(Agent::from_setting("off"), Ok(None));
-        assert_eq!(Agent::from_setting("claude"), Ok(Some(Agent::Claude)));
+    fn settings_name_the_agent_and_its_model() {
+        assert_eq!(Agent::parse("claude"), Agent::Claude(None));
         assert_eq!(
-            Agent::from_setting("ollama run llama3.2"),
-            Ok(Some(Agent::Command(vec![
-                "ollama".into(),
-                "run".into(),
-                "llama3.2".into()
-            ])))
+            Agent::parse("claude:sonnet"),
+            Agent::Claude(Some("sonnet".into()))
+        );
+        assert_eq!(
+            Agent::parse("gemini:gemini-2.5-flash").name(),
+            "Gemini (gemini-2.5-flash)"
+        );
+        assert_eq!(
+            Agent::parse("local:qwen3:8b"),
+            Agent::Local(Some("qwen3:8b".into()))
+        );
+        assert_eq!(Agent::parse("codex").name(), "Codex");
+        assert_eq!(Agent::parse("claude").name(), "Claude (haiku)");
+        assert_eq!(
+            Agent::parse("llm -m mini"),
+            Agent::Command(vec!["llm".into(), "-m".into(), "mini".into()])
+        );
+        let list = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(Agent::choose(&list(&["off"])), Ok(None));
+        assert_eq!(Agent::choose(&list(&[])), Ok(None));
+        // The first one installed answers; `sh` is everywhere, the first isn't.
+        #[cfg(unix)]
+        assert_eq!(
+            Agent::choose(&list(&["no-such-ai-here --x", "sh -c cat"])),
+            Ok(Some(Agent::parse("sh -c cat")))
+        );
+        let error = Agent::choose(&list(&["no-such-ai-here"])).unwrap_err();
+        assert!(error.contains("no-such-ai-here not installed"), "{error}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_command_of_your_own_reads_the_prompt_and_answers() {
+        let (text, usage, by) = ask(&Agent::parse("sh -c cat"), "FILE a: b").unwrap();
+        assert_eq!(
+            (text.as_str(), usage, by.as_str()),
+            ("FILE a: b", None, "sh")
+        );
+        assert!(ask(&Agent::parse("sh -c true"), "x")
+            .unwrap_err()
+            .contains("answered nothing"));
+    }
+
+    #[test]
+    fn gemini_answers_and_token_use_are_read() {
+        let json = r#"Loaded cached credentials.
+{"response":"FILE a: b","stats":{"models":{"gemini-2.5-flash":{"tokens":{"prompt":900,"candidates":80,"total":1000,"cached":0,"thoughts":20}},
+"gemini-2.5-flash-lite":{"tokens":{"prompt":100,"candidates":0}}}}}"#;
+        let (text, usage) = gemini_answer(json).unwrap();
+        assert_eq!(text, "FILE a: b");
+        assert_eq!((usage.input, usage.output, usage.cost), (1000, 100, None));
+        let failed = r#"{"error":{"type":"Error","message":"Please set an Auth method"}}"#;
+        assert_eq!(
+            gemini_answer(failed).unwrap_err(),
+            "Gemini: Please set an Auth method"
         );
     }
 
@@ -599,6 +749,11 @@ mod tests {
         let (again, _) = super::prompt(&[&both[1]], &[("x.txt", "Adds b.")]);
         assert!(again.contains("unchanged since:\nFILE x.txt: Adds b.\n"));
         assert!(again.contains("=== y.txt") && !again.contains("=== x.txt"));
-        assert!(start(Agent::Claude, std::slice::from_ref(&file), Some(&before)).is_none());
+        assert!(start(
+            Agent::Claude(None),
+            std::slice::from_ref(&file),
+            Some(&before)
+        )
+        .is_none());
     }
 }

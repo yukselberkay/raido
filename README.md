@@ -678,9 +678,11 @@ change did to the code, and at the end it sums up the whole change:
   file and a few sentences about the change as a whole: what it does, how the
   pieces fit together, and what's worth checking. They appear above the outline,
   marked `◆`. Nothing is sent until you press `s`, and only the diff goes, cut to
-  60 KB. Raido runs the CLI you have without tools or a saved session, from
-  outside the project: Claude Code on its small model (Haiku, a few seconds and a
-  few thousand tokens), or Codex. When the agent changes more afterwards, the
+  60 KB. Raido runs the AI you have without tools or a saved session, from an
+  empty folder outside the project: Claude Code on its small model (Haiku, a few
+  seconds and a few thousand tokens), Codex, Gemini CLI, or a local model with
+  Ollama (on your machine, nothing billed), on the model you choose (see
+  `review_ai` below). When the agent changes more afterwards, the
   summary says it's from before the latest changes, and what it said about a file
   that changed since is dimmed. `s` then sends only the files whose changes are
   new: the rest keep what was said about them, which goes along in a line each so
@@ -698,7 +700,22 @@ change did to the code, and at the end it sums up the whole change:
 | Setting | Default | |
 | --- | --- | --- |
 | `review_summary` | `true` | The outline under each file and at the end; `false` hides it (`i` toggles it in the review) |
-| `review_ai` | `"auto"` | Who explains on `s`: `"auto"` (Claude Code, else Codex), `"claude"`, `"codex"`, a command that reads the prompt on its input and answers on its output (`"ollama run llama3.2"` keeps it on your machine, at no cost), or `"off"` |
+| `review_ai` | `"auto"` | Who explains on `s`, or a list to try in order (the first one installed answers). `"auto"` tries Claude Code, Codex, Gemini, then a local model. Name one with `"claude"`, `"codex"`, `"gemini"` or `"local"`, and a model after a colon, as that CLI names it: `"claude:sonnet"`, `"local:llama3.2"`, `"codex:<model>"`, `"gemini:<model>"`. Also a command that reads the prompt on its input and answers on its output, or `"off"` |
+
+Without a model, Claude Code uses Haiku (cheap and quick, which suits a summary;
+`claude:sonnet` explains more carefully for more), Codex and Gemini their own
+default, and `local` the first model Ollama has. For example:
+
+```toml
+review_ai = ["local:qwen3", "claude"]   # free on your machine; Claude when Ollama isn't installed
+```
+
+| AI | What it reports | Checked |
+| --- | --- | --- |
+| Claude Code | tokens and price | yes |
+| Codex | tokens | yes |
+| Gemini CLI | tokens | from Gemini's documented output; not run here |
+| Local (Ollama) | nothing (free) | from Ollama's documented flags; not run here |
 
 ![The end of the review: the summary of the whole change](docs/raido-review-summary.png)
 
@@ -1470,7 +1487,7 @@ theme immediately. The configuration supports:
 | `ai_sound` | `"default"` | Sound when an AI pane finishes a prompt: `"default"`, `"off"`, `"bell"`, a system sound name (macOS `"Hero"`, Windows `"chimes"`) or a sound file; `:sound` plays it |
 | `review_changes` | `true` | Track the files AI panes change, to [review, keep or undo](#review-ai-changes) them (`Ctrl-b v`) |
 | `review_summary` | `true` | In the review, list what each file's change added, changed and removed, and sum it up at the end, read from the code without AI |
-| `review_ai` | `"auto"` | Which AI explains the changes when you press `s` in the review: `"auto"`, `"claude"`, `"codex"`, a command, or `"off"` |
+| `review_ai` | `"auto"` | Which AI explains the changes when you press `s` in the review, or a list to try in order: `"auto"`, `"claude"`, `"codex"`, `"gemini"`, `"local"`, each with an optional `:model`, a command, or `"off"` |
 | `claude_ide` | `true` | Let Claude Code [see your editor](#ai-panes-see-your-editor) (the file and selection) as in VS Code |
 | `format_on_save` | `["go"]` | Languages whose files get imports organized and formatting from their server on save ([Go: tidy on save](#go-tidy-on-save)) |
 | `ai_skill` | `true` | Keep the [Raido skill](#ask-your-ai-agent-about-raido) installed for the AI agents on this machine (at startup and when you launch one) |

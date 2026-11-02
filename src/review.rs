@@ -808,14 +808,14 @@ impl Changes {
 
     /// Ask the AI named by config `review_ai` to explain the changes under review:
     /// only the files it hasn't explained as they are now, unless `afresh`.
-    pub fn summarize(&mut self, setting: &str, afresh: bool) -> Result<String, String> {
+    pub fn summarize(&mut self, setting: &[String], afresh: bool) -> Result<String, String> {
         if self.files.is_empty() {
             return Err("No agent changes to summarize".into());
         }
         if let Some((_, by)) = &self.summary_job {
             return Ok(format!("{by} is still reading the changes…"));
         }
-        let Some(agent) = crate::summary::Agent::from_setting(setting)? else {
+        let Some(agent) = crate::summary::Agent::choose(setting)? else {
             return Err(
                 "AI summaries are off (review_ai = \"off\" in config.toml); the outline needs no AI"
                     .into(),
