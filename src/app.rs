@@ -4062,10 +4062,12 @@ impl App {
                     "Summaries shown · i hides them"
                 });
             }
-            KeyCode::Char('s') => match self.changes.summarize(&self.config.review_ai) {
-                Ok(message) => self.notice(message),
-                Err(error) => self.fail(error),
-            },
+            KeyCode::Char(c @ ('s' | 'S')) => {
+                match self.changes.summarize(&self.config.review_ai, c == 'S') {
+                    Ok(message) => self.notice(message),
+                    Err(error) => self.fail(error),
+                }
+            }
             KeyCode::Char('q') => self.close(false)?,
             KeyCode::Char(':') => self.input_start(InputKind::Command),
             _ => {}

@@ -659,7 +659,7 @@ opens the file at that line.
 | `A` / `U` | Keep / undo every file (`:changes keep`, `:changes undo`) |
 | Enter or `o` | Open the file at that line |
 | `h` / `l` | Scroll long lines sideways |
-| `s` | Ask an AI to explain the changes (uses tokens; see below) |
+| `s` / `S` | Ask an AI to explain the new changes / all of them again (uses tokens; see below) |
 | `i` | Hide / show the summaries |
 | `r` | Look again now |
 | `q` | Close the review |
@@ -681,7 +681,11 @@ change did to the code, and at the end it sums up the whole change:
   60 KB. Raido runs the CLI you have without tools or a saved session, from
   outside the project: Claude Code on its small model (Haiku, a few seconds and a
   few thousand tokens), or Codex. When the agent changes more afterwards, the
-  summary says it's from before the latest changes; `s` asks again.
+  summary says it's from before the latest changes, and what it said about a file
+  that changed since is dimmed. `s` then sends only the files whose changes are
+  new: the rest keep what was said about them, which goes along in a line each so
+  the account of the whole change covers everything. With nothing new, `s` sends
+  nothing. `S` explains everything again from scratch.
 
 | Setting | Default | |
 | --- | --- | --- |

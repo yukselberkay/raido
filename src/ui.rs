@@ -2811,7 +2811,7 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Changes(_)))
             && !app.sidebar_focus
         {
-            " j k move   n N next change   ] [ file   y keep   x undo   Y X whole file   A keep all   U undo all   Enter open   s AI explains   i notes   q close"
+            " j k move   n N next change   ] [ file   y keep   x undo   Y X whole file   A keep all   U undo all   Enter open   s/S AI explains new/all   i notes   q close"
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Git(_))) && !app.sidebar_focus {
             " Tab branches/commits   j k move   Enter branch only / commit diff   d details   a all   y copy hash   r refresh   ^B G maximize"
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Preview(_)))

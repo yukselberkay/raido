@@ -1,7 +1,8 @@
 //! An AI's reading of the changes under review, asked for only when you press `s`
-//! in the review (it costs tokens): a sentence or two per file and a short account
-//! of the whole change. It runs the AI CLI you have, without tools or a session:
-//! Claude Code on its small, quick model, or Codex.
+//! in the review (it costs tokens): a sentence per file and a short account of the
+//! whole change. It runs the AI CLI you have, without tools or a session: Claude
+//! Code on its small, quick model, or Codex. Asked again, it's sent only the files
+//! whose changes it hasn't read; what it said about the others is kept.
 use crate::review::{run_for, Body, FileDiff, Kind, Status};
 use std::{
     collections::HashMap,
@@ -18,16 +19,34 @@ const MAX_DIFF: usize = 60_000;
 const MAX_FILE: usize = 16_000;
 const TIMEOUT: Duration = Duration::from_secs(240);
 
+/// What the AI said about one file, and which of its changes it read then.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Note {
+    pub key: u64,
+    pub text: String,
+}
+
 /// What the AI said about the changes.
 #[derive(Clone, Debug, Default)]
 pub struct Summary {
     /// By Git path.
-    pub files: HashMap<String, String>,
+    pub files: HashMap<String, Note>,
     pub overall: String,
-    /// The changes it read (see `key`): when they differ now, it's out of date.
+    /// All the changes when the overall was written (see `key`): when they differ
+    /// now, it's out of date.
     pub key: u64,
     /// Who wrote it: "Claude", "Codex" or the command.
     pub by: String,
+    /// Files whose diff went with the last request; the rest were explained before.
+    pub sent: usize,
+}
+
+impl Summary {
+    /// What it said about `file`, and whether that was about the changes it has now.
+    pub fn note(&self, file: &FileDiff) -> Option<(&str, bool)> {
+        let note = self.files.get(&file.path)?;
+        Some((note.text.as_str(), note.key == file_key(file)))
+    }
 }
 
 /// The AI CLI that summarizes.
@@ -65,22 +84,29 @@ impl Agent {
     }
 }
 
-/// Which changes these are, to tell whether a summary still describes them.
-pub fn key(files: &[FileDiff]) -> u64 {
+/// Which changes a file has, to tell whether what was said about it still holds.
+pub fn file_key(file: &FileDiff) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for file in files {
-        file.path.hash(&mut hasher);
-        for hunk in file.hunks() {
-            for line in &hunk.lines {
-                (line.kind as u8, &line.text).hash(&mut hasher);
-            }
+    (&file.path, file.status as u8).hash(&mut hasher);
+    for hunk in file.hunks() {
+        for line in &hunk.lines {
+            (line.kind as u8, &line.text).hash(&mut hasher);
         }
     }
     hasher.finish()
 }
 
+/// Which changes these are, all files together.
+pub fn key(files: &[FileDiff]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for file in files {
+        file_key(file).hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// The changes as a unified diff, cut down to a size worth sending.
-fn diff(files: &[FileDiff]) -> String {
+fn diff(files: &[&FileDiff]) -> String {
     let mut out = String::new();
     for file in files {
         let status = match file.status {
@@ -138,38 +164,75 @@ fn floor(text: &str, mut at: usize) -> usize {
     at
 }
 
-pub fn prompt(files: &[FileDiff]) -> String {
-    format!(
-        "An AI coding agent just made the changes below to a developer's project. \
-Explain them briefly to the developer, who is reviewing them to keep or undo.\n\n\
+/// The prompt for the diffs of `files`; `known` are other files under review and
+/// what was said about them before, for the overall account.
+pub fn prompt(files: &[&FileDiff], known: &[(&str, &str)]) -> String {
+    let mut out = String::from(
+        "An AI coding agent just changed a developer's project. Explain the changes \
+briefly to the developer, who is reviewing them to keep or undo.\n\n\
 Answer in exactly this form, as plain text without Markdown:\n\
 FILE <the path exactly as written after ===>: <one short sentence, at most 25 words: what changed in this file and how it works>\n\
-(one FILE line for every file)\n\
-OVERALL: <two to four short sentences: what the change does as a whole, how the pieces work together, and anything worth checking>\n\n\
-{}",
-        diff(files)
-    )
+(one FILE line for every file in the diff below)\n\
+OVERALL: <two to four short sentences about the whole change, every file listed here included: what it does, how the pieces work together, and anything worth checking>\n",
+    );
+    if !known.is_empty() {
+        out.push_str("\nFiles explained before, unchanged since:\n");
+        for (path, said) in known {
+            out.push_str(&format!("FILE {path}: {said}\n"));
+        }
+    }
+    if files.is_empty() {
+        out.push_str("\nNo file has new changes: write only the OVERALL line.\n");
+    } else {
+        out.push('\n');
+        out.push_str(&diff(files));
+    }
+    out
 }
 
-/// Ask `agent` about the changes, off the UI thread.
-pub fn start(agent: Agent, files: &[FileDiff]) -> Receiver<Result<Summary, String>> {
-    let prompt = prompt(files);
+/// Ask `agent` about the changes, off the UI thread: only the files whose changes
+/// aren't the ones `before` explained. `None` when there's nothing new to explain.
+pub fn start(
+    agent: Agent,
+    files: &[FileDiff],
+    before: Option<&Summary>,
+) -> Option<Receiver<Result<Summary, String>>> {
+    let said = |file: &FileDiff| before.and_then(|s| s.note(file)).filter(|(_, now)| *now);
+    let todo: Vec<&FileDiff> = files.iter().filter(|f| said(f).is_none()).collect();
+    let current = before.is_some_and(|s| s.key == key(files));
+    if todo.is_empty() && current {
+        return None;
+    }
+    let known: Vec<(&str, &str)> = files
+        .iter()
+        .filter_map(|f| said(f).map(|(text, _)| (f.path.as_str(), text)))
+        .collect();
+    let prompt = prompt(&todo, &known);
     let key = key(files);
-    let paths: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
+    let keys: Vec<(String, u64)> = todo.iter().map(|f| (f.path.clone(), file_key(f))).collect();
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         let answer = ask(&agent, &prompt).map(|text| {
-            let (files, overall) = parse(&text, &paths);
+            let paths: Vec<String> = keys.iter().map(|(p, _)| p.clone()).collect();
+            let (said, overall) = parse(&text, &paths);
+            let files = keys
+                .iter()
+                .filter_map(|(path, key)| {
+                    let text = said.get(path)?.clone();
+                    Some((path.clone(), Note { key: *key, text }))
+                })
+                .collect();
             Summary {
                 files,
                 overall,
                 key,
                 by: agent.name(),
+                sent: keys.len(),
             }
         });
         let _ = sender.send(answer);
     });
-    receiver
+    Some(receiver)
 }
 
 /// Run the agent outside the project, so it reads nothing but the prompt.
@@ -294,7 +357,8 @@ mod tests {
     fn claude_summarizes_a_real_change() {
         let (_dir, root, mut changes) = crate::review::tests::project();
         crate::review::tests::feature(&mut changes, &root);
-        let summary = start(Agent::Claude, &changes.files)
+        let summary = start(Agent::Claude, &changes.files, None)
+            .unwrap()
             .recv_timeout(TIMEOUT)
             .unwrap()
             .unwrap();
@@ -350,11 +414,33 @@ mod tests {
             removed: 0,
             outline: Default::default(),
         };
-        let prompt = prompt(std::slice::from_ref(&file));
+        let prompt = prompt(&[&file], &[]);
         assert!(prompt.contains("=== x.txt (modified, +1 -0)\n@@ -8,3 +8,4 @@\n a\n a\n a\n+b\n"));
-        let many = vec![file; 2000];
+        let many = vec![file.clone(); 2000];
         assert!(prompt.len() < MAX_DIFF + 2000);
-        assert!(super::prompt(&many).len() < MAX_DIFF + 2000);
+        assert!(super::prompt(&many.iter().collect::<Vec<_>>(), &[]).len() < MAX_DIFF + 2000);
         assert_ne!(key(&many[..1]), key(&many[..2]));
+        // Asked again, only what's new goes; with nothing new, nothing is asked.
+        let mut other = file.clone();
+        other.path = "y.txt".into();
+        let before = Summary {
+            files: [(
+                "x.txt".to_string(),
+                Note {
+                    key: file_key(&file),
+                    text: "Adds b.".into(),
+                },
+            )]
+            .into(),
+            key: key(std::slice::from_ref(&file)),
+            ..Default::default()
+        };
+        let both = [file.clone(), other];
+        let said = |f: &FileDiff| before.note(f).filter(|(_, now)| *now).is_some();
+        assert!(said(&both[0]) && !said(&both[1]));
+        let again = super::prompt(&[&both[1]], &[("x.txt", "Adds b.")]);
+        assert!(again.contains("unchanged since:\nFILE x.txt: Adds b.\n"));
+        assert!(again.contains("=== y.txt") && !again.contains("=== x.txt"));
+        assert!(start(Agent::Claude, std::slice::from_ref(&file), Some(&before)).is_none());
     }
 }

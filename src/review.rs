@@ -800,8 +800,9 @@ impl Changes {
         true
     }
 
-    /// Ask the AI named by config `review_ai` to explain the changes under review.
-    pub fn summarize(&mut self, setting: &str) -> Result<String, String> {
+    /// Ask the AI named by config `review_ai` to explain the changes under review:
+    /// only the files it hasn't explained as they are now, unless `afresh`.
+    pub fn summarize(&mut self, setting: &str, afresh: bool) -> Result<String, String> {
         if self.files.is_empty() {
             return Err("No agent changes to summarize".into());
         }
@@ -815,8 +816,12 @@ impl Changes {
             );
         };
         let name = agent.name();
+        let before = self.summary.as_ref().filter(|_| !afresh);
+        let Some(job) = crate::summary::start(agent, &self.files, before) else {
+            return Ok("Nothing new since the last explanation · S explains it all again".into());
+        };
         self.summary_error = None;
-        self.summary_job = Some((crate::summary::start(agent, &self.files), name.clone()));
+        self.summary_job = Some((job, name.clone()));
         self.version += 1;
         Ok(format!(
             "Asked {name} to explain the changes · it shows here when done"
@@ -846,7 +851,18 @@ impl Changes {
         };
         self.summary_job = None;
         match result {
-            Ok(summary) => self.summary = Some(summary),
+            Ok(mut summary) => {
+                // What it said before about files it wasn't sent stays, for the files
+                // still under review.
+                if let Some(before) = self.summary.take() {
+                    for (path, note) in before.files {
+                        if self.files.iter().any(|f| f.path == path) {
+                            summary.files.entry(path).or_insert(note);
+                        }
+                    }
+                }
+                self.summary = Some(summary);
+            }
             Err(error) => self.summary_error = Some(error),
         }
         self.version += 1;
@@ -1270,19 +1286,18 @@ impl ChangesView {
     /// was added, changed and removed.
     fn file_notes(&self, changes: &Changes, file: &FileDiff) -> Vec<(Tone, String)> {
         let mut out = Vec::new();
-        if let Some(said) = changes
-            .summary
-            .as_ref()
-            .and_then(|s| s.files.get(&file.path))
-        {
-            for (i, line) in crate::ui::wrap_words(said, self.room())
+        if let Some((said, now)) = changes.summary.as_ref().and_then(|s| s.note(file)) {
+            // Said about changes it has since gone past: kept, but dimmed.
+            let (tone, said) = if now {
+                (Tone::Ai, said.to_string())
+            } else {
+                (Tone::Faint, format!("{said} (before newer changes · s)"))
+            };
+            for (i, line) in crate::ui::wrap_words(&said, self.room())
                 .into_iter()
                 .enumerate()
             {
-                out.push((
-                    Tone::Ai,
-                    format!("{} {line}", if i == 0 { "◆" } else { " " }),
-                ));
+                out.push((tone, format!("{} {line}", if i == 0 { "◆" } else { " " })));
             }
         }
         let outline = &file.outline;
@@ -1355,14 +1370,19 @@ impl ChangesView {
             ),
             (Some(summary), ..) if !summary.overall.is_empty() => {
                 wrapped(Tone::Ai, "◆", &summary.overall, &mut out);
-                let when = if changes.summary_current() {
-                    format!("  by {} · s asks again", summary.by)
-                } else {
-                    format!(
-                        "  by {}, before the latest changes · s asks again",
-                        summary.by
-                    )
-                };
+                let mut when = format!("  by {}", summary.by);
+                if summary.sent < files.len() {
+                    // Asked again: only what was new went.
+                    when.push_str(&format!(
+                        " · read {} of {} this time, the rest from before",
+                        summary.sent,
+                        files.len()
+                    ));
+                }
+                if !changes.summary_current() {
+                    when.push_str(", before the latest changes");
+                }
+                when.push_str(" · s asks again");
                 out.push((Tone::Faint, when));
             }
             _ => out.push((
@@ -1673,15 +1693,16 @@ pub(crate) mod tests {
             Some(Target::File("src/main.rs".into()))
         );
         // An AI's summary goes first, until the changes move on from it.
+        let note = crate::summary::Note {
+            key: crate::summary::file_key(&changes.files[1]),
+            text: "Main now greets you.".into(),
+        };
         changes.summary = Some(crate::summary::Summary {
-            files: [(
-                "src/main.rs".to_string(),
-                "Main now greets you.".to_string(),
-            )]
-            .into(),
+            files: [("src/main.rs".to_string(), note)].into(),
             overall: "Adds a greeting.".into(),
             key: crate::summary::key(&changes.files),
             by: "Claude".into(),
+            sent: 2,
         });
         changes.version += 1;
         view.sync(&changes);
@@ -1693,6 +1714,23 @@ pub(crate) mod tests {
         changes.version += 1;
         view.sync(&changes);
         assert!(notes(&view, None)[2].contains("before the latest changes"));
+        // A file whose changes moved on keeps what was said, marked as older.
+        changes
+            .summary
+            .as_mut()
+            .unwrap()
+            .files
+            .get_mut("src/main.rs")
+            .unwrap()
+            .key += 1;
+        changes.summary.as_mut().unwrap().sent = 1;
+        changes.version += 1;
+        view.sync(&changes);
+        assert_eq!(
+            notes(&view, Some(1))[0],
+            "◆ Main now greets you. (before newer changes · s)"
+        );
+        assert!(notes(&view, None)[2].contains("read 1 of 2 this time"));
         // Hidden: only the diff.
         view.show = false;
         view.sync(&changes);
