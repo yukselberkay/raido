@@ -292,6 +292,9 @@ pub struct App {
     last_click: Option<(Instant, (u16, u16))>,
     /// Text selected with the mouse in a pane other than an editor.
     pub grab: Option<crate::grab::Grab>,
+    /// A click on a link outside an editor (the pane, its text area, the cell):
+    /// the link is read off the screen and opened when next drawn.
+    pub link_click: Option<(usize, Rect, (u16, u16))>,
     pub redraw: bool,
     pub count: String,
     pending: Option<char>,
@@ -423,6 +426,7 @@ impl App {
             press: None,
             last_click: None,
             grab: None,
+            link_click: None,
             redraw: true,
             count: String::new(),
             pending: None,
@@ -1648,6 +1652,18 @@ impl App {
                     }
                     self.focused = id;
                     self.sidebar_focus = false;
+                    // Option/Alt, Ctrl or Cmd (where the terminal reports it) held: the
+                    // click opens the link under it, and a double click opens it once.
+                    let held = KeyModifiers::ALT
+                        | KeyModifiers::CONTROL
+                        | KeyModifiers::SUPER
+                        | KeyModifiers::META;
+                    if mouse.modifiers.intersects(held) {
+                        if !double && !self.click_link(id, rect, at) {
+                            self.click_editor(id, rect, at);
+                        }
+                        return Ok(());
+                    }
                     self.press = Some((id, rect, at));
                     self.click_editor(id, rect, at);
                     if double {
@@ -1906,6 +1922,8 @@ impl App {
             let mut grab = crate::grab::Grab::new(id, self.text_area(rect), at);
             grab.words = true;
             self.grab = Some(grab);
+            // A link opens as well as being copied.
+            self.link_click = Some((id, self.text_area(rect), at));
         }
         self.copy_mouse_selection();
     }
@@ -1925,6 +1943,41 @@ impl App {
             let what = crate::grab::describe(&text);
             self.clipboard.copy(text, false);
             self.notice(format!("Copied {what} · Ctrl-v or p pastes · Esc clears"));
+        }
+    }
+    /// Open the link at `at` in pane `id`: an editor's at once, false when there is
+    /// none; another pane's when next drawn, as it's read off the screen.
+    fn click_link(&mut self, id: usize, rect: Rect, at: (u16, u16)) -> bool {
+        let Some(Pane::Editor(buffer)) = self.panes.get(&id) else {
+            self.link_click = Some((id, self.text_area(rect), at));
+            return true;
+        };
+        let buffer = *buffer;
+        let found = self
+            .editor_point(id, buffer, rect, at, false)
+            .and_then(|(row, col)| crate::link::find(&self.buffers[buffer].line(row), col));
+        match found {
+            Some((_, url)) => {
+                self.open_link(url, false);
+                true
+            }
+            None => false,
+        }
+    }
+    /// Open `url` in the default browser; where none can open (an SSH session
+    /// without a desktop), it's copied instead.
+    pub fn open_link(&mut self, url: String, copied: bool) {
+        match crate::link::open(&url) {
+            Ok(()) => self.notice(format!(
+                "Opened {url}{}",
+                if copied { " · copied too" } else { "" }
+            )),
+            Err(error) => {
+                self.fail(format!(
+                    "No browser to open it here ({error}) · link copied"
+                ));
+                self.clipboard.copy(url, false);
+            }
         }
     }
     /// Called with the grab's text once it's drawn after the button came up.
@@ -7276,6 +7329,83 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
     }
 
     #[cfg(unix)]
+    #[test]
+    fn clicking_a_link_with_a_modifier_or_twice_opens_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        std::fs::write(&path, "docs at https://docs.rs/ratatui, see\nplain\n").unwrap();
+        let mut app = App::new(dir.path().into(), Some(path), false).unwrap();
+        let editor = app.focused;
+        let click = |app: &mut App, (column, row): (u16, u16), modifiers| {
+            for kind in [
+                MouseEventKind::Down(MouseButton::Left),
+                MouseEventKind::Up(MouseButton::Left),
+            ] {
+                app.event(Event::Mouse(MouseEvent {
+                    kind,
+                    column,
+                    row,
+                    modifiers,
+                }));
+            }
+        };
+        let script = "printf 'visit https://example.com/a?b=1 (now)\\n'; exec cat".to_string();
+        app.open_terminal(
+            Some(("/bin/sh", vec!["-c".into(), script])),
+            Some(Axis::Horizontal),
+        )
+        .unwrap();
+        let shell = app.focused;
+        for _ in 0..300 {
+            app.tick();
+            let Some(Pane::Terminal(t)) = app.panes.get(&shell) else {
+                unreachable!()
+            };
+            if t.transcript().contains("(now)") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let lines = screen(&mut app, 120, 30);
+        let find = |text: &str| {
+            let y = lines.iter().position(|l| l.contains(text)).unwrap();
+            let x = lines[y][..lines[y].find(text).unwrap()].chars().count();
+            (x as u16, y as u16)
+        };
+        // Option/Alt-click in the terminal: opened once it's read off the screen.
+        let (x, y) = find("example.com");
+        click(&mut app, (x, y), KeyModifiers::ALT);
+        assert!(app.grab.is_none(), "a link click selects nothing");
+        screen(&mut app, 120, 30);
+        assert_eq!(app.message, "Opened https://example.com/a?b=1");
+        // A plain double click opens it too, and copies exactly the link.
+        app.message.clear();
+        std::thread::sleep(DOUBLE_CLICK);
+        click(&mut app, (x + 3, y), KeyModifiers::NONE);
+        click(&mut app, (x + 3, y), KeyModifiers::NONE);
+        screen(&mut app, 120, 30);
+        assert_eq!(app.message, "Opened https://example.com/a?b=1 · copied too");
+        assert_eq!(app.clipboard.paste().0, "https://example.com/a?b=1");
+        // Off a link, a double click copies the word and opens nothing.
+        std::thread::sleep(DOUBLE_CLICK);
+        let (x, y) = find("visit");
+        click(&mut app, (x, y), KeyModifiers::NONE);
+        click(&mut app, (x, y), KeyModifiers::NONE);
+        screen(&mut app, 120, 30);
+        assert_eq!(app.clipboard.paste().0, "visit");
+        assert!(!app.message.contains("Opened"));
+        // Ctrl-click a link in the editor; the trailing comma isn't part of it.
+        std::thread::sleep(DOUBLE_CLICK);
+        let (x, y) = find("docs.rs");
+        click(&mut app, (x, y), KeyModifiers::CONTROL);
+        assert_eq!(app.focused, editor);
+        assert_eq!(app.message, "Opened https://docs.rs/ratatui");
+        // Off a link it's a plain click: the cursor goes there.
+        let (x, y) = find("plain");
+        click(&mut app, (x + 2, y), KeyModifiers::CONTROL);
+        let b = &app.buffers[app.buffer_id().unwrap()];
+        assert_eq!((b.row, b.col), (1, 2));
+    }
     #[test]
     fn a_mouse_drag_selects_and_copies_only_the_pane_it_began_in() {
         let dir = tempfile::tempdir().unwrap();

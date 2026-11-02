@@ -11,6 +11,7 @@ mod icons;
 mod ide;
 mod language;
 mod layout;
+mod link;
 mod local_ai;
 mod lsp;
 mod markdown;
@@ -99,7 +100,7 @@ fn main() -> Result<()> {
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "-h" | "--help" => {
-                println!("Raido — all systems in view\n\nUsage: raido [FILE|DIRECTORY] [--demo] [--fresh]\n\n  --demo     Open an editor, AI launcher and shell\n  --fresh    Start without reopening the project's last session\n  --nested   Inside a Raido terminal, start a separate Raido instead of opening FILE there\n  --install-skill  Teach your AI agents about Raido (Agent Skills; also automatic)\n  --remove-skill   Remove that skill again\n  --keys     Show the keys your terminal sends to Raido (to check shortcuts)\n  --version  Print version\n\nKeys: F1 help · Ctrl-e files · Ctrl-b panes · Ctrl-s save · Ctrl-q quit\nConfig: {}",config::config_dir().display());
+                println!("Raido — all systems in view\n\nUsage: raido [FILE|DIRECTORY] [--demo] [--fresh]\n\n  --demo     Open an editor, AI launcher and shell\n  --fresh    Start without reopening the project's last session\n  --nested   Inside a Raido terminal, start a separate Raido instead of opening FILE there\n  --install-skill  Teach your AI agents about Raido (Agent Skills; also automatic)\n  --remove-skill   Remove that skill again\n  --keys     Show the keys and clicks your terminal sends to Raido (to check shortcuts)\n  --version  Print version\n\nKeys: F1 help · Ctrl-e files · Ctrl-b panes · Ctrl-s save · Ctrl-q quit\nConfig: {}",config::config_dir().display());
                 return Ok(());
             }
             "-V" | "--version" => {
@@ -265,33 +266,53 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// `raido --keys`: print every key as Raido receives it. A combination that prints
-/// nothing is kept by the terminal (or the OS) and never reaches Raido.
+/// `raido --keys`: print every key and click as Raido receives it. A combination
+/// that prints nothing is kept by the terminal (or the OS) and never reaches Raido.
 fn show_keys() -> Result<()> {
-    use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
-    println!("Press keys to see what reaches Raido; Ctrl-c twice to stop.");
+    use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
+    println!("Press keys or click to see what reaches Raido; Ctrl-c twice to stop.");
     enable_raw_mode()?;
+    let held = |modifiers: KeyModifiers| {
+        let mut name = String::new();
+        for (flag, label) in [
+            (KeyModifiers::CONTROL, "Ctrl"),
+            (KeyModifiers::ALT, platform::ALT_KEY),
+            (KeyModifiers::SUPER, platform::SUPER_KEY),
+            (KeyModifiers::SHIFT, "Shift"),
+        ] {
+            if modifiers.contains(flag) {
+                name.push_str(label);
+                name.push('+');
+            }
+        }
+        name
+    };
+    let mut out = io::stdout();
+    write!(out, "{MOUSE_ON}")?;
+    out.flush()?;
     let mut last_ctrl_c = false;
     let result = (|| -> Result<()> {
         loop {
-            let Event::Key(key) = event::read()? else {
-                continue;
+            let key = match event::read()? {
+                Event::Key(key) => key,
+                Event::Mouse(mouse) => {
+                    if let MouseEventKind::Down(button) = mouse.kind {
+                        print!(
+                            "{}{button:?} click at {}, {}\r\n",
+                            held(mouse.modifiers),
+                            mouse.column,
+                            mouse.row
+                        );
+                        io::Write::flush(&mut io::stdout())?;
+                    }
+                    continue;
+                }
+                _ => continue,
             };
             if key.kind == KeyEventKind::Release {
                 continue;
             }
-            let mut name = String::new();
-            for (flag, label) in [
-                (KeyModifiers::CONTROL, "Ctrl"),
-                (KeyModifiers::ALT, platform::ALT_KEY),
-                (KeyModifiers::SUPER, platform::SUPER_KEY),
-                (KeyModifiers::SHIFT, "Shift"),
-            ] {
-                if key.modifiers.contains(flag) {
-                    name.push_str(label);
-                    name.push('+');
-                }
-            }
+            let mut name = held(key.modifiers);
             name.push_str(&match key.code {
                 KeyCode::Char(' ') => "Space".to_string(),
                 KeyCode::Char(c) => c.to_string(),
@@ -308,6 +329,7 @@ fn show_keys() -> Result<()> {
             last_ctrl_c = ctrl_c;
         }
     })();
+    write!(out, "{MOUSE_OFF}")?;
     disable_raw_mode()?;
     result
 }

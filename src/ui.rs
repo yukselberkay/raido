@@ -452,7 +452,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     } else {
                         0
                     };
-                    if app.grab.as_ref().is_some_and(|g| g.pane == id) {
+                    let selecting = app.grab.as_ref().is_some_and(|g| g.pane == id);
+                    if selecting || app.link_click.is_some_and(|(pane, ..)| pane == id) {
                         wrapped = (0..inner.height)
                             .map(|row| screen.row_wrapped(row + top))
                             .collect();
@@ -1533,7 +1534,26 @@ fn editor(
 
 /// Text selected with the mouse outside an editor: highlighted where it was drawn,
 /// and copied once the button is up.
+/// A link clicked there opens, and a double-clicked one is selected and copied too.
 fn mouse_selection(frame: &mut Frame, app: &mut App, wrapped: &[bool], theme: &Theme) {
+    let link = app.link_click.take().and_then(|(pane, area, at)| {
+        let (line, index, cells) = crate::grab::line_at(frame.buffer_mut(), area, at, wrapped);
+        let (range, url) = crate::link::find(&line, index)?;
+        if let Some(grab) = app.grab.as_mut().filter(|g| g.pane == pane) {
+            grab.from = cells[range.start];
+            grab.to = cells[range.end - 1];
+            grab.words = false;
+        }
+        Some(url)
+    });
+    select(frame, app, wrapped, theme);
+    if let Some(url) = link {
+        let copied = app.grab.as_ref().is_some_and(|g| g.copied);
+        app.open_link(url, copied);
+    }
+}
+
+fn select(frame: &mut Frame, app: &mut App, wrapped: &[bool], theme: &Theme) {
     let Some(grab) = app.grab.as_mut() else {
         return;
     };
@@ -2866,6 +2886,14 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         (
             "Mouse drag / double-click",
             "Select and copy in that pane only / copy a word",
+        ),
+        (
+            if cfg!(target_os = "macos") {
+                "Option- or Ctrl-click a link"
+            } else {
+                "Alt- or Ctrl-click a link"
+            },
+            "Open it in the browser (double-click too, outside editors)",
         ),
         ("Ctrl-b g", "Focus the Git sidebar"),
         (

@@ -118,6 +118,44 @@ impl Grab {
     }
 }
 
+/// The line drawn through cell `at` of `area`, joined with the rows a terminal
+/// wrapped it onto (`wrapped`, by offset from the top), so a long link is whole:
+/// its text, the char at `at`, and the cell each char is drawn at.
+pub fn line_at(
+    buffer: &Buffer,
+    area: Rect,
+    at: (u16, u16),
+    wrapped: &[bool],
+) -> (String, usize, Vec<(u16, u16)>) {
+    let runs_on = |y: u16| wrapped.get(usize::from(y - area.y)) == Some(&true);
+    let mut top = at.1;
+    while top > area.y && runs_on(top - 1) {
+        top -= 1;
+    }
+    let mut bottom = at.1;
+    while bottom + 1 < area.bottom() && runs_on(bottom) {
+        bottom += 1;
+    }
+    let (mut text, mut cells, mut index) = (String::new(), Vec::new(), 0);
+    for y in top..=bottom {
+        let mut x = area.x;
+        while x < area.right() {
+            let symbol = buffer.cell((x, y)).map_or(" ", |c| c.symbol());
+            let symbol = if symbol.is_empty() { " " } else { symbol };
+            let width = symbol.width().max(1) as u16;
+            if y == at.1 && (x..x + width).contains(&at.0) {
+                index = cells.len();
+            }
+            for c in symbol.chars() {
+                text.push(c);
+                cells.push((x, y));
+            }
+            x += width;
+        }
+    }
+    (text, index, cells)
+}
+
 fn clamp(area: Rect, (x, y): (u16, u16)) -> (u16, u16) {
     (
         x.clamp(area.x, area.right().saturating_sub(1).max(area.x)),
@@ -178,6 +216,17 @@ mod tests {
         let mut grab = Grab::new(0, area, (5, 0));
         grab.drag((10, 2));
         assert_eq!(grab.text(&buffer, &[true, false, false]), "abcdefgh\n日本x");
+    }
+
+    #[test]
+    fn a_line_wrapped_onto_more_rows_is_read_whole() {
+        let area = Rect::new(5, 0, 6, 4);
+        let buffer = screen(&["ab", "see ht", "tps://", "x.io z"], area);
+        let (text, at, cells) = line_at(&buffer, area, (7, 2), &[false, true, true, false]);
+        assert_eq!(text, "see https://x.io z");
+        assert_eq!(&text[at..at + 1], "s");
+        assert_eq!(cells[at], (7, 2));
+        assert_eq!(cells[4], (9, 1));
     }
 
     #[test]

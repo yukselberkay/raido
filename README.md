@@ -925,6 +925,16 @@ Let go and the text is on the clipboard; paste it anywhere.
 - **Double-click** copies a word: in an editor the word under the pointer, in other
   panes the whole name, path or URL.
 
+**Open links.** Hold Option (Alt on Linux and Windows) or Ctrl and click a web link,
+in any pane, editors included; Cmd-click works too in terminals that pass Cmd on.
+In terminal and AI panes a plain double-click on a link opens it as well, and copies
+it. Raido finds `http(s)://` and `www.` links itself, even ones the terminal wrapped
+onto two rows, leaves the punctuation around them out, and opens them in your
+default browser (`open` on macOS, `xdg-open` or WSL's `wslview` on Linux, the URL
+handler on Windows). Where no browser can start (an SSH session without a desktop)
+the link is copied instead. To copy a link without opening it, drag over it.
+`raido --keys` shows which modifiers your terminal reports with a click.
+
 To use your terminal's own selection instead (for rectangle selection, or to copy
 across panes):
 
