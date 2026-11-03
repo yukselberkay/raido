@@ -1147,7 +1147,7 @@ fn explorer_search(frame: &mut Frame, app: &mut App, area: Rect) {
                             Style::default().fg(color(&theme.muted)),
                         ),
                         Span::styled(
-                            printable(&hit.text),
+                            printable(&hit.text.replace('\t', "  ")),
                             Style::default().fg(color(&theme.foreground)),
                         ),
                     ]),
@@ -2426,7 +2426,7 @@ fn changes_view(
                     Tone::Faint => fill.fg(muted).add_modifier(Modifier::ITALIC),
                 };
                 let indent = if *tone == Tone::Title { " " } else { "   " };
-                let mut value = format!("{indent}{}", printable(value));
+                let mut value = format!("{indent}{}", printable(&value.replace('\t', "    ")));
                 if value.chars().count() > width {
                     value = value
                         .chars()
@@ -2475,8 +2475,9 @@ fn changes_view(
                             {
                                 piece = piece.add_modifier(Modifier::BOLD);
                             }
-                            let clipped =
-                                clip(&printable(value), &mut column, view.hscroll, room, 4);
+                            // clip lays tabs out as spaces (Go indents with them) and
+                            // drops other control characters.
+                            let clipped = clip(value, &mut column, view.hscroll, room, 4);
                             if !clipped.is_empty() {
                                 spans.push(Span::styled(clipped, piece));
                             }
@@ -3382,6 +3383,41 @@ mod tests {
         // The summary under the file and at the end.
         row("+ function greet — Says hello to `name`.");
         row("Summary");
+    }
+
+    #[test]
+    fn the_review_lays_out_tab_indented_code_as_spaces() {
+        let (_dir, root, mut changes) = crate::review::tests::project();
+        crate::review::tests::turn(&mut changes, "Claude", |_| {
+            std::fs::write(
+                root.join("main.go"),
+                "package main\n\nimport (\n\t\"fmt\"\n)\n\n// Greet says hi.\nfunc Greet() {\n\tif true {\n\t\tfmt.Println(\"hi\")\n\t}\n}\n",
+            )
+            .unwrap();
+        });
+        let theme = crate::config::load_theme_from("visual-studio-dark", None).unwrap();
+        let syntax = crate::highlight::Syntax::new(&theme);
+        let mut view = crate::review::ChangesView::default();
+        view.show = true;
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 40)).unwrap();
+        terminal
+            .draw(|f| super::changes_view(f, &changes, &mut view, f.area(), &theme, &syntax))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let shown: Vec<String> = (0..40)
+            .map(|y| (0..100).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect();
+        let all = shown.join("\n");
+        assert!(!all.contains('�') && !all.contains('?'), "{all}");
+        // Tab stops every 4 columns, counted from the start of the code.
+        let line = |code: &str| shown.iter().find(|l| l.contains(code)).expect(code).clone();
+        let at = |l: &str, s: &str| l.find(s).unwrap() - l.find('+').unwrap();
+        let open = line("func Greet");
+        let nested = line("if true");
+        let deeper = line("fmt.Println");
+        assert_eq!(at(&nested, "if") - at(&open, "func"), 4, "{nested}");
+        assert_eq!(at(&deeper, "fmt") - at(&open, "func"), 8, "{deeper}");
     }
 
     #[test]
