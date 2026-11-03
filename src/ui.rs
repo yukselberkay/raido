@@ -579,7 +579,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 }
             }
             Some(Pane::Ai) => ai(frame, inner, &theme, &customs),
-            Some(Pane::Git(view)) => git_view(frame, view, inner, &theme),
+            Some(Pane::Git(view)) => git_view(frame, view, inner, &theme, &app.syntax),
             Some(Pane::Changes(view)) => {
                 view.show = view.notes.unwrap_or(app.config.review_summary);
                 changes_view(frame, &app.changes, view, inner, &theme, &app.syntax)
@@ -1997,7 +1997,13 @@ fn fit_line<'a>(spans: Vec<Span<'a>>, right: Span<'a>, width: usize, fill: Style
 
 /// A commit's diff in the Git pane: message, file summary, then each file's hunks
 /// with old and new line numbers, added lines green and removed lines red.
-fn commit_diff(frame: &mut Frame, diff: &mut gitgraph::Diff, area: Rect, theme: &Theme) {
+fn commit_diff(
+    frame: &mut Frame,
+    diff: &mut gitgraph::Diff,
+    area: Rect,
+    theme: &Theme,
+    syntax: &crate::highlight::Syntax,
+) {
     use gitgraph::Line as Kind;
     if area.height < 2 {
         return;
@@ -2033,13 +2039,18 @@ fn commit_diff(frame: &mut Frame, diff: &mut gitgraph::Diff, area: Rect, theme: 
     // Line numbers when there is room for them and the code.
     let gutter = if rows.width >= 60 { 10 } else { 0 };
     let tint = |c: Color| crate::markdown::mix(background, c, 0.14);
-    for (offset, line) in diff
-        .lines
-        .iter()
-        .skip(diff.scroll)
-        .take(rows.height as usize)
-        .enumerate()
-    {
+    // The code on screen in its language's colors, a hunk at a time.
+    let shown = diff.scroll..(diff.scroll + rows.height as usize).min(diff.lines.len());
+    for index in shown.clone() {
+        if let Some(h) = diff.hunk_of(index) {
+            if !diff.colors.contains_key(&h) {
+                let colored = syntax.hunk(&diff.hunks[h].2, &diff.hunk_lines(h));
+                diff.colors.insert(h, colored);
+            }
+        }
+    }
+    for (offset, index) in shown.enumerate() {
+        let line = &diff.lines[index];
         let y = rows.y + offset as u16;
         let (style, row_bg) = match line.kind {
             Kind::Added => (Style::default().fg(added), Some(tint(added))),
@@ -2076,7 +2087,32 @@ fn commit_diff(frame: &mut Frame, diff: &mut gitgraph::Diff, area: Rect, theme: 
             Kind::Message => format!(" {}", line.text),
             _ => line.text.chars().skip(diff.hscroll).collect(),
         };
-        if line.kind == Kind::Stat {
+        let colored = diff.hunk_of(index).and_then(|h| {
+            let (start, ..) = diff.hunks[h];
+            diff.colors.get(&h)?.as_ref()?.get(index - start - 1)
+        });
+        if let Some(regions) = colored.filter(|r| !r.is_empty()) {
+            // The sign says what happened to the line; the code keeps its colors.
+            let sign: String = line.text.chars().take(1).collect();
+            let mut column = 0;
+            let room = (rows.width as usize).saturating_sub(gutter + 1);
+            let mut pieces = vec![Span::styled(sign, style)];
+            for (look, value) in regions {
+                let c = look.foreground;
+                let mut piece = style.fg(Color::Rgb(c.r, c.g, c.b));
+                if look
+                    .font_style
+                    .contains(syntect::highlighting::FontStyle::BOLD)
+                {
+                    piece = piece.add_modifier(Modifier::BOLD);
+                }
+                let clipped = clip(value, &mut column, diff.hscroll, room, 4);
+                if !clipped.is_empty() {
+                    pieces.push(Span::styled(clipped, piece));
+                }
+            }
+            spans.extend(pieces);
+        } else if line.kind == Kind::Stat {
             // " path | 12 ++--": the bar in the change colors.
             if let Some((name, bar)) = body.split_once(" | ") {
                 spans.push(Span::styled(format!("{name} | "), style));
@@ -2359,7 +2395,13 @@ fn changes_view(
     }
 }
 
-fn git_view(frame: &mut Frame, view: &mut GitView, area: Rect, theme: &Theme) {
+fn git_view(
+    frame: &mut Frame,
+    view: &mut GitView,
+    area: Rect,
+    theme: &Theme,
+    syntax: &crate::highlight::Syntax,
+) {
     let fg = color(&theme.foreground);
     let muted = color(&theme.muted);
     let accent = color(&theme.accent);
@@ -2436,7 +2478,7 @@ fn git_view(frame: &mut Frame, view: &mut GitView, area: Rect, theme: &Theme) {
         area.height.saturating_sub(1),
     );
     if let Some(diff) = view.diff.as_mut() {
-        commit_diff(frame, diff, body, theme);
+        commit_diff(frame, diff, body, theme, syntax);
         return;
     }
     let detail_height = if view.details && body.height >= 12 {

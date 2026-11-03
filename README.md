@@ -583,9 +583,13 @@ the **Git pane**, docked full-width along the bottom:
   remotes, `◆ v1.0` tags), then the subject, author and age.
 - **Details** — the selected commit's author, date, full message and changed files.
 - **Changes** — Enter on a commit shows its whole diff: the message and file summary,
-  then each changed file with its hunks, old and new line numbers, added lines in
-  green and removed lines in red (the same colors as the editor's change marks).
-  Renames show as `old → new`, and tabs are expanded so Go code lines up.
+  then each changed file with its hunks and old and new line numbers. The code keeps
+  its language's colors from your theme, as in the editor; a green or red tint and
+  the `+` / `-` sign mark added and removed lines (the same colors as the editor's
+  change marks). Renames show as `old → new`, and tabs are expanded so Go code lines
+  up.
+
+![A commit's changes in the Git pane, in Rust's colors](docs/raido-git-diff.png)
 
 It refreshes every few seconds while you work. Press `Ctrl-b G` while it is focused
 to maximize it (same as `Ctrl-b z`) and again to put it back; set `git_pane = true`

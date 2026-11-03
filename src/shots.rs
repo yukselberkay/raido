@@ -611,3 +611,30 @@ fn shots_review() {
     settle(&mut app, w, h, Duration::from_millis(100));
     shot("raido-review-summary", &mut app, w, h);
 }
+
+#[test]
+#[ignore = "renders the README screenshots; run scripts/screenshots.sh"]
+fn shots_git_diff() {
+    let root = std::env::current_dir().unwrap();
+    let (w, h) = (150, 46);
+    let mut app = app(&root, "visual-studio-dark");
+    app.command("git").unwrap();
+    app.zoom = true;
+    until(&mut app, w, h, &["ecf0401"]);
+    if let Some(crate::app::Pane::Git(view)) = app.panes.get_mut(&app.focused) {
+        let at = view
+            .data
+            .commits
+            .iter()
+            .position(|c| c.hash.starts_with("ecf0401"))
+            .unwrap();
+        view.commit = at;
+        view.open_diff();
+    }
+    settle(&mut app, w, h, Duration::from_millis(800));
+    for _ in 0..5 {
+        key(&mut app, KeyCode::Char('n'), KeyModifiers::NONE);
+    }
+    settle(&mut app, w, h, Duration::from_millis(200));
+    shot("raido-git-diff", &mut app, w, h);
+}

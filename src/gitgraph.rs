@@ -275,6 +275,12 @@ pub struct Diff {
     pub height: usize,
     pub loading: bool,
     receiver: Option<Receiver<Vec<DiffLine>>>,
+    /// Each hunk: its `@@` line, the line after its last, and its file's path.
+    pub hunks: Vec<(usize, usize, String)>,
+    /// Each hunk's lines in its language's colors (`None`: plain text), by hunk.
+    #[allow(clippy::type_complexity)]
+    pub colors:
+        std::collections::HashMap<usize, Option<Vec<Vec<(syntect::highlighting::Style, String)>>>>,
 }
 
 /// Larger diffs (lockfiles, generated code) are cut off rather than slow the pane.
@@ -322,6 +328,8 @@ impl Diff {
             height: 20,
             loading: true,
             receiver: Some(receiver),
+            hunks: Vec::new(),
+            colors: Default::default(),
         }
     }
 
@@ -351,7 +359,70 @@ impl Diff {
             .collect();
         self.added = lines.iter().filter(|l| l.kind == Line::Added).count();
         self.removed = lines.iter().filter(|l| l.kind == Line::Removed).count();
+        self.hunks = Self::find_hunks(&lines);
+        self.colors.clear();
         self.lines = lines;
+    }
+
+    /// The hunk line `index` is in, if it's code.
+    pub fn hunk_of(&self, index: usize) -> Option<usize> {
+        let kind = self.lines.get(index)?.kind;
+        if !matches!(kind, Line::Added | Line::Removed | Line::Context) {
+            return None;
+        }
+        let at = self.hunks.partition_point(|(start, ..)| *start < index);
+        let h = at.checked_sub(1)?;
+        (index < self.hunks[h].1).then_some(h)
+    }
+
+    /// Hunk `h`'s lines as the review has them (without the `+`/`-` sign), to color.
+    pub fn hunk_lines(&self, h: usize) -> Vec<crate::review::Line> {
+        let (start, end, _) = &self.hunks[h];
+        self.lines[start + 1..*end]
+            .iter()
+            .map(|line| crate::review::Line {
+                kind: match line.kind {
+                    Line::Added => crate::review::Kind::Added,
+                    Line::Removed => crate::review::Kind::Removed,
+                    _ => crate::review::Kind::Context,
+                },
+                text: line.text.chars().skip(1).collect(),
+                old: line.old,
+                new: line.new,
+                unterminated: false,
+            })
+            .collect()
+    }
+
+    /// Where each hunk's code lines are, and the file it's in (the new path of a
+    /// rename).
+    fn find_hunks(lines: &[DiffLine]) -> Vec<(usize, usize, String)> {
+        let mut out = Vec::new();
+        let mut file = String::new();
+        let mut open: Option<usize> = None;
+        for (i, line) in lines.iter().enumerate() {
+            let code = matches!(line.kind, Line::Added | Line::Removed | Line::Context);
+            if let Some(start) = open.filter(|_| !code) {
+                out.push((start, i, file.clone()));
+                open = None;
+            }
+            match line.kind {
+                Line::File => {
+                    file = line
+                        .text
+                        .rsplit(" → ")
+                        .next()
+                        .unwrap_or(&line.text)
+                        .to_string();
+                }
+                Line::Hunk => open = Some(i),
+                _ => {}
+            }
+        }
+        if let Some(start) = open {
+            out.push((start, lines.len(), file));
+        }
+        out
     }
 
     pub fn scroll_by(&mut self, delta: isize) {
@@ -828,9 +899,21 @@ mod tests {
             height: 3,
             loading: true,
             receiver: None,
+            hunks: Vec::new(),
+            colors: Default::default(),
         };
         diff.set(lines);
         assert_eq!((diff.added, diff.removed, diff.files.len()), (2, 1, 2));
+        // The hunk's code lines, in Go, for its colors: without their signs.
+        assert_eq!(diff.hunks.len(), 1);
+        let (start, end, file) = diff.hunks[0].clone();
+        assert_eq!((end - start - 1, file.as_str()), (5, "src/main.go"));
+        assert_eq!(diff.hunk_of(start), None, "the @@ line isn't code");
+        assert_eq!(diff.hunk_of(start + 2), Some(0));
+        assert_eq!(diff.hunk_of(end), None);
+        let code = diff.hunk_lines(0);
+        assert_eq!(code[1].text, "    \"os\"");
+        assert_eq!(code[1].kind, crate::review::Kind::Removed);
         diff.next_file(false);
         assert_eq!(diff.scroll, diff.files[0]);
         assert_eq!(diff.position(), (1, 2));
