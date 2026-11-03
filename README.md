@@ -588,6 +588,17 @@ the **Git pane**, docked full-width along the bottom:
   the `+` / `-` sign mark added and removed lines (the same colors as the editor's
   change marks). Renames show as `old → new`, and tabs are expanded so Go code lines
   up.
+- **Explain a commit** — `e` on a commit (or in its changes), or `:explain <commit>`
+  with any commit id, branch or `HEAD~2`, asks the agent in your AI pane to explain
+  and review it. Raido types the request into the AI pane you used last (Claude
+  Code, Codex, Gemini, any agent) and focuses it; the agent reads the commit's
+  message and changes with `git show`, and the code around them, in your repository
+  with its own tools, and answers there in four parts: what the commit does and why,
+  how it works, a review (bugs, risks, edge cases, missing tests, with file and
+  line), and a one-line verdict. It's asked not to change any files. You can ask
+  follow-up questions right there. `:explain` alone explains the commit on screen in
+  the Git pane, else `HEAD`. It uses that agent's session and tokens, like any
+  question you'd type; with no AI pane open, `Ctrl-b a` starts one.
 
 ![A commit's changes in the Git pane, in Rust's colors](docs/raido-git-diff.png)
 
@@ -603,6 +614,7 @@ to have it open on every start.
 | `a` or Escape | Show all branches again |
 | `d` | Show/hide the details panel |
 | `y` | Copy the selected commit hash |
+| `e` | Have the AI pane's agent explain and review the selected commit |
 | `r` | Refresh now |
 
 In a commit's changes:
@@ -614,6 +626,7 @@ In a commit's changes:
 | `h` / `l` | Scroll long lines sideways |
 | `g` / `G` | Top / bottom |
 | `y` | Copy the commit hash |
+| `e` | Have the AI pane's agent explain and review this commit |
 | Escape, `q` or Enter | Back to the graph |
 
 Very large commits are cut off after 20,000 lines. `Ctrl-b G` maximizes the pane for
@@ -1225,6 +1238,7 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 :git / :git all           Git pane: open, focus, or maximize / show all branches
 :changes [keep|undo]      Review AI agents' changes / keep all / undo all (asks)
 :mention                  Type a reference to your file and selection into the AI pane (Ctrl-b i)
+:explain [commit]         Have the AI pane's agent explain and review a commit (e in the Git pane)
 :ide                      Whether Claude Code is connected to Raido
 :files / :git side        Focus sidebar section
 :session [save|forget]    Session status / save now / delete and stop saving

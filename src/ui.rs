@@ -2023,7 +2023,7 @@ fn commit_diff(
             n => format!("file {n}/{files}"),
         };
         format!(
-            "── {short} · {place} · +{} −{} · n N files  j k scroll  h l sideways  Esc back ",
+            "── {short} · {place} · +{} −{} · n N files  j k scroll  h l sideways  e AI explains  Esc back ",
             diff.added, diff.removed
         )
     };
@@ -2845,7 +2845,7 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Git(v)) if v.diff.is_some())
             && !app.sidebar_focus
         {
-            " j k scroll   Space PgDn page   n N next/previous file   h l sideways   g G top/end   y copy hash   Esc graph   ^B G maximize"
+            " j k scroll   Space PgDn page   n N next/previous file   h l sideways   g G top/end   y copy hash   e AI explains   Esc graph   ^B G maximize"
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Changes(v)) if v.confirm.is_some())
             && !app.sidebar_focus
         {
@@ -2855,7 +2855,7 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
         {
             " j k move   n N next change   ] [ file   y keep   x undo   Y X whole file   A keep all   U undo all   Enter open   s/S AI explains new/all   i notes   q close"
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Git(_))) && !app.sidebar_focus {
-            " Tab branches/commits   j k move   Enter branch only / commit diff   d details   a all   y copy hash   r refresh   ^B G maximize"
+            " Tab branches/commits   j k move   Enter branch only / commit diff   d details   a all   y copy hash   e AI explains   r refresh   ^B G maximize"
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Preview(_)))
             && !app.sidebar_focus
         {
@@ -3020,6 +3020,10 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         (
             ":mention  or  Ctrl-b i",
             "Type your file and selected lines into the AI pane (@file#L10-20)",
+        ),
+        (
+            ":explain [commit]  or  e in Git",
+            "The AI pane's agent explains and reviews a commit",
         ),
         (
             ":ide",

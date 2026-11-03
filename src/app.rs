@@ -2628,19 +2628,7 @@ impl App {
         let spot = crate::ide::Spot::of(self)
             .or_else(|| self.editor_spot.clone())
             .context("Open a file in an editor first: Ctrl-b i sends where you are in it")?;
-        let agents: Vec<usize> = self
-            .visible()
-            .into_iter()
-            .filter(|id| matches!(self.panes.get(id), Some(Pane::Terminal(t)) if t.is_agent()))
-            .collect();
-        let target = [Some(self.focused), self.last_ai]
-            .into_iter()
-            .flatten()
-            .find(|id| agents.contains(id))
-            .or(agents.first().copied())
-            .context(
-                "No AI pane on screen: Ctrl-b a starts one, Ctrl-b D brings back a docked one",
-            )?;
+        let target = self.ai_pane()?;
         let Some(Pane::Terminal(terminal)) = self.panes.get_mut(&target) else {
             unreachable!("an agent pane");
         };
@@ -2669,6 +2657,76 @@ impl App {
         self.focused = target;
         self.sidebar_focus = false;
         self.notice(format!("{reference} → {title}: type your question"));
+        Ok(())
+    }
+    /// The AI pane a request goes to: the focused one, else the one used last, else
+    /// the first on screen.
+    fn ai_pane(&self) -> Result<usize> {
+        let agents: Vec<usize> = self
+            .visible()
+            .into_iter()
+            .filter(|id| matches!(self.panes.get(id), Some(Pane::Terminal(t)) if t.is_agent()))
+            .collect();
+        [Some(self.focused), self.last_ai]
+            .into_iter()
+            .flatten()
+            .find(|id| agents.contains(id))
+            .or(agents.first().copied())
+            .context("No AI pane on screen: Ctrl-b a starts one, Ctrl-b D brings back a docked one")
+    }
+    /// `:explain [commit]` (`e` on a commit in the Git pane): the AI pane's agent
+    /// reads the commit, its message and changes and the code around them, in your
+    /// repository with its own tools, and answers there: what it does and why, how
+    /// it works, and a review. Without a commit: the one on screen in the Git pane,
+    /// else HEAD.
+    fn explain_commit(&mut self, rev: &str) -> Result<()> {
+        let rev = match rev.trim() {
+            "" => match self.panes.get(&self.focused) {
+                Some(Pane::Git(view)) => view
+                    .diff
+                    .as_ref()
+                    .map(|d| d.hash.clone())
+                    .or_else(|| view.selected().map(|c| c.hash.clone()))
+                    .unwrap_or_else(|| "HEAD".into()),
+                _ => "HEAD".into(),
+            },
+            rev => rev.to_string(),
+        };
+        // A commit id, branch or HEAD~2, never an option for git.
+        if rev.starts_with('-') || rev.chars().any(char::is_whitespace) {
+            bail!("Not a commit: {rev}");
+        }
+        let info = crate::workspace::git(
+            &self.root,
+            &[
+                "log",
+                "-1",
+                "--no-color",
+                "--format=%H%x1f%h%x1f%s",
+                &format!("{rev}^{{commit}}"),
+            ],
+        )
+        .map(|b| String::from_utf8_lossy(&b).trim().to_string())
+        .filter(|t| !t.is_empty())
+        .with_context(|| format!("No commit {rev} in this repository"))?;
+        let mut fields = info.split('\x1f');
+        let (hash, short, subject) = (
+            fields.next().unwrap_or_default().to_string(),
+            fields.next().unwrap_or_default().to_string(),
+            fields.next().unwrap_or_default().to_string(),
+        );
+        let target = self.ai_pane()?;
+        let Some(Pane::Terminal(terminal)) = self.panes.get_mut(&target) else {
+            unreachable!("an agent pane");
+        };
+        terminal.paste(&explain_prompt(&hash, &short, &subject))?;
+        terminal.send(b"\r")?;
+        let title = terminal.title.clone();
+        self.focused = target;
+        self.sidebar_focus = false;
+        self.notice(format!(
+            "Asked {title} to explain and review {short} “{subject}”"
+        ));
         Ok(())
     }
     /// Ctrl-b Z: the focused pane alone, without borders, sidebar, line numbers or
@@ -3907,6 +3965,10 @@ impl App {
                     self.clipboard.copy(hash.clone(), false);
                     self.notice(format!("Copied {hash}"));
                 }
+                KeyCode::Char('e') => {
+                    let hash = diff.hash.clone();
+                    self.explain_commit(&hash)?;
+                }
                 KeyCode::Char(':') => self.input_start(InputKind::Command),
                 _ => {}
             }
@@ -3940,6 +4002,11 @@ impl App {
                 if let Some(hash) = view.selected().map(|c| c.hash.clone()) {
                     self.clipboard.copy(hash.clone(), false);
                     self.notice(format!("Copied {hash}"));
+                }
+            }
+            KeyCode::Char('e') => {
+                if let Some(hash) = view.selected().map(|c| c.hash.clone()) {
+                    self.explain_commit(&hash)?;
                 }
             }
             KeyCode::Char(':') => self.input_start(InputKind::Command),
@@ -4871,6 +4938,7 @@ impl App {
             }
             "theme" | "themes" => self.open_picker(),
             "mention" => self.mention()?,
+            "explain" => self.explain_commit(arg)?,
             // :ide, Claude Code's connection to Raido.
             "ide" => {
                 let status = match &self.ide {
@@ -4960,6 +5028,19 @@ fn word_at(b: &Buffer) -> Option<(String, usize)> {
     let end = (at..line.len()).take_while(|&i| word(i)).last()? + 1;
     let text = line[start..end].iter().collect();
     Some((text, b.text.line_to_char(b.row) + start))
+}
+
+/// What an AI pane is asked to explain and review a commit with: one line, so it
+/// arrives as a single message in any agent.
+fn explain_prompt(hash: &str, short: &str, subject: &str) -> String {
+    format!(
+        "Explain and review commit {short} (\"{subject}\") in this repository, without changing \
+any files. Read its message and changes with `git show --stat --patch {hash}`, and the code \
+around them where it helps. Then answer briefly, in four parts: 1) Summary: what the commit \
+does and why, from its message and its code. 2) How it works: the new or changed code and \
+how the pieces fit together. 3) Review: bugs, risks, edge cases, missing tests, and anything \
+worth a second look, with file and line. 4) Verdict: one line."
+    )
 }
 
 /// Letters, digits and `_`: what identifiers are made of.
@@ -7162,6 +7243,89 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
             start.elapsed() >= Duration::from_secs(4),
             "not before it went quiet"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explain_hands_a_commit_to_the_ai_pane_to_review() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=T",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .current_dir(&root)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(root.join("a.txt"), "one\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "Add the first line"]);
+        let mut app = App::new(root.clone(), None, false).unwrap();
+        assert!(app
+            .command("explain")
+            .unwrap_err()
+            .to_string()
+            .contains("No AI pane"));
+        // A stand-in agent that shows what it's sent.
+        app.open_terminal(
+            Some(("/bin/sh", vec!["-c".into(), "exec cat".into()])),
+            Some(Axis::Horizontal),
+        )
+        .unwrap();
+        let agent = app.focused;
+        let Some(Pane::Terminal(t)) = app.panes.get_mut(&agent) else {
+            unreachable!()
+        };
+        t.launch = Launch::Agent {
+            name: "claude".into(),
+            model: None,
+            session: None,
+        };
+        app.focused = 0;
+        app.command("explain HEAD").unwrap();
+        assert_eq!(app.focused, agent, "the answer comes there");
+        assert!(
+            app.message.contains("“Add the first line”"),
+            "{}",
+            app.message
+        );
+        let start = Instant::now();
+        let sent = loop {
+            app.tick();
+            let Some(Pane::Terminal(t)) = app.panes.get(&agent) else {
+                unreachable!()
+            };
+            let text = t.transcript();
+            if text.contains("Verdict") || start.elapsed() > Duration::from_secs(5) {
+                break text;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(sent.contains("Explain and review commit"), "{sent}");
+        assert!(sent.contains("git show --stat --patch"), "{sent}");
+        // Not a commit, or not a commit id at all.
+        assert!(app
+            .command("explain nope")
+            .unwrap_err()
+            .to_string()
+            .contains("No commit nope"));
+        assert!(app
+            .command("explain --output=x")
+            .unwrap_err()
+            .to_string()
+            .contains("Not a commit"));
     }
 
     #[cfg(unix)]
