@@ -320,6 +320,9 @@ Splits nest inside the focused pane. Splitting an editor initially shows the
 same buffer in both views; use `:e another-file` in the new view to open something
 else. The buffer contents, cursor, and scroll position are shared when two views
 show the same buffer. Closing a terminal pane stops its terminal child process.
+The number in a pane's title counts the panes that are open, docked ones included,
+in the order you opened them: close one and the rest renumber, so they always run
+1 to N.
 
 ### Docking panes
 

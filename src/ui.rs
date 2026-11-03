@@ -212,10 +212,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let mut wrapped = Vec::new();
     for (id, rect) in rectangles {
         let active = id == app.focused && !app.sidebar_focus;
+        let number = app.pane_number(id);
         let title = match app.panes.get(&id) {
             Some(Pane::Editor(buffer)) => format!(
                 " {} {}{} ",
-                id + 1,
+                number,
                 printable(&app.buffers[*buffer].name()),
                 if app.buffers[*buffer].dirty {
                     " ●"
@@ -225,7 +226,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             ),
             Some(Pane::Preview(p)) => format!(
                 " {} {} · preview{} ",
-                id + 1,
+                number,
                 printable(&app.buffers[p.buffer].name()),
                 if app.buffers[p.buffer].dirty {
                     " ●"
@@ -235,7 +236,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             ),
             Some(Pane::Terminal(t)) => format!(
                 " {} {}{}{} ",
-                id + 1,
+                number,
                 t.title,
                 if app.copy.as_ref().is_some_and(|c| c.pane == id) {
                     " · COPY"
@@ -252,7 +253,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             ),
             Some(Pane::Git(view)) => format!(
                 " {} GIT · {} ",
-                id + 1,
+                number,
                 match &view.only {
                     Some(name) => format!("{} only · a shows all", printable(name)),
                     None => "all branches".into(),
@@ -261,15 +262,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Some(Pane::Changes(_)) => {
                 let (added, removed) = app.changes.totals();
                 match app.changes.files.len() {
-                    0 => format!(" {} CHANGES · nothing to review ", id + 1),
+                    0 => format!(" {} CHANGES · nothing to review ", number),
                     n => format!(
                         " {} CHANGES · {} +{added} −{removed} ",
-                        id + 1,
+                        number,
                         review::files(n)
                     ),
                 }
             }
-            _ => format!(" {} AI / copilot ", id + 1),
+            _ => format!(" {} AI / copilot ", number),
         };
         let inner = if bare {
             rect

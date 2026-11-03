@@ -2925,6 +2925,12 @@ impl App {
         ids.retain(|id| !self.docked.contains(id));
         ids
     }
+    /// The number a pane's title shows: its place among the open panes, docked
+    /// ones included, in the order they were opened. Closing a pane renumbers the
+    /// ones after it, so the numbers always run 1..N.
+    pub fn pane_number(&self, id: usize) -> usize {
+        self.panes.range(..id).count() + 1
+    }
     /// A short name for a pane: the file, the program, GIT or AI.
     pub fn pane_name(&self, id: usize) -> String {
         match self.panes.get(&id) {
@@ -6288,6 +6294,40 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         assert_eq!(go(below, KeyCode::Right), below);
         assert_eq!(go(below, KeyCode::Left), below);
         assert!([top_left, top_right].contains(&go(below, KeyCode::Up)));
+    }
+    #[test]
+    fn pane_titles_count_the_open_panes_docked_ones_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().into(), None, false).unwrap();
+        let first = app.focused;
+        let mut ids = vec![first];
+        for _ in 0..3 {
+            app.split_editor(Axis::Horizontal).unwrap();
+            ids.push(app.focused);
+        }
+        let numbers = |app: &App| {
+            ids.iter()
+                .map(|id| app.pane_number(*id))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(numbers(&app)[..], [1, 2, 3, 4]);
+        // Docking keeps a pane's number.
+        app.focused = ids[3];
+        app.command("dock").unwrap();
+        assert_eq!(app.pane_number(ids[3]), 4);
+        // Closing one renumbers the rest, docked ones included.
+        app.focused = ids[1];
+        app.command("q").unwrap();
+        assert!(!app.panes.contains_key(&ids[1]));
+        assert_eq!(app.pane_number(ids[0]), 1);
+        assert_eq!(app.pane_number(ids[2]), 2);
+        assert_eq!(app.pane_number(ids[3]), 3);
+        let shown = screen(&mut app, 120, 30).join("\n");
+        assert!(shown.contains("◉ 1 [scratch]") && shown.contains("╭ 2 [scratch]"));
+        assert!(
+            !shown.contains("╭ 3 ") && !shown.contains("╭ 4 "),
+            "{shown}"
+        );
     }
     #[cfg(unix)]
     #[test]
