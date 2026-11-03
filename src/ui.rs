@@ -208,6 +208,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let rectangles = app.rectangles.clone();
     let selection = app.selection();
     let customs = app.custom_agents();
+    // Launcher: the CLIs that would reopen a closed pane's conversation.
+    let reopen: Vec<&str> = ["codex", "claude", "gemini", "agy", "opencode"]
+        .into_iter()
+        .filter(|p| app.reopens(p))
+        .collect();
+    let fresh = app.fresh_launch;
     // The terminal rows a mouse selection is on that run on into the next row.
     let mut wrapped = Vec::new();
     for (id, rect) in rectangles {
@@ -579,7 +585,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     );
                 }
             }
-            Some(Pane::Ai(choice)) => ai(frame, inner, &theme, &customs, choice.as_ref()),
+            Some(Pane::Ai(choice)) => ai(
+                frame,
+                inner,
+                &theme,
+                &customs,
+                choice.as_ref(),
+                &reopen,
+                fresh,
+            ),
             Some(Pane::Git(view)) => git_view(frame, view, inner, &theme, &app.syntax),
             Some(Pane::Changes(view)) => {
                 view.show = view.notes.unwrap_or(app.config.review_summary);
@@ -1882,12 +1896,17 @@ fn term_color(value: vt100::Color, fallback: Color, theme: &Theme) -> Color {
     }
 }
 
+/// The AI launcher, or OpenCode's model choice (`choice`). `reopen`: CLIs whose
+/// closed pane's conversation they'd reopen; `fresh`: `n` was pressed, so the
+/// next one starts a new conversation instead.
 fn ai(
     frame: &mut Frame,
     area: Rect,
     theme: &Theme,
     customs: &[String],
     choice: Option<&crate::app::ModelChoice>,
+    reopen: &[&str],
+    fresh: bool,
 ) {
     let fg = Style::default().fg(color(&theme.foreground));
     let muted = Style::default().fg(color(&theme.muted));
@@ -1897,16 +1916,28 @@ fn ai(
     if let Some(choice) = choice {
         return model_choice(frame, area, theme, choice);
     }
+    let secondary = Style::default().fg(color(&theme.secondary));
+    let entry = |key: char, label: &str, program: &str| {
+        let mut spans = vec![Span::styled(format!("  [{key}]  {label}"), fg)];
+        if reopen.contains(&program) {
+            spans.push(if fresh {
+                Span::styled(" · new conversation", secondary)
+            } else {
+                Span::styled(" · reopens your last conversation", secondary)
+            });
+        }
+        Line::from(spans)
+    };
     let mut lines = vec![
         Line::from(""),
         Line::styled("  YOUR TOOLS. YOUR KEYS.", accent),
         Line::from(""),
-        Line::styled("  [1]  OpenAI Codex", fg),
-        Line::styled("  [2]  Claude Code", fg),
-        Line::styled("  [3]  Gemini CLI", fg),
-        Line::styled("  [4]  Antigravity CLI (agy)", fg),
+        entry('1', "OpenAI Codex", "codex"),
+        entry('2', "Claude Code", "claude"),
+        entry('3', "Gemini CLI", "gemini"),
+        entry('4', "Antigravity CLI (agy)", "agy"),
         Line::styled("  [5]  Local LLM (yours, or Ollama/LM Studio)", fg),
-        Line::styled("  [6]  OpenCode", fg),
+        entry('6', "OpenCode", "opencode"),
     ];
     // Your own [ai.<name>] launchers take the digits after the built-ins (7–9).
     let first = crate::app::AGENTS.len() + 1;
@@ -1930,6 +1961,16 @@ fn ai(
             Style::default().fg(color(&theme.secondary)),
         ),
     ]);
+    if !reopen.is_empty() {
+        lines.push(Line::styled(
+            if fresh {
+                "  n: reopen the last conversation instead"
+            } else {
+                "  n, then a number: a new conversation"
+            },
+            secondary,
+        ));
+    }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
@@ -3195,6 +3236,10 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         (
             ":ai opencode [model]",
             "OpenCode; with Ollama, first lists your models (0: its own)",
+        ),
+        (
+            ":ai claude new",
+            "A new conversation, not the one a closed pane was in",
         ),
         (
             ":ai local [model]",

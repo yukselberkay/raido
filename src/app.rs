@@ -221,16 +221,19 @@ struct AgentRun {
 }
 
 /// Flags for a built-in AI CLI: (args, replay saved output, pinned conversation id).
+/// `exists(program, id)` says whether the CLI saved that conversation; `gemini_ids`
+/// whether the installed Gemini CLI takes `--session-id`.
 fn agent_flags(
     program: &str,
     resume: bool,
     session: Option<&str>,
-    exists: &dyn Fn(&str) -> bool,
+    exists: &dyn Fn(&str, &str) -> bool,
+    gemini_ids: bool,
     new_id: &dyn Fn() -> String,
 ) -> (Vec<String>, bool, Option<String>) {
     let words = |w: &[&str]| w.iter().map(|f| f.to_string()).collect::<Vec<_>>();
     match (program, resume, session) {
-        ("claude", true, Some(id)) if exists(id) => {
+        ("claude", true, Some(id)) if exists(program, id) => {
             (words(&["--resume", id]), false, Some(id.to_string()))
         }
         // A session saved before panes had ids: let you pick, never guess.
@@ -240,11 +243,32 @@ fn agent_flags(
             let id = id.map_or_else(new_id, String::from);
             (words(&["--session-id", &id]), true, Some(id))
         }
-        ("codex", true, _) => (words(&["resume", "--last"]), false, None),
-        ("gemini", true, _) => (words(&["--resume", "latest"]), false, None),
+        // Codex picks its own ids; Raido finds them afterwards (conversations.rs).
+        ("codex", true, Some(id)) if exists(program, id) => {
+            (words(&["resume", id]), false, Some(id.to_string()))
+        }
+        ("codex", true, Some(_)) => (Vec::new(), true, None),
+        ("codex", true, None) => (words(&["resume", "--last"]), false, None),
+        ("gemini", true, Some(id)) if exists(program, id) => {
+            (words(&["--resume", id]), false, Some(id.to_string()))
+        }
+        ("gemini", _, id) if gemini_ids => {
+            let id = id.map_or_else(new_id, String::from);
+            (words(&["--session-id", &id]), true, Some(id))
+        }
+        ("gemini", true, Some(_)) => (Vec::new(), true, None),
+        ("gemini", true, None) => (words(&["--resume", "latest"]), false, None),
         ("agy" | "opencode", true, _) => (words(&["--continue"]), false, None),
         _ => (Vec::new(), true, None),
     }
+}
+
+/// A built-in CLI's display name ("Claude Code"), else the name itself.
+fn agent_title(program: &str) -> &str {
+    AGENTS
+        .iter()
+        .find(|a| a.1 == program)
+        .map_or(program, |a| a.2)
 }
 
 /// A random (version 4) UUID for a new conversation id, from std's per-process
@@ -417,6 +441,11 @@ pub struct App {
     /// Docked panes (Ctrl-b d), oldest first: still running and still in the
     /// layout, just not drawn, so they come back to the same place and size.
     pub docked: Vec<usize>,
+    /// AI panes closed in this run, oldest first: (CLI, its conversation). Opening
+    /// that CLI again reopens the newest one.
+    closed_agents: Vec<(String, Option<String>)>,
+    /// `n` in the AI launcher: the next CLI starts a new conversation.
+    pub fresh_launch: bool,
     /// The dock list (Ctrl-b D) is open, with this entry selected.
     pub dock_list: Option<usize>,
     /// Where each docked pane's tab was drawn in the top bar, for clicks.
@@ -522,6 +551,8 @@ impl App {
             git_area: Rect::default(),
             help_area: Rect::default(),
             docked: Vec::new(),
+            closed_agents: Vec::new(),
+            fresh_launch: false,
             dock_list: None,
             dock_tabs: Vec::new(),
             explorer_search: None,
@@ -990,6 +1021,7 @@ impl App {
                 return Ok(());
             };
             self.tiles.remove(closing);
+            self.remember_agent(closing);
             self.panes.remove(&closing);
             self.focused = next;
             self.zoom = false;
@@ -998,6 +1030,7 @@ impl App {
             return Ok(());
         }
         if self.tiles.remove(closing) {
+            self.remember_agent(closing);
             self.panes.remove(&closing);
         }
         self.focused = *self.visible().first().context("No remaining pane")?;
@@ -1093,6 +1126,7 @@ impl App {
         if let Some(home) = claude_home() {
             self.follow_conversations(&home);
         }
+        self.follow_codex();
         let json = serde_json::to_string(&self.session())?;
         if json != self.session_json || force {
             session::save(&self.root, &json)?;
@@ -2200,6 +2234,9 @@ impl App {
                         return self.launch_agent(&name, None);
                     }
                 }
+                if key.code == KeyCode::Char('n') {
+                    self.fresh_launch = !self.fresh_launch;
+                }
                 if key.code == KeyCode::Char(':') {
                     self.input_start(InputKind::Command);
                 }
@@ -3038,6 +3075,7 @@ impl App {
             KeyCode::Char('x') => {
                 let id = self.docked.remove(selected);
                 let name = self.pane_name(id);
+                self.remember_agent(id);
                 self.tiles.remove(id);
                 self.panes.remove(&id);
                 self.dock_list =
@@ -4337,13 +4375,90 @@ impl App {
             bail!("Maximum of 12 panes");
         }
         let axis = axis.unwrap_or_else(|| self.ai_axis());
+        self.fresh_launch = false;
         self.add_pane(Pane::Ai(None), axis);
         self.notice(LAUNCHER_HINT);
         Ok(())
     }
     /// Run an AI CLI in the focused AI pane (`split: None`) or in a new split.
     fn launch_agent(&mut self, program: &str, split: Option<Axis>) -> Result<()> {
-        self.launch(program, None, split)
+        let fresh = std::mem::take(&mut self.fresh_launch);
+        self.launch(program, None, split, fresh)
+    }
+    /// The built-in CLIs that can reopen a conversation (unless `[ai.<name>]`
+    /// replaces them with your own command).
+    fn resumable(&self, program: &str) -> bool {
+        ["claude", "codex", "gemini", "agy", "opencode"].contains(&program)
+            && !self.config.ai.contains_key(program)
+    }
+    /// Whether opening `program` now would reopen a closed pane's conversation.
+    pub fn reopens(&self, program: &str) -> bool {
+        self.resumable(program) && self.closed_agents.iter().any(|(name, _)| name == program)
+    }
+    /// An AI pane is closing: remember its conversation, so opening that CLI again
+    /// reopens it.
+    fn remember_agent(&mut self, id: usize) {
+        let launch = |app: &App| match app.panes.get(&id) {
+            Some(Pane::Terminal(t)) => match &t.launch {
+                Launch::Agent { name, session, .. } => Some((name.clone(), session.clone())),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some((name, _)) = launch(self).filter(|(name, _)| self.resumable(name)) else {
+            return;
+        };
+        // Catch up with where it is now: Claude's /resume or /clear, Codex's id.
+        match name.as_str() {
+            "claude" => {
+                if let Some(home) = claude_home() {
+                    self.follow_conversations(&home);
+                }
+            }
+            "codex" => self.follow_codex(),
+            _ => {}
+        }
+        let session = launch(self).and_then(|(_, session)| session);
+        // A Codex pane with no conversation never got a message: nothing to reopen.
+        if name == "codex" && session.is_none() {
+            return;
+        }
+        self.closed_agents.push((name, session));
+    }
+    /// Pin each Codex pane to its conversation. Codex picks the ids itself, so
+    /// they're found afterwards: the conversations started in this folder, each
+    /// belonging to the Codex pane opened just before it.
+    fn follow_codex(&mut self) {
+        let panes: Vec<(usize, std::time::SystemTime)> = self
+            .panes
+            .iter()
+            .filter_map(|(id, pane)| match pane {
+                Pane::Terminal(t) if matches!(&t.launch, Launch::Agent { name, .. } if name == "codex") => {
+                    Some((*id, t.started))
+                }
+                _ => None,
+            })
+            .collect();
+        if panes.is_empty() || !self.resumable("codex") {
+            return;
+        }
+        let since = panes
+            .iter()
+            .map(|p| p.1)
+            .min()
+            .unwrap_or_else(std::time::SystemTime::now);
+        let found = crate::conversations::codex_conversations(&self.root, since);
+        let stamped: Vec<(usize, String)> = panes
+            .iter()
+            .map(|(id, at)| (*id, crate::conversations::utc(*at)))
+            .collect();
+        for (id, conversation) in crate::conversations::codex_owners(&stamped, &found) {
+            if let Some(Pane::Terminal(t)) = self.panes.get_mut(&id) {
+                if let Launch::Agent { session, .. } = &mut t.launch {
+                    *session = Some(conversation);
+                }
+            }
+        }
     }
     /// Whether OpenCode first offers your Ollama models: both are installed, and
     /// OpenCode isn't replaced by an `[ai.opencode]` of yours. Without Ollama it just
@@ -4403,7 +4518,8 @@ impl App {
             _ => return Ok(()),
         };
         let model = choice.models.get(row).cloned();
-        self.launch("opencode", model.as_deref(), None)
+        let fresh = std::mem::take(&mut self.fresh_launch);
+        self.launch("opencode", model.as_deref(), None, fresh)
     }
     /// Your own `[ai.<name>]` launchers that are not built-in names, in name order.
     pub fn custom_agents(&self) -> Vec<String> {
@@ -4414,12 +4530,28 @@ impl App {
             .cloned()
             .collect()
     }
-    fn launch(&mut self, program: &str, model: Option<&str>, split: Option<Axis>) -> Result<()> {
+    /// Open an AI CLI. Unless `fresh`, a CLI whose pane you closed earlier in this
+    /// run reopens that pane's conversation.
+    fn launch(
+        &mut self,
+        program: &str,
+        model: Option<&str>,
+        split: Option<Axis>,
+        fresh: bool,
+    ) -> Result<()> {
         // Agents find Raido's docs as a skill; install or refresh it once per session.
         if self.config.ai_skill && !self.skill_ready {
             self.skill_ready = crate::skill::install().is_ok();
         }
-        let agent = self.agent_command(program, model, None, false)?;
+        let closed = if fresh || !self.resumable(program) {
+            None
+        } else {
+            self.closed_agents
+                .iter()
+                .rposition(|(name, _)| name == program)
+        };
+        let session = closed.and_then(|i| self.closed_agents[i].1.clone());
+        let agent = self.agent_command(program, model, session.as_deref(), closed.is_some())?;
         let (command, args, env) = agent.run;
         self.open_terminal_with(Some((&command, args)), &env, split)?;
         if let Some(Pane::Terminal(t)) = self.panes.get_mut(&self.focused) {
@@ -4429,12 +4561,23 @@ impl App {
                 session: agent.session,
             };
         }
+        if let Some(i) = closed {
+            self.closed_agents.remove(i);
+            // A CLI that reopens a conversation draws it again; one that starts
+            // afresh (the closed pane never got a message) is shown its old output.
+            if !agent.replay {
+                self.notice(format!(
+                    "Reopened your last {} conversation · :ai {program} new starts a new one",
+                    agent_title(program)
+                ));
+            }
+        }
         Ok(())
     }
-    /// What to run for an AI CLI. Claude Code panes get their own conversation id
-    /// (`--session-id`), so a restored pane reopens exactly its own conversation
-    /// with `--resume <id>`; the other built-in CLIs can only reopen their latest
-    /// conversation in this project.
+    /// What to run for an AI CLI. Claude Code and Gemini CLI panes get their own
+    /// conversation id (`--session-id`) and Codex panes are matched to theirs, so a
+    /// reopened pane gets exactly its own conversation back (`--resume <id>`,
+    /// `codex resume <id>`); otherwise the CLI reopens its latest one here.
     fn agent_command(
         &self,
         program: &str,
@@ -4472,11 +4615,19 @@ impl App {
         if !crate::lsp::on_path(program) {
             bail!("{name} is not installed (`{program}` not on PATH) · install: {hint}");
         }
+        let exists = |program: &str, id: &str| match program {
+            "claude" => claude_conversation_exists(id),
+            "gemini" => crate::conversations::gemini_conversation_exists(id),
+            "codex" => crate::conversations::codex_conversation_exists(id),
+            _ => false,
+        };
+        let gemini_ids = program == "gemini" && crate::conversations::gemini_takes_ids();
         let (mut args, replay, session) = agent_flags(
             program,
             resume,
             session,
-            &claude_conversation_exists,
+            &exists,
+            gemini_ids,
             &conversation_id,
         );
         // OpenCode on the Ollama model you chose (`:ai opencode <model>`, the choice).
@@ -5024,13 +5175,16 @@ impl App {
                 }
                 _ => bail!("Use :git (open / focus / zoom the Git pane), :git all or :git side"),
             },
-            // :ai [codex|claude|gemini|agy|local|opencode|<[ai.name]>] [model] [right|below]
+            // :ai [codex|claude|gemini|agy|local|opencode|<[ai.name]>] [model] [new] [right|below]
+            // (`new`: a new conversation, not the one a closed pane was in)
             "ai" => {
                 let mut program = None;
                 let mut axis = None;
                 let mut model = None;
+                let mut fresh = false;
                 for word in arg.split_whitespace() {
                     match word {
+                        "new" | "fresh" if program.is_some() => fresh = true,
                         "right" | "beside" | "side" => axis = Some(Axis::Horizontal),
                         "below" | "stacked" | "down" => axis = Some(Axis::Vertical),
                         name if program.is_none()
@@ -5041,7 +5195,7 @@ impl App {
                         }
                         name if program.is_some() && model.is_none() => model = Some(name),
                         _ => bail!(
-                            "Use :ai [codex|claude|gemini|agy|local|opencode|<your [ai.name]>] [model] [right|below]"
+                            "Use :ai [codex|claude|gemini|agy|local|opencode|<your [ai.name]>] [model] [new] [right|below]"
                         ),
                     }
                 }
@@ -5053,7 +5207,7 @@ impl App {
                     }
                     Some(program) => {
                         let axis = axis.unwrap_or_else(|| self.ai_axis());
-                        self.launch(program, model, Some(axis))?;
+                        self.launch(program, model, Some(axis), fresh)?;
                     }
                     None => self.open_ai(axis)?,
                 }
@@ -7008,7 +7162,8 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
             "claude",
             true,
             pinned(&app).as_deref(),
-            &|_| true,
+            &|_, _| true,
+            false,
             &String::new,
         );
         assert_eq!(args, ["--resume", switched]);
@@ -7024,41 +7179,123 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         app.follow_conversations(&home);
         assert_eq!(pinned(&app).as_deref(), Some(switched));
     }
+    #[cfg(unix)]
+    #[test]
+    fn closed_ai_panes_are_remembered_for_the_launcher() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().into(), None, false).unwrap();
+        let agent = |app: &mut App, name: &str, session: Option<&str>| {
+            app.open_terminal(
+                Some(("/bin/sh", vec!["-c".into(), "exec cat".into()])),
+                Some(Axis::Horizontal),
+            )
+            .unwrap();
+            if let Some(Pane::Terminal(t)) = app.panes.get_mut(&app.focused) {
+                t.launch = Launch::Agent {
+                    name: name.into(),
+                    model: None,
+                    session: session.map(String::from),
+                };
+            }
+        };
+        let id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+        agent(&mut app, "claude", Some(id));
+        assert!(!app.reopens("claude"), "still open");
+        app.command("q").unwrap();
+        assert!(app.reopens("claude"));
+        assert_eq!(
+            app.closed_agents,
+            [("claude".to_string(), Some(id.to_string()))]
+        );
+        // A Codex pane that never got a message has nothing to reopen.
+        agent(&mut app, "codex", None);
+        app.command("q").unwrap();
+        assert!(!app.reopens("codex"));
+        // Shells aren't conversations.
+        app.open_terminal(
+            Some(("/bin/sh", vec!["-c".into(), "exec cat".into()])),
+            Some(Axis::Horizontal),
+        )
+        .unwrap();
+        app.command("q").unwrap();
+        assert_eq!(app.closed_agents.len(), 1);
+        // The launcher says which CLI picks up where it was, and `n` opts out.
+        app.command("ai").unwrap();
+        let shown = screen(&mut app, 140, 30).join("\n");
+        assert!(
+            shown.contains("[2]  Claude Code · reopens your last conversation"),
+            "{shown}"
+        );
+        assert!(!shown.contains("Codex · reopens"));
+        press(&mut app, KeyCode::Char('n'), KeyModifiers::NONE);
+        let shown = screen(&mut app, 140, 30).join("\n");
+        assert!(shown.contains("Claude Code · new conversation"), "{shown}");
+        // Your own [ai.claude] command replaces the built-in: nothing to reopen.
+        app.config.ai.insert("claude".into(), Default::default());
+        assert!(!app.reopens("claude"));
+    }
     #[test]
     fn claude_panes_reopen_exactly_their_own_conversation() {
         let new_id = || "11111111-2222-4333-8444-555555555555".to_string();
-        let yes = |_: &str| true;
-        let no = |_: &str| false;
+        let yes = |_: &str, _: &str| true;
+        let no = |_: &str, _: &str| false;
         let id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
         // A new Claude pane is pinned to a fresh conversation id.
-        let (args, replay, session) = agent_flags("claude", false, None, &no, &new_id);
+        let (args, replay, session) = agent_flags("claude", false, None, &no, false, &new_id);
         assert_eq!(args, ["--session-id", &new_id()]);
         assert!(replay);
         assert_eq!(session.as_deref(), Some(new_id().as_str()));
         // Restored: that exact conversation, never "the latest in this folder".
-        let (args, replay, session) = agent_flags("claude", true, Some(id), &yes, &new_id);
+        let (args, replay, session) = agent_flags("claude", true, Some(id), &yes, false, &new_id);
         assert_eq!(args, ["--resume", id]);
         assert!(!replay, "Claude redraws the conversation itself");
         assert_eq!(session.as_deref(), Some(id));
         // Pinned but never used: start it under the same id, below the old output.
-        let (args, replay, _) = agent_flags("claude", true, Some(id), &no, &new_id);
+        let (args, replay, _) = agent_flags("claude", true, Some(id), &no, false, &new_id);
         assert_eq!(args, ["--session-id", id]);
         assert!(replay);
         // Saved before ids existed: ask, with the old output shown.
-        let (args, replay, session) = agent_flags("claude", true, None, &no, &new_id);
+        let (args, replay, session) = agent_flags("claude", true, None, &no, false, &new_id);
         assert_eq!(args, ["--resume"]);
         assert!(replay && session.is_none());
         assert!(!args.contains(&"--continue".to_string()));
         // CLIs that can't be pinned reopen their latest conversation here.
         assert_eq!(
-            agent_flags("codex", true, None, &no, &new_id).0,
+            agent_flags("codex", true, None, &no, false, &new_id).0,
             ["resume", "--last"]
         );
-        assert!(agent_flags("codex", false, None, &no, &new_id).0.is_empty());
-        let (args, replay, _) = agent_flags("opencode", true, None, &no, &new_id);
+        assert!(agent_flags("codex", false, None, &no, false, &new_id)
+            .0
+            .is_empty());
+        // Codex: the conversation Raido found for the pane, while it still exists.
+        let (args, replay, session) = agent_flags("codex", true, Some(id), &yes, false, &new_id);
+        assert_eq!(args, ["resume", id]);
+        assert!(!replay && session.as_deref() == Some(id));
+        assert!(agent_flags("codex", true, Some(id), &no, false, &new_id)
+            .0
+            .is_empty());
+        // Gemini: pinned like Claude when it takes --session-id, else its latest.
+        let (args, _, session) = agent_flags("gemini", false, None, &no, true, &new_id);
+        assert_eq!(args, ["--session-id", &new_id()]);
+        assert_eq!(session.as_deref(), Some(new_id().as_str()));
+        let (args, replay, _) = agent_flags("gemini", true, Some(id), &yes, true, &new_id);
+        assert_eq!(args, ["--resume", id]);
+        assert!(!replay);
+        assert_eq!(
+            agent_flags("gemini", true, Some(id), &no, true, &new_id).0,
+            ["--session-id", id]
+        );
+        assert!(agent_flags("gemini", false, None, &no, false, &new_id)
+            .0
+            .is_empty());
+        assert_eq!(
+            agent_flags("gemini", true, None, &no, false, &new_id).0,
+            ["--resume", "latest"]
+        );
+        let (args, replay, _) = agent_flags("opencode", true, None, &no, false, &new_id);
         assert_eq!(args, ["--continue"]);
         assert!(!replay, "OpenCode redraws the conversation itself");
-        assert!(agent_flags("opencode", false, None, &no, &new_id)
+        assert!(agent_flags("opencode", false, None, &no, false, &new_id)
             .0
             .is_empty());
         let a = conversation_id();

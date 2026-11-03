@@ -39,6 +39,8 @@ pub struct TerminalPane {
     pub parser: Arc<Mutex<vt100::Parser>>,
     pub dirty: Arc<AtomicBool>,
     pub exited: Option<String>,
+    /// When the pane's program started (an AI pane's conversation starts after).
+    pub started: std::time::SystemTime,
     master: Box<dyn MasterPty + Send>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Box<dyn Child + Send + Sync>,
@@ -186,6 +188,7 @@ impl TerminalPane {
             parser,
             dirty,
             exited: None,
+            started: std::time::SystemTime::now(),
             master: pair.master,
             writer,
             child,

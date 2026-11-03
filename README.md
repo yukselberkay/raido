@@ -1186,11 +1186,21 @@ terminal window — and later run `raido` in the same project, you get back:
   fork), Raido follows: it reads which conversation the pane's Claude is in from
   Claude's own registry (`~/.claude/sessions/<pid>.json`) whenever it saves, and
   reopens that one. A pane that never got a message starts fresh under the same id.
-  Codex (`resume --last`), Gemini (`--resume latest`) and Antigravity (`--continue`)
-  cannot be pinned to an id, so they reopen their latest conversation in the
-  project. Other launchers restart below their previous output. Claude panes from a
+  Gemini CLI 0.46 and later is pinned the same way. Codex picks its own ids, so
+  Raido matches each Codex pane to the conversation that started in the project
+  after the pane opened, and reopens it with `codex resume <id>`. Older Gemini
+  (`--resume latest`), Antigravity and OpenCode (`--continue`) and Codex panes saved by an older
+  Raido (`resume --last`) reopen their latest conversation in the project. Other
+  launchers restart below their previous output. Claude panes from a
   session saved by an older Raido open Claude's conversation picker;
 - the AI launcher, Markdown previews, the Git pane and its branch filter.
+
+The same works without quitting. Close an AI pane, open that CLI again (launcher
+key, `:ai claude`), and it reopens the closed pane's conversation, the newest closed
+one first. The launcher marks those CLIs with "reopens your last conversation".
+Press `n` there before the number, or use `:ai claude new`, to start a new
+conversation instead. A Codex pane that never got a message has nothing to reopen
+and starts fresh; local models and your own `[ai.<name>]` launchers always do.
 
 The session lives in `.raido/session.json` in the project root, readable only by you.
 `.raido/` contains its own `.gitignore`, so it is never committed. Raido saves on quit and every few seconds while you work (only when something
@@ -1224,8 +1234,9 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 :new                      New scratch editor pane
 :split / :vsplit          Stack / side-by-side split
 :term                     New shell (in it, `raido FILE` opens FILE here)
-:ai [codex|claude|gemini|agy|opencode] [right|below]
+:ai [codex|claude|gemini|agy|opencode] [new] [right|below]
                           AI launcher, or launch a CLI, beside or below
+                          (reopens a closed pane's conversation; new: a new one)
 :ai local [model]         Your local LLM ([ai.local], else Ollama / LM Studio)
 :ai <name> [model]        A launcher you defined as [ai.<name>]
 :themes                   Theme picker with live preview (also Ctrl-b t)
