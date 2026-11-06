@@ -30,10 +30,6 @@ That is what this workspace is for:
 - **Easy to reach.** One install script on macOS, Linux and Windows, and it runs
   anywhere a terminal does, over SSH included.
 
-Raido was called **Odin** until October 2026. The name changed because Odin is also a
-programming language with its own `odin` command. Your settings, themes, sessions and
-the agent skill carry over by themselves ([Coming from Odin](#coming-from-odin)).
-
 ## Start here
 
 - [Build from source](#build-from-source)
@@ -87,8 +83,7 @@ It installs, skipping whatever is already there:
    (`~/.local/bin`, `~/bin`, `/opt/homebrew/bin` or `/usr/local/bin`), so it works in
    that terminal at once; without one, it adds `~/.cargo/bin` to your shell's startup
    file (zsh, bash or fish; once, marked) for new terminals. Another `raido` already
-   first on PATH is reported, not replaced. An install from when Raido was called
-   Odin (the `odin` command) is removed.
+   first on PATH is reported, not replaced.
 7. **The [Raido skill](#ask-your-ai-agent-about-raido)** for AI agents, for every project
    of your user (`--no-skill` skips it; a failure here only warns).
 
@@ -261,22 +256,6 @@ Uninstalling does not remove your projects or user configuration.
 uses [Semantic Versioning](https://semver.org): while it is 0.x, a minor release
 (0.2 → 0.3) may change keys, settings or behavior, and a patch release only fixes
 things. [CHANGELOG.md](CHANGELOG.md) lists what changed in each version.
-
-### Coming from Odin
-
-Raido is the same workspace under a new name. The install script removes the old
-`odin` command (`cargo uninstall odin-editor` does it by hand), and on its first start
-Raido moves what Odin kept:
-
-| Odin kept | Raido uses | When it moves |
-| --- | --- | --- |
-| `~/.config/odin` (settings, themes; `%APPDATA%\odin` on Windows) | `~/.config/raido` | First start |
-| A project's `.odin/` session | `.raido/` | When the project opens |
-| The `odin` skill in your AI agents' folders | The `raido` skill | When the skill is installed or refreshed (at startup when an agent is installed) |
-| `ODIN`, `ODIN_SOCKET`, `ODIN_DOCS` in terminal panes | `RAIDO`, `RAIDO_SOCKET`, `RAIDO_DOCS` | At once |
-
-Only Odin's own files move; a folder or skill named `odin` that belongs to something
-else (the Odin language, for one) is left alone.
 
 ## Your first five minutes
 
