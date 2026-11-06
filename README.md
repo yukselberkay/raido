@@ -255,6 +255,13 @@ For the custom-root installation, use
 The **package** is named `raido`; its **executable** is named `raido`.
 Uninstalling does not remove your projects or user configuration.
 
+### Versions
+
+`raido --version` prints the version, which also shows in the top right corner. Raido
+uses [Semantic Versioning](https://semver.org): while it is 0.x, a minor release
+(0.2 → 0.3) may change keys, settings or behavior, and a patch release only fixes
+things. [CHANGELOG.md](CHANGELOG.md) lists what changed in each version.
+
 ### Coming from Odin
 
 Raido is the same workspace under a new name. The install script removes the old
@@ -1658,6 +1665,13 @@ cargo run --example beacon
 cc -std=c11 -Wall -Wextra -Werror examples/forge.c -o target/forge
 ./target/forge
 ```
+
+To release a version: move the `Unreleased` notes in [CHANGELOG.md](CHANGELOG.md)
+under a new `## [X.Y.Z] - YYYY-MM-DD` heading (with its link at the bottom), set
+`version` in `Cargo.toml` to match (`cargo build` updates `Cargo.lock`), commit as
+`chore(release): X.Y.Z` and tag it `vX.Y.Z`. The version is set only in
+`Cargo.toml`; the code reads it from there, and a test fails if the changelog has no
+entry for it.
 
 CI runs format, lint, tests and a release build on Linux, macOS and Windows (the PTY
 smoke test is Unix-only). Day-to-day use and manual verification happen on Linux.

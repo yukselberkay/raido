@@ -396,6 +396,22 @@ fn show_keys() -> Result<()> {
 mod tests {
     use super::*;
 
+    /// Every version gets a CHANGELOG.md entry: bumping `version` in Cargo.toml
+    /// without one fails here.
+    #[test]
+    fn the_changelog_has_an_entry_for_this_version() {
+        let changelog = include_str!("../CHANGELOG.md");
+        let heading = format!("## [{VERSION}] - ");
+        assert!(
+            changelog.contains(&heading),
+            "CHANGELOG.md needs a `{heading}YYYY-MM-DD` section for this version"
+        );
+        assert!(
+            changelog.contains(&format!("[{VERSION}]: ")),
+            "CHANGELOG.md needs a link for [{VERSION}] at the bottom"
+        );
+    }
+
     #[test]
     fn waits_for_the_next_frame_briefly_when_lively_and_longer_when_idle() {
         let ms = Duration::from_millis;
