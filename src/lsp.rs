@@ -456,7 +456,7 @@ impl Lsp {
                     .unwrap_or_else(|| "workspace".into());
                 let params = json!({
                     "processId": std::process::id(),
-                    "clientInfo": { "name": "raido", "version": env!("CARGO_PKG_VERSION") },
+                    "clientInfo": { "name": "raido", "version": crate::VERSION },
                     "rootUri": root,
                     "rootPath": self.root,
                     "workspaceFolders": [{ "uri": root, "name": name }],

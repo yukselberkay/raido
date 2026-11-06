@@ -145,13 +145,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     if area.width > 110 && !bare {
         let right = format!(
-            "{}  ·  {} panes  ·  v0.1.0 ",
+            "{}  ·  {} panes  ·  v{} ",
             if app.git.branch.is_empty() {
                 "local"
             } else {
                 &app.git.branch
             },
-            app.visible().len()
+            app.visible().len(),
+            crate::VERSION
         );
         frame.render_widget(
             Paragraph::new(right)

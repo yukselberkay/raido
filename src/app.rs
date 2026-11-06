@@ -6450,6 +6450,17 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         assert!([top_left, top_right].contains(&go(below, KeyCode::Up)));
     }
     #[test]
+    fn the_top_bar_shows_the_version_from_cargo_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().into(), None, false).unwrap();
+        let top = screen(&mut app, 140, 30).remove(0);
+        assert!(
+            top.trim_end().ends_with(&format!("v{}", crate::VERSION)),
+            "{top}"
+        );
+        assert_eq!(crate::VERSION, env!("CARGO_PKG_VERSION"));
+    }
+    #[test]
     fn pane_titles_count_the_open_panes_docked_ones_too() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = App::new(dir.path().into(), None, false).unwrap();

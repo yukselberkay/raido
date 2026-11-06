@@ -54,6 +54,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Raido's version, from `Cargo.toml` — the one place it is set. Everything that
+/// shows or reports a version uses this, never a version written out by hand.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// The shortest time between two frames (120 a second): output that comes faster
 /// is drawn together.
 const FRAME: Duration = Duration::from_millis(8);
@@ -125,7 +129,7 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             "-V" | "--version" => {
-                println!("raido {}", env!("CARGO_PKG_VERSION"));
+                println!("raido {VERSION}");
                 return Ok(());
             }
             "--demo" => demo = true,

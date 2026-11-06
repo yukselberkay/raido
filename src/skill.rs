@@ -146,11 +146,7 @@ fn unlink(dir: &Path, source: &Path) -> Result<bool> {
 /// Write the skill files into `dir` (only what changed). Returns whether anything did.
 fn write_files(dir: &Path) -> Result<bool> {
     let mut changed = false;
-    for (name, content) in FILES
-        .iter()
-        .copied()
-        .chain([(MARKER, env!("CARGO_PKG_VERSION"))])
-    {
+    for (name, content) in FILES.iter().copied().chain([(MARKER, crate::VERSION)]) {
         let path = dir.join(name);
         if fs::read_to_string(&path).ok().as_deref() != Some(content) {
             if let Some(parent) = path.parent() {

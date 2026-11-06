@@ -431,7 +431,7 @@ fn answer(app: &mut App, message: &Value) -> Option<Value> {
                 "prompts": {"listChanged": true},
                 "tools": {"listChanged": true},
             },
-            "serverInfo": {"name": "raido", "version": env!("CARGO_PKG_VERSION")},
+            "serverInfo": {"name": "raido", "version": crate::VERSION},
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools": tools()})),
