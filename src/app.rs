@@ -6450,6 +6450,36 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         assert!([top_left, top_right].contains(&go(below, KeyCode::Up)));
     }
     #[test]
+    fn the_top_bar_puts_the_project_name_first_and_in_bold() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("beacon-service");
+        std::fs::create_dir(&root).unwrap();
+        let mut app = App::new(root, None, false).unwrap();
+        app.config.icons = crate::config::Icons::Basic;
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 30)).unwrap();
+        terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let top: String = (0..140).map(|x| buffer[(x, 0)].symbol()).collect();
+        assert!(top.starts_with(" ◉ RAIDO  beacon-service "), "{top}");
+        // Bold, on a band of the theme's selection color, in its text color.
+        let start = top.find("beacon").unwrap() as u16 - 2; // "◉" is 3 bytes, 1 column
+        let cell = &buffer[(start, 0)];
+        assert_eq!(cell.symbol(), "b");
+        assert!(cell.modifier.contains(ratatui::style::Modifier::BOLD));
+        assert_eq!(cell.bg, crate::config::color(&app.theme.selection));
+        assert_eq!(cell.fg, crate::config::color(&app.theme.foreground));
+        // A name too long for a third of the width is cut, not run into the dock.
+        let long = dir
+            .path()
+            .join("a-project-with-a-really-long-name-that-goes-on");
+        std::fs::create_dir(&long).unwrap();
+        let mut app = App::new(long, None, false).unwrap();
+        let top = screen(&mut app, 90, 30).remove(0);
+        // 90 columns: up to 30 for the name, the last one the "…".
+        assert!(top.contains(" a-project-with-a-really-long-… "), "{top}");
+    }
+    #[test]
     fn the_top_bar_shows_the_version_from_cargo_toml() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = App::new(dir.path().into(), None, false).unwrap();

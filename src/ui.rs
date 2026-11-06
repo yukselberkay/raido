@@ -89,19 +89,28 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Copy view: only the focused pane's text, so a mouse selection takes nothing else.
     let bare = app.copy_view.is_some();
     let root = app.root.file_name().unwrap_or_default().to_string_lossy();
-    let title = Line::from(vec![
-        Span::styled(
-            " ◉ RAIDO ",
-            Style::default()
-                .fg(color(&theme.background))
-                .bg(color(&theme.accent))
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("  {}", printable(&root)),
-            Style::default().fg(color(&theme.muted)),
-        ),
-    ]);
+    let mut title = vec![Span::styled(
+        " ◉ RAIDO ",
+        Style::default()
+            .fg(color(&theme.background))
+            .bg(color(&theme.accent))
+            .add_modifier(Modifier::BOLD),
+    )];
+    // The project you're working on carries on from Raido's badge, like a
+    // breadcrumb: its name in bold on a band of its own, behind a folder where the
+    // font has one. A long name is cut so the dock tabs beside it still fit.
+    let band = Style::default().bg(color(&theme.selection));
+    title.push(Span::styled(" ", band));
+    if app.config.icons == crate::config::Icons::Nerd {
+        title.push(Span::styled("\u{f07c} ", band.fg(color(&theme.secondary))));
+    }
+    title.push(Span::styled(
+        shorten(&printable(&root), (area.width / 3) as usize),
+        band.fg(color(&theme.foreground))
+            .add_modifier(Modifier::BOLD),
+    ));
+    title.push(Span::styled(" ", band));
+    let title = Line::from(title);
     let title_width = title.width() as u16;
     if !bare {
         frame.render_widget(
@@ -1222,11 +1231,13 @@ fn sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(regions[0]);
     frame.render_widget(block, regions[0]);
     let name = app.root.file_name().unwrap_or_default().to_string_lossy();
-    text(
-        frame,
+    frame.render_widget(
+        Paragraph::new(format!(" {} /", printable(&name))).style(
+            Style::default()
+                .fg(color(&theme.accent))
+                .add_modifier(Modifier::BOLD),
+        ),
         Rect::new(inner.x, inner.y, inner.width, 1),
-        format!(" {} /", printable(&name)),
-        color(&theme.accent),
     );
     let visible = inner.height.saturating_sub(3) as usize;
     app.explorer_rows = Rect::new(inner.x, inner.y + 1, inner.width, visible as u16);
@@ -1848,6 +1859,25 @@ fn hover_popup(frame: &mut Frame, app: &App, hover: &str, at: (u16, u16), screen
             ),
         );
     }
+}
+
+/// `text` cut to at most `width` columns, ending in "…" where it was cut.
+fn shorten(text: &str, width: usize) -> String {
+    let columns = |c: char| UnicodeWidthChar::width(c).unwrap_or(0);
+    if text.chars().map(columns).sum::<usize>() <= width {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        if used + columns(c) + 1 > width {
+            break;
+        }
+        used += columns(c);
+        out.push(c);
+    }
+    out.push('…');
+    out
 }
 
 pub(crate) fn display_width(chars: impl Iterator<Item = char>, tab: usize) -> usize {
