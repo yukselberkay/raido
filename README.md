@@ -681,12 +681,15 @@ change did to the code, and at the end it sums up the whole change:
   nearly always write, so you read *what* it's for, not just its name. The summary
   at the end counts it all up, names new and deleted files, and lists the new
   definitions with their comments.
-- **With an AI, when you ask (`s`):** an AI reads the diff and writes a sentence per
-  file and a few sentences about the change as a whole: what it does, how the
-  pieces fit together, and what's worth checking. They appear above the outline,
-  marked `◆`. Nothing is sent until you press `s`, and only the diff goes, cut to
-  60 KB. Raido runs the AI you have without tools or a saved session, from an
-  empty folder outside the project: Claude Code on its small model (Haiku, a few
+- **With an AI, by itself:** once an agent stops changing files, an AI reads the
+  diff and writes a sentence per file and a few sentences about the change as a
+  whole: what it does, how the pieces fit together, and what's worth checking. They
+  appear above the outline, marked `◆`, usually by the time you open the review.
+  It asks once per round of agent changes, and only the files with new changes go;
+  keeping or undoing changes yourself asks nothing. `s` asks at once instead of
+  waiting, and with `review_ai_auto = false` nothing is sent until you press `s`.
+  Only the diff goes, cut to 60 KB. Raido runs the AI you have without tools or a
+  saved session, from an empty folder outside the project: Claude Code on its small model (Haiku, a few
   seconds and a few thousand tokens), Codex, Gemini CLI, or a local model with
   Ollama (on your machine, nothing billed), on the model you choose (see
   `review_ai` below). When the agent changes more afterwards, the
@@ -698,7 +701,8 @@ change did to the code, and at the end it sums up the whole change:
 - **When a change is too large for one request** (more than 60 KB of diff, or 16 KB
   for one file), the review says so instead of looking complete: a file read only
   in part is marked "read in part", and the summary says "Explained 6 of 9 files:
-  the rest didn't fit". Press `s` again and only the files it didn't read go.
+  the rest didn't fit". The files it didn't read go in the next request, which
+  follows by itself as long as each answer explains more (or press `s`).
 - **What it cost** shows under the summary, as the AI reports it: `3.9k tokens
   ($0.004)` from Claude Code (tokens and price), tokens only from Codex, and the
   total for every explanation since Raido started. Most of a small request is the
@@ -707,7 +711,8 @@ change did to the code, and at the end it sums up the whole change:
 | Setting | Default | |
 | --- | --- | --- |
 | `review_summary` | `true` | The outline under each file and at the end; `false` hides it (`i` toggles it in the review) |
-| `review_ai` | `"auto"` | Who explains on `s`, or a list to try in order (the first one installed answers). `"auto"` tries Claude Code, Codex, Gemini, then a local model. Name one with `"claude"`, `"codex"`, `"gemini"` or `"local"`, and a model after a colon, as that CLI names it: `"claude:sonnet"`, `"local:llama3.2"`, `"codex:<model>"`, `"gemini:<model>"`. Also a command that reads the prompt on its input and answers on its output, or `"off"` |
+| `review_ai_auto` | `true` | Explain new agent changes by themselves once the agents stop; `false` waits for `s` |
+| `review_ai` | `"auto"` | Who explains the changes, or a list to try in order (the first one installed answers). `"auto"` tries Claude Code, Codex, Gemini, then a local model. Name one with `"claude"`, `"codex"`, `"gemini"` or `"local"`, and a model after a colon, as that CLI names it: `"claude:sonnet"`, `"local:llama3.2"`, `"codex:<model>"`, `"gemini:<model>"`. Also a command that reads the prompt on its input and answers on its output, or `"off"` |
 
 Without a model, Claude Code uses Haiku (cheap and quick, which suits a summary;
 `claude:sonnet` explains more carefully for more), Codex and Gemini their own
@@ -1522,7 +1527,8 @@ theme immediately. The configuration supports:
 | `ai_sound` | `"default"` | Sound when an AI pane finishes a prompt: `"default"`, `"off"`, `"bell"`, a system sound name (macOS `"Hero"`, Windows `"chimes"`) or a sound file; `:sound` plays it |
 | `review_changes` | `true` | Track the files AI panes change, to [review, keep or undo](#review-ai-changes) them (`Ctrl-b v`) |
 | `review_summary` | `true` | In the review, list what each file's change added, changed and removed, and sum it up at the end, read from the code without AI |
-| `review_ai` | `"auto"` | Which AI explains the changes when you press `s` in the review, or a list to try in order: `"auto"`, `"claude"`, `"codex"`, `"gemini"`, `"local"`, each with an optional `:model`, a command, or `"off"` |
+| `review_ai_auto` | `true` | Explain new agent changes in the review by themselves once the agents stop (`false`: only on `s`) |
+| `review_ai` | `"auto"` | Which AI explains the changes in the review, or a list to try in order: `"auto"`, `"claude"`, `"codex"`, `"gemini"`, `"local"`, each with an optional `:model`, a command, or `"off"` |
 | `claude_ide` | `true` | Let Claude Code [see your editor](#ai-panes-see-your-editor) (the file and selection) as in VS Code |
 | `format_on_save` | `["go"]` | Languages whose files get imports organized and formatting from their server on save ([Go: tidy on save](#go-tidy-on-save)) |
 | `ai_skill` | `true` | Keep the [Raido skill](#ask-your-ai-agent-about-raido) installed for the AI agents on this machine (at startup and when you launch one) |

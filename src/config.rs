@@ -181,6 +181,9 @@ pub struct Config {
     /// that reads the prompt on its input, or "off".
     #[serde(deserialize_with = "one_or_more")]
     pub review_ai: Vec<String>,
+    /// Have that AI explain new changes by itself once the agents stop, so the
+    /// explanation is waiting when you open the review (`s` still asks at once).
+    pub review_ai_auto: bool,
     /// Connect Claude Code to Raido as to VS Code: it sees your file and selection.
     pub claude_ide: bool,
     /// Mouse wheel scrolls what's under the pointer, a click focuses it and a drag
@@ -225,6 +228,7 @@ impl Default for Config {
             review_changes: true,
             review_summary: true,
             review_ai: vec!["auto".into()],
+            review_ai_auto: true,
             claude_ide: true,
             mouse: true,
             ai: BTreeMap::new(),

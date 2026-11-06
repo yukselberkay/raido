@@ -666,6 +666,14 @@ pub struct Changes {
     pub spent: crate::summary::Usage,
     /// How many there were.
     pub asked: usize,
+    /// Explanations come by themselves once the agents stop (`review_ai_auto`).
+    pub auto: bool,
+    /// Agents changed files since the last explanation that came by itself. Your
+    /// own keeping and undoing don't count, so reviewing costs no tokens.
+    agent_news: bool,
+    /// The last answer left files out and explained more than before: ask for
+    /// the rest.
+    more: bool,
 }
 
 impl Changes {
@@ -703,6 +711,9 @@ impl Changes {
             summary_error: None,
             spent: Default::default(),
             asked: 0,
+            auto: false,
+            agent_news: false,
+            more: false,
         }
     }
 
@@ -789,6 +800,7 @@ impl Changes {
                 continue;
             }
             base.by = by.clone();
+            self.agent_news = true;
             self.pending
                 .entry(path)
                 .and_modify(|b| b.by.extend(by.iter().cloned()))
@@ -846,6 +858,49 @@ impl Changes {
         ))
     }
 
+    /// Explain new agent changes without `s`: once agents have changed files, none
+    /// works now (`busy` says whether one does) and the look after them is in, ask
+    /// about the files whose explanation is missing or out of date. Asked once per
+    /// round of agent changes, so a failure isn't retried until agents change more;
+    /// a change too large for one request carries on while each answer explains
+    /// more (see `summary_arrived`). True when the review changed.
+    pub fn explain_when_quiet(&mut self, setting: &[String], busy: bool) -> bool {
+        let settled = !busy
+            && self.since.is_empty()
+            && self.running.is_empty()
+            && self.job.is_none()
+            && !self.wanted;
+        if !settled
+            || !(self.agent_news || self.more)
+            || self.problem.is_some()
+            || self.summary_job.is_some()
+        {
+            return false;
+        }
+        self.agent_news = false;
+        self.more = false;
+        let unexplained = self.files.iter().any(|f| {
+            !self
+                .summary
+                .as_ref()
+                .is_some_and(|s| s.note(f).is_some_and(|(_, now)| now))
+        });
+        if !unexplained {
+            return false;
+        }
+        let failed = match crate::summary::Agent::choose(setting) {
+            Ok(None) => return false,
+            Ok(Some(_)) => self.summarize(setting, false).err(),
+            Err(error) => Some(error),
+        };
+        let changed = self.summary_job.is_some() || failed.is_some();
+        if let Some(error) = failed {
+            self.summary_error = Some(error);
+            self.version += 1;
+        }
+        changed
+    }
+
     /// The AI asked to summarize is still reading: its name.
     pub fn summarizing(&self) -> Option<&str> {
         self.summary_job.as_ref().map(|(_, by)| by.as_str())
@@ -874,6 +929,17 @@ impl Changes {
                 if let Some(usage) = summary.usage {
                     self.spent.add(usage);
                 }
+                // Files whose explanation matches them as they are now.
+                let explained = |summary: &crate::summary::Summary, files: &[FileDiff]| {
+                    files
+                        .iter()
+                        .filter(|f| summary.note(f).is_some_and(|(_, now)| now))
+                        .count()
+                };
+                let before_count = self
+                    .summary
+                    .as_ref()
+                    .map_or(0, |s| explained(s, &self.files));
                 // What it said before about files it wasn't sent stays, for the files
                 // still under review.
                 if let Some(before) = self.summary.take() {
@@ -883,6 +949,13 @@ impl Changes {
                         }
                     }
                 }
+                // Too large for one request: ask for the rest by itself, as long as
+                // each answer explains more than the last.
+                let rest = summary
+                    .left_out
+                    .iter()
+                    .any(|p| self.files.iter().any(|f| &f.path == p));
+                self.more = rest && explained(&summary, &self.files) > before_count;
                 self.summary = Some(summary);
             }
             Err(error) => self.summary_error = Some(error),
@@ -1443,6 +1516,10 @@ impl ChangesView {
                     out.push((Tone::Faint, cost));
                 }
             }
+            _ if changes.auto => out.push((
+                Tone::Faint,
+                "◆ An AI explains these changes when the agents stop · s asks now (uses tokens · review_ai_auto)".into(),
+            )),
             _ => out.push((
                 Tone::Faint,
                 "◆ s: an AI explains these changes (uses tokens · review_ai in config.toml)".into(),
@@ -1702,6 +1779,146 @@ pub(crate) mod tests {
         });
     }
 
+    /// Tick until the AI asked to explain has answered.
+    fn answered(changes: &mut Changes) {
+        let start = Instant::now();
+        while changes.summarizing().is_some() {
+            assert!(start.elapsed() < Duration::from_secs(20), "no answer");
+            changes.tick(&[], true, false);
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explanations_come_by_themselves_after_agents_change_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, root, mut changes) = project();
+        // An AI of your own: it notes each prompt it gets and explains every file.
+        let log = dir.path().join("prompts");
+        let ai = dir.path().join("fake-ai");
+        fs::write(
+            &ai,
+            format!(
+                "#!/bin/sh\ncat >> '{log}'\necho ==== >> '{log}'\nfor p in src/main.rs src/door.py src/bell.rs; do echo \"FILE $p: Explained.\"; done\necho 'OVERALL: All explained.'\n",
+                log = log.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&ai, fs::Permissions::from_mode(0o755)).unwrap();
+        let setting = vec![ai.display().to_string()];
+        let prompts = || -> Vec<String> {
+            let text = fs::read_to_string(&log).unwrap_or_default();
+            let mut all: Vec<String> = text.split("====\n").map(String::from).collect();
+            all.pop();
+            all
+        };
+        // Nothing to explain before any agent changed anything.
+        assert!(!changes.explain_when_quiet(&setting, false));
+        feature(&mut changes, &root);
+        // Not while an agent still works.
+        assert!(!changes.explain_when_quiet(&setting, true));
+        assert!(changes.summarizing().is_none());
+        // It stopped: the changes are explained without being asked.
+        assert!(changes.explain_when_quiet(&setting, false));
+        answered(&mut changes);
+        let summary = changes.summary.as_ref().expect("explained");
+        assert_eq!(summary.overall, "All explained.");
+        assert_eq!(summary.files.len(), 2);
+        assert_eq!(prompts().len(), 1);
+        // Once per round of agent changes.
+        assert!(!changes.explain_when_quiet(&setting, false));
+        // Your own keeping and undoing cost nothing.
+        changes.keep(&Target::File("src/door.py".into())).unwrap();
+        settle(&mut changes, &[]);
+        assert!(!changes.explain_when_quiet(&setting, false));
+        assert_eq!(prompts().len(), 1);
+        // The agent adds a file: only that one goes, the rest is known.
+        turn(&mut changes, "Claude", |_| {
+            fs::write(root.join("src/bell.rs"), "pub fn ring() {}\n").unwrap();
+        });
+        assert!(changes.explain_when_quiet(&setting, false));
+        answered(&mut changes);
+        let asked = prompts();
+        assert_eq!(asked.len(), 2);
+        assert!(asked[1].contains("pub fn ring()"), "{}", asked[1]);
+        assert!(!asked[1].contains("println!(\"hi"), "{}", asked[1]);
+        // A failure shows, and isn't asked again until agents change more.
+        turn(&mut changes, "Claude", |_| {
+            fs::write(root.join("src/bell.rs"), "pub fn ring() { beep() }\n").unwrap();
+        });
+        // (`false` would mean "off"; this command answers nothing.)
+        let failing = vec!["sh -c true".to_string()];
+        assert!(changes.explain_when_quiet(&failing, false));
+        answered(&mut changes);
+        assert!(changes.summary_error.is_some());
+        assert!(!changes.explain_when_quiet(&failing, false));
+        // Off means off.
+        turn(&mut changes, "Claude", |_| {
+            fs::write(root.join("src/bell.rs"), "pub fn ring() {}\n").unwrap();
+        });
+        assert!(!changes.explain_when_quiet(&["off".to_string()], false));
+        assert!(changes.summarizing().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn changes_too_large_for_one_request_are_explained_in_rounds() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, root, mut changes) = project();
+        let names: Vec<String> = (0..6).map(|i| format!("src/big{i}.rs")).collect();
+        let ai = |name: &str, answers: bool| {
+            let path = dir.path().join(name);
+            let files = if answers {
+                format!(
+                    "for p in {}; do echo \"FILE $p: A lot of lets.\"; done\n",
+                    names.join(" ")
+                )
+            } else {
+                String::new()
+            };
+            let script = format!("#!/bin/sh\ncat > /dev/null\n{files}echo 'OVERALL: Big.'\n");
+            fs::write(&path, script).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            vec![path.display().to_string()]
+        };
+        // Six files of about 15 KB each: more than one request takes.
+        let write = |extra: &str| {
+            for (i, name) in names.iter().enumerate() {
+                let body = format!("let x{i} = 1;{extra}\n").repeat(1200);
+                fs::write(root.join(name), body).unwrap();
+            }
+        };
+        turn(&mut changes, "Claude", |_| write(""));
+        let explained = |changes: &Changes| {
+            let summary = changes.summary.as_ref().unwrap();
+            changes
+                .files
+                .iter()
+                .filter(|f| summary.note(f).is_some_and(|(_, now)| now))
+                .count()
+        };
+        // An answer that explains nothing more doesn't go round again.
+        let lazy = ai("lazy-ai", false);
+        assert!(changes.explain_when_quiet(&lazy, false));
+        answered(&mut changes);
+        assert!(!changes.summary.as_ref().unwrap().left_out.is_empty());
+        assert_eq!(explained(&changes), 0);
+        assert!(!changes.explain_when_quiet(&lazy, false));
+        // One that does carries on by itself until every file is explained.
+        turn(&mut changes, "Claude", |_| write(" "));
+        let good = ai("good-ai", true);
+        let mut rounds = 0;
+        while changes.explain_when_quiet(&good, false) {
+            answered(&mut changes);
+            rounds += 1;
+            assert!(rounds <= names.len(), "never finishes");
+        }
+        assert!(rounds >= 2, "{rounds} round(s)");
+        assert_eq!(explained(&changes), names.len());
+        assert!(changes.summary.as_ref().unwrap().left_out.is_empty());
+    }
+
     #[test]
     fn the_review_sums_up_each_file_and_the_whole_change() {
         let (_dir, root, mut changes) = project();
@@ -1733,6 +1950,15 @@ pub(crate) mod tests {
         let overview = notes(&view, None);
         assert_eq!(overview[0], "Summary");
         assert!(overview[1].starts_with("◆ s: an AI explains"));
+        // With review_ai_auto, it says the explanation comes by itself.
+        changes.auto = true;
+        changes.version += 1;
+        view.sync(&changes);
+        assert!(notes(&view, None)[1]
+            .starts_with("◆ An AI explains these changes when the agents stop"));
+        changes.auto = false;
+        changes.version += 1;
+        view.sync(&changes);
         assert!(
             overview.contains(&"2 files · +10 −1 · by Claude".to_string()),
             "{overview:#?}"
