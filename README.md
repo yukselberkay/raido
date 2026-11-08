@@ -1310,6 +1310,17 @@ Letters work too: `c` Codex, `a` Claude, `g` Gemini, `y` Antigravity, `l` Local,
 `o` OpenCode. A restored Codex, Gemini, Antigravity or OpenCode pane reopens that
 CLI's latest conversation in the project; a Claude Code pane reopens exactly its own.
 
+**OpenCode on your Ollama models:** with Ollama installed, `6` / `o` (or `:ai opencode`)
+first lists the models you've pulled (`ollama list`) in the pane: ↑↓ and Enter, or
+`1`–`9`, start OpenCode on that model; `0` leaves the model to OpenCode (its last
+one; `/models` inside switches). `:ai opencode <model>` skips the list, and a restored
+pane reopens on the same model. Raido hands OpenCode the model in
+`OPENCODE_CONFIG_CONTENT` (with `--standalone` where OpenCode has it, so its own server
+reads it) and changes no config file. OpenCode 2 finds Ollama's models by itself; an
+older one needs an `ollama` provider in its `opencode.json`. Without Ollama, if it
+isn't running or has no models, or with an `[ai.opencode]` of yours, OpenCode still
+starts, on its own choice.
+
 **Placement:** `Ctrl-b a` or `:ai` opens AI panes **beside** your code; `Ctrl-b A` or
 `:ai below` stacks them **below**. Add `below`/`right` to any `:ai` command
 (`:ai claude below`), or set the default with `ai_split = "below"` in config.toml.

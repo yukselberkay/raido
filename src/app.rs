@@ -26,7 +26,7 @@ use ratatui::layout::Rect;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
-    sync::mpsc::Receiver,
+    sync::mpsc::{self, Receiver},
     time::{Duration, Instant},
 };
 
@@ -34,7 +34,8 @@ pub enum Pane {
     Editor(usize),
     Preview(Preview),
     Terminal(Box<TerminalPane>),
-    Ai,
+    /// The AI launcher; with a choice, asking which model OpenCode starts on.
+    Ai(Option<ModelChoice>),
     /// Branches, commit graph and commit details (`:git`, Ctrl-b G).
     Git(Box<GitView>),
     /// What AI agents changed, to keep or undo (`:changes`, Ctrl-b v).
@@ -108,6 +109,10 @@ pub struct ThemePicker {
     pub original: String,
 }
 
+/// What the AI launcher pane says in the status line.
+const LAUNCHER_HINT: &str =
+    "AI launcher: 1 Codex · 2 Claude · 3 Gemini · 4 Antigravity · 5 Local (Ollama) · 6 OpenCode";
+
 /// AI CLIs the launcher offers: (key, program, name, install hint). Your own
 /// `[ai.<name>]` entries take the digits after these.
 pub const AGENTS: [(char, &str, &str, &str); 6] = [
@@ -138,6 +143,58 @@ pub const AGENTS: [(char, &str, &str, &str); 6] = [
     ),
     ('6', "opencode", "OpenCode", "npm install -g opencode-ai"),
 ];
+
+/// The AI launcher pane asking which model OpenCode starts on: your Ollama models,
+/// listed in the background (`ollama list` can be slow, or hang on a stuck server),
+/// then OpenCode's own choice.
+pub struct ModelChoice {
+    /// Your Ollama models, once listed.
+    pub models: Vec<String>,
+    /// Why there are none to offer, once that's known.
+    pub problem: Option<String>,
+    /// The row under the cursor: a model, or `models.len()` for OpenCode's own choice.
+    pub selected: usize,
+    /// The listing on its way.
+    listing: Option<mpsc::Receiver<Result<Vec<String>, String>>>,
+}
+
+impl ModelChoice {
+    /// A choice whose models arrive on `listing`.
+    fn new(listing: mpsc::Receiver<Result<Vec<String>, String>>) -> Self {
+        Self {
+            models: Vec::new(),
+            problem: None,
+            selected: 0,
+            listing: Some(listing),
+        }
+    }
+    /// Still waiting for `ollama list`.
+    pub fn listing(&self) -> bool {
+        self.listing.is_some()
+    }
+    /// Take the models if they've arrived; true when they did.
+    fn poll(&mut self) -> bool {
+        let Some(listing) = &self.listing else {
+            return false;
+        };
+        let result = match listing.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return false,
+            Err(mpsc::TryRecvError::Disconnected) => Err("Couldn't list Ollama's models".into()),
+        };
+        self.listing = None;
+        match result {
+            Ok(models) if models.is_empty() => {
+                self.problem =
+                    Some("Ollama has no models yet · pull one: ollama pull <model>".into());
+            }
+            Ok(models) => self.models = models,
+            Err(error) => self.problem = Some(error),
+        }
+        self.selected = 0;
+        true
+    }
+}
 
 /// Insert-mode completion popup.
 pub struct Menu {
@@ -480,7 +537,7 @@ impl App {
             app.open(&path)?;
         }
         if demo {
-            let ai = app.add_pane(Pane::Ai, Axis::Horizontal);
+            let ai = app.add_pane(Pane::Ai(None), Axis::Horizontal);
             if let Tile::Split { percent, .. } = &mut app.tiles {
                 *percent = 63;
             }
@@ -999,7 +1056,7 @@ impl App {
                             transcript,
                         }
                     }
-                    Pane::Ai => SavedPane::Ai,
+                    Pane::Ai(_) => SavedPane::Ai,
                     Pane::Git(view) => SavedPane::Git {
                         only: view.only.clone(),
                     },
@@ -1120,7 +1177,7 @@ impl App {
                     preview.synced = Some(self.buffers[buffer.min(last)].row);
                     Pane::Preview(preview)
                 }
-                SavedPane::Ai => Pane::Ai,
+                SavedPane::Ai => Pane::Ai(None),
                 SavedPane::Changes => Pane::Changes(Box::default()),
                 SavedPane::Git { only } => {
                     let mut view = GitView::new(self.root.clone());
@@ -1138,7 +1195,7 @@ impl App {
                     Ok(terminal) => Pane::Terminal(Box::new(terminal)),
                     Err(error) => {
                         problems.push(format!("{error:#}"));
-                        Pane::Ai
+                        Pane::Ai(None)
                     }
                 },
             };
@@ -1348,6 +1405,7 @@ impl App {
                     }
                 }
                 Pane::Git(view) => self.redraw |= view.poll(),
+                Pane::Ai(Some(choice)) => self.redraw |= choice.poll(),
                 _ => {}
             }
         }
@@ -2115,7 +2173,8 @@ impl App {
             Some(Pane::Preview(_)) => return self.preview_key(key),
             Some(Pane::Git(_)) => return self.git_pane_key(key),
             Some(Pane::Changes(_)) => return self.changes_key(key),
-            Some(Pane::Ai) => {
+            Some(Pane::Ai(Some(_))) => return self.model_choice_key(key),
+            Some(Pane::Ai(None)) => {
                 let chosen = match key.code {
                     KeyCode::Char('c') => Some("codex"),
                     KeyCode::Char('a') => Some("claude"),
@@ -2127,6 +2186,10 @@ impl App {
                     _ => None,
                 };
                 if let Some(program) = chosen {
+                    if program == "opencode" && self.offers_ollama_models() {
+                        self.choose_opencode_model();
+                        return Ok(());
+                    }
                     return self.launch_agent(program, None);
                 }
                 // The digits after the built-ins (7–9) launch your own [ai.<name>]
@@ -2871,7 +2934,8 @@ impl App {
             Some(Pane::Terminal(t)) => t.title.clone(),
             Some(Pane::Git(_)) => "Git".into(),
             Some(Pane::Changes(_)) => "Changes".into(),
-            Some(Pane::Ai) => "AI launcher".into(),
+            Some(Pane::Ai(None)) => "AI launcher".into(),
+            Some(Pane::Ai(Some(_))) => "OpenCode · choose a model".into(),
             None => "?".into(),
         }
     }
@@ -4267,15 +4331,73 @@ impl App {
             bail!("Maximum of 12 panes");
         }
         let axis = axis.unwrap_or_else(|| self.ai_axis());
-        self.add_pane(Pane::Ai, axis);
-        self.notice(
-            "AI launcher: 1 Codex · 2 Claude · 3 Gemini · 4 Antigravity · 5 Local (Ollama) · 6 OpenCode",
-        );
+        self.add_pane(Pane::Ai(None), axis);
+        self.notice(LAUNCHER_HINT);
         Ok(())
     }
     /// Run an AI CLI in the focused AI pane (`split: None`) or in a new split.
     fn launch_agent(&mut self, program: &str, split: Option<Axis>) -> Result<()> {
         self.launch(program, None, split)
+    }
+    /// Whether OpenCode first offers your Ollama models: both are installed, and
+    /// OpenCode isn't replaced by an `[ai.opencode]` of yours. Without Ollama it just
+    /// starts, on its own choice of model.
+    fn offers_ollama_models(&self) -> bool {
+        !self.config.ai.contains_key("opencode")
+            && crate::lsp::on_path("opencode")
+            && crate::lsp::on_path("ollama")
+    }
+    /// Turn the focused AI launcher into OpenCode's model choice, with your Ollama
+    /// models listed in the background.
+    fn choose_opencode_model(&mut self) {
+        let (send, listing) = mpsc::channel();
+        std::thread::spawn(move || {
+            let models = crate::local_ai::ollama_models().map_err(|e| format!("{e:#}"));
+            let _ = send.send(models);
+        });
+        // Learnt meanwhile, so starting OpenCode on the model doesn't wait for it.
+        std::thread::spawn(crate::local_ai::opencode_standalone);
+        if let Some(pane @ Pane::Ai(_)) = self.panes.get_mut(&self.focused) {
+            *pane = Pane::Ai(Some(ModelChoice::new(listing)));
+        }
+        self.notice("OpenCode: pick a model · ↑↓ Enter · 1–9 · 0 OpenCode's own choice · Esc back");
+    }
+    /// Keys in OpenCode's model choice: ↑↓ (j k) move, Enter starts the row, 1–9 a
+    /// model, 0 OpenCode's own choice, Esc goes back to the launcher.
+    fn model_choice_key(&mut self, key: KeyEvent) -> Result<()> {
+        if key.code == KeyCode::Char(':') {
+            self.input_start(InputKind::Command);
+            return Ok(());
+        }
+        let Some(Pane::Ai(Some(choice))) = self.panes.get_mut(&self.focused) else {
+            return Ok(());
+        };
+        let rows = choice.models.len() + 1;
+        let row = match key.code {
+            KeyCode::Esc => {
+                if let Some(pane) = self.panes.get_mut(&self.focused) {
+                    *pane = Pane::Ai(None);
+                }
+                self.notice(LAUNCHER_HINT);
+                return Ok(());
+            }
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::BackTab => {
+                choice.selected = (choice.selected + rows - 1) % rows;
+                return Ok(());
+            }
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
+                choice.selected = (choice.selected + 1) % rows;
+                return Ok(());
+            }
+            KeyCode::Enter => choice.selected,
+            KeyCode::Char('0') => choice.models.len(),
+            KeyCode::Char(c @ '1'..='9') if (c as usize - '1' as usize) < choice.models.len() => {
+                c as usize - '1' as usize
+            }
+            _ => return Ok(()),
+        };
+        let model = choice.models.get(row).cloned();
+        self.launch("opencode", model.as_deref(), None)
     }
     /// Your own `[ai.<name>]` launchers that are not built-in names, in name order.
     pub fn custom_agents(&self) -> Vec<String> {
@@ -4344,15 +4466,22 @@ impl App {
         if !crate::lsp::on_path(program) {
             bail!("{name} is not installed (`{program}` not on PATH) · install: {hint}");
         }
-        let (args, replay, session) = agent_flags(
+        let (mut args, replay, session) = agent_flags(
             program,
             resume,
             session,
             &claude_conversation_exists,
             &conversation_id,
         );
+        // OpenCode on the Ollama model you chose (`:ai opencode <model>`, the choice).
+        let mut env = Vec::new();
+        if let Some(model) = model.filter(|m| program == "opencode" && !m.is_empty()) {
+            let (extra, vars) = local_ai::opencode_on(model, local_ai::opencode_standalone());
+            args.extend(extra);
+            env = vars;
+        }
         Ok(AgentRun {
-            run: (program.into(), args, Vec::new()),
+            run: (program.into(), args, env),
             replay,
             session,
         })
@@ -4911,6 +5040,11 @@ impl App {
                     }
                 }
                 match program {
+                    // `:ai opencode` alone asks which of your Ollama models first.
+                    Some("opencode") if model.is_none() && self.offers_ollama_models() => {
+                        self.open_ai(axis)?;
+                        self.choose_opencode_model();
+                    }
                     Some(program) => {
                         let axis = axis.unwrap_or_else(|| self.ai_axis());
                         self.launch(program, model, Some(axis))?;
@@ -5983,7 +6117,7 @@ mod tests {
         let r = rects(&mut app);
         assert_eq!(r[0].1.x, r[1].1.x);
         // A CLI that is not installed explains how to get it.
-        assert!(matches!(app.panes.get(&app.focused), Some(Pane::Ai)));
+        assert!(matches!(app.panes.get(&app.focused), Some(Pane::Ai(None))));
         let error = app.launch_agent("raido-no-such-agent", None).unwrap_err();
         assert!(error.to_string().contains("not installed"));
         assert!(app.command("ai nonsense").is_err());
@@ -6060,7 +6194,7 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         // Launcher key 7, after the built-ins, runs the first custom entry in the AI
         // pane itself.
         app.command("ai").unwrap();
-        assert!(matches!(app.panes.get(&app.focused), Some(Pane::Ai)));
+        assert!(matches!(app.panes.get(&app.focused), Some(Pane::Ai(None))));
         press(&mut app, KeyCode::Char('7'), KeyModifiers::NONE);
         assert_eq!(terminals(&app), 2);
         assert!(matches!(app.panes.get(&app.focused), Some(Pane::Terminal(t)) if t.title == "sh"));
@@ -6092,7 +6226,7 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         let path = dir.path().join("main.rs");
         std::fs::write(&path, "fn main() { println!(\"hello\"); }\n").unwrap();
         let mut app = App::new(dir.path().into(), Some(path), false).unwrap();
-        app.add_pane(Pane::Ai, Axis::Horizontal);
+        app.add_pane(Pane::Ai(None), Axis::Horizontal);
         for (width, height) in [(160, 45), (80, 24), (45, 12), (20, 8)] {
             let backend = ratatui::backend::TestBackend::new(width, height);
             let mut terminal = ratatui::Terminal::new(backend).unwrap();
@@ -6450,6 +6584,72 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         assert_eq!(rect(&app, right).y, rect(&app, below).y);
         assert!(app.command("term sideways").is_err());
         assert_eq!(app.panes.len(), 4);
+    }
+    #[test]
+    fn opencode_offers_your_ollama_models_as_they_come() {
+        // No Ollama or OpenCode needed: the listing comes through the same channel
+        // `ollama list` answers on. Names are placeholders, as any machine's are.
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().into(), None, false).unwrap();
+        let (send, listing) = mpsc::channel();
+        let pane = app.add_pane(Pane::Ai(Some(ModelChoice::new(listing))), Axis::Horizontal);
+        let choice = |app: &App| match app.panes.get(&pane) {
+            Some(Pane::Ai(Some(choice))) => (choice.models.clone(), choice.selected),
+            _ => panic!("not choosing"),
+        };
+        assert!(screen(&mut app, 120, 30)
+            .join("\n")
+            .contains("Looking for your Ollama models"));
+        send.send(Ok(vec!["model-a:tag".into(), "org/model-b".into()]))
+            .unwrap();
+        app.tick();
+        assert_eq!(choice(&app).0, ["model-a:tag", "org/model-b"]);
+        let shown = screen(&mut app, 120, 30).join("\n");
+        assert!(shown.contains("[1]  model-a:tag"), "{shown}");
+        assert!(shown.contains("[2]  org/model-b"));
+        assert!(shown.contains("[0]  OpenCode's own choice"));
+        // ↑↓ go round the two models and OpenCode's own choice.
+        press(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        press(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(choice(&app).1, 2);
+        press(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(choice(&app).1, 0);
+        press(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(choice(&app).1, 2);
+        // A digit with no model behind it does nothing.
+        press(&mut app, KeyCode::Char('7'), KeyModifiers::NONE);
+        assert_eq!(choice(&app).1, 2);
+        assert_eq!(app.panes.len(), 2);
+        // Esc: back to the launcher.
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert!(matches!(app.panes.get(&pane), Some(Pane::Ai(None))));
+        assert!(app.message.contains("AI launcher"));
+    }
+    #[test]
+    fn opencode_still_starts_when_ollama_has_nothing_to_offer() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().into(), None, false).unwrap();
+        let problem = |result: Option<Result<Vec<String>, String>>| {
+            let (send, listing) = mpsc::channel();
+            let mut choice = ModelChoice::new(listing);
+            match result {
+                Some(result) => send.send(result).unwrap(),
+                // The listing thread died without answering.
+                None => drop(send),
+            }
+            assert!(choice.poll());
+            assert!(!choice.listing() && choice.models.is_empty());
+            // The only row left is OpenCode's own choice.
+            assert_eq!(choice.selected, 0);
+            choice.problem.unwrap()
+        };
+        let stopped = "Ollama isn't running · start it: ollama serve".to_string();
+        assert_eq!(problem(Some(Err(stopped.clone()))), stopped);
+        assert!(problem(Some(Ok(Vec::new()))).contains("ollama pull <model>"));
+        assert!(problem(None).contains("Couldn't list"));
+        // Your own [ai.opencode] is run as you wrote it, without asking.
+        app.config.ai.insert("opencode".into(), Default::default());
+        assert!(!app.offers_ollama_models());
     }
     #[test]
     fn missing_ai_binary_reports_error_without_losing_pane() {
@@ -6881,7 +7081,7 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         std::fs::write(root.join("blob.bin"), [0u8, 1, 2]).unwrap();
         let mut app = App::new(root.clone(), None, false).unwrap();
         // Typed from a non-editor pane (the AI launcher stands in for a shell).
-        let launcher = app.add_pane(Pane::Ai, Axis::Horizontal);
+        let launcher = app.add_pane(Pane::Ai(None), Axis::Horizontal);
         let panes = app.panes.len();
         let reply = app.remote_open(&root.join("src/main.rs"));
         assert_eq!(reply, Reply::Opened("Opened main.rs in Raido".into()));

@@ -873,7 +873,7 @@ mod tests {
         // Opening a file from Claude's pane keeps you typing there.
         let other = root.join("lib.rs");
         std::fs::write(&other, "pub fn add() {}\n").unwrap();
-        let shell = app.add_pane(Pane::Ai, crate::layout::Axis::Horizontal);
+        let shell = app.add_pane(Pane::Ai(None), crate::layout::Axis::Horizontal);
         app.focused = shell;
         let opened = call(
             &mut claude,

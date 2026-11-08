@@ -578,7 +578,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     );
                 }
             }
-            Some(Pane::Ai) => ai(frame, inner, &theme, &customs),
+            Some(Pane::Ai(choice)) => ai(frame, inner, &theme, &customs, choice.as_ref()),
             Some(Pane::Git(view)) => git_view(frame, view, inner, &theme, &app.syntax),
             Some(Pane::Changes(view)) => {
                 view.show = view.notes.unwrap_or(app.config.review_summary);
@@ -1881,12 +1881,21 @@ fn term_color(value: vt100::Color, fallback: Color, theme: &Theme) -> Color {
     }
 }
 
-fn ai(frame: &mut Frame, area: Rect, theme: &Theme, customs: &[String]) {
+fn ai(
+    frame: &mut Frame,
+    area: Rect,
+    theme: &Theme,
+    customs: &[String],
+    choice: Option<&crate::app::ModelChoice>,
+) {
     let fg = Style::default().fg(color(&theme.foreground));
     let muted = Style::default().fg(color(&theme.muted));
     let accent = Style::default()
         .fg(color(&theme.accent))
         .add_modifier(Modifier::BOLD);
+    if let Some(choice) = choice {
+        return model_choice(frame, area, theme, choice);
+    }
     let mut lines = vec![
         Line::from(""),
         Line::styled("  YOUR TOOLS. YOUR KEYS.", accent),
@@ -1917,6 +1926,58 @@ fn ai(frame: &mut Frame, area: Rect, theme: &Theme, customs: &[String]) {
         ),
         Line::styled(
             "  Launch: press a number · add your own: [ai.name]",
+            Style::default().fg(color(&theme.secondary)),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+}
+
+/// OpenCode's model choice in the AI launcher: your Ollama models as `ollama list`
+/// gives them, then OpenCode's own choice, the row under the cursor highlighted.
+fn model_choice(frame: &mut Frame, area: Rect, theme: &Theme, choice: &crate::app::ModelChoice) {
+    let fg = Style::default().fg(color(&theme.foreground));
+    let muted = Style::default().fg(color(&theme.muted));
+    let accent = Style::default()
+        .fg(color(&theme.accent))
+        .add_modifier(Modifier::BOLD);
+    let row = |n: usize, key: String, label: &str| {
+        let style = if n == choice.selected {
+            fg.bg(color(&theme.selection))
+        } else {
+            fg
+        };
+        Line::styled(format!("  [{key}]  {label}"), style)
+    };
+    let mut lines = vec![
+        Line::from(""),
+        Line::styled("  OPENCODE · WHICH MODEL?", accent),
+        Line::from(""),
+    ];
+    if choice.listing() {
+        lines.push(Line::styled("  Looking for your Ollama models…", muted));
+    } else if let Some(problem) = &choice.problem {
+        lines.push(Line::styled(format!("  {problem}"), muted));
+    } else {
+        lines.push(Line::styled("  Your Ollama models:", muted));
+    }
+    for (n, model) in choice.models.iter().enumerate() {
+        let key = if n < 9 {
+            (n + 1).to_string()
+        } else {
+            "·".to_string()
+        };
+        lines.push(row(n, key, model));
+    }
+    lines.push(Line::from(""));
+    lines.push(row(
+        choice.models.len(),
+        "0".into(),
+        "OpenCode's own choice (its last model; /models inside)",
+    ));
+    lines.extend([
+        Line::from(""),
+        Line::styled(
+            "  ↑↓ Enter starts it · 1–9 · 0 · Esc back",
             Style::default().fg(color(&theme.secondary)),
         ),
     ]);
@@ -2764,7 +2825,7 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
         match app.panes.get(&app.focused) {
             Some(Pane::Terminal(_)) => "TERMINAL",
             Some(Pane::Preview(_)) => "PREVIEW",
-            Some(Pane::Ai) => "AI",
+            Some(Pane::Ai(_)) => "AI",
             Some(Pane::Git(_)) => "GIT",
             Some(Pane::Changes(_)) => "REVIEW",
             _ => match app.mode {
@@ -3129,6 +3190,10 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         (
             ":ai codex|claude|gemini|agy|opencode",
             "Run an AI CLI here; add `below` or `right` to place it",
+        ),
+        (
+            ":ai opencode [model]",
+            "OpenCode; with Ollama, first lists your models (0: its own)",
         ),
         (
             ":ai local [model]",
