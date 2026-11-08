@@ -391,10 +391,10 @@ impl TerminalPane {
             .unwrap_or(false);
         if bracketed {
             self.send(b"\x1b[200~")?;
-        }
-        self.send(text.as_bytes())?;
-        if bracketed {
+            self.send(unbracketed(text).as_bytes())?;
             self.send(b"\x1b[201~")?;
+        } else {
+            self.send(text.as_bytes())?;
         }
         Ok(())
     }
@@ -729,6 +729,17 @@ impl Drop for TerminalPane {
     }
 }
 
+/// Pasted text without the paste's own start and end markers: an end marker inside
+/// it would end the paste early, and what follows would run as if typed (a copied
+/// snippet carrying `ESC[201~` and a command), so terminals drop them.
+fn unbracketed(text: &str) -> String {
+    let mut text = text.to_string();
+    while let Some(at) = text.find("\x1b[201~").or_else(|| text.find("\x1b[200~")) {
+        text.replace_range(at..at + "\x1b[201~".len(), "");
+    }
+    text
+}
+
 pub fn encode_key(key: KeyEvent, application: bool) -> Vec<u8> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -804,6 +815,16 @@ pub fn encode_key(key: KeyEvent, application: bool) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pasted_text_cant_end_the_paste_early() {
+        let sneaky = "echo hi\x1b[201~rm -rf ~\r";
+        assert_eq!(unbracketed(sneaky), "echo hirm -rf ~\r");
+        assert_eq!(unbracketed("a\x1b[200~b\x1b[201~c"), "abc");
+        // Markers split across what's left are gone too.
+        assert_eq!(unbracketed("\x1b[20\x1b[201~1~x"), "x");
+        assert_eq!(unbracketed("plain"), "plain");
+    }
     #[test]
     fn tiny_panes_and_odd_output_never_crash_raido() {
         quiet_parser_panics();
