@@ -188,6 +188,10 @@ impl Agent {
         if cfg!(test) && !matches!(self, Self::Command(_)) {
             return false;
         }
+        // `local` on your model server is asked over HTTP, with curl.
+        if matches!(self, Self::Local(_)) && crate::model_server::configured() {
+            return crate::platform::which("curl").is_some();
+        }
         crate::platform::which(self.program()).is_some()
     }
     /// "Claude (haiku)", "Codex", "Local (llama3.2)".
@@ -196,7 +200,16 @@ impl Agent {
             Self::Claude(model) => ("Claude", Some(model.as_deref().unwrap_or(CLAUDE_MODEL))),
             Self::Codex(model) => ("Codex", model.as_deref()),
             Self::Gemini(model) => ("Gemini", model.as_deref()),
-            Self::Local(model) => ("Local", model.as_deref()),
+            Self::Local(model) => match crate::model_server::name() {
+                // "gpu-box (qwen3:8b)"
+                Some(server) => {
+                    return match model {
+                        Some(model) => format!("{server} ({model})"),
+                        None => server,
+                    }
+                }
+                None => ("Local", model.as_deref()),
+            },
             Self::Command(_) => (self.program(), None),
         };
         match model {
@@ -390,6 +403,15 @@ pub fn start(
 /// Run the agent outside the project, in an empty folder, so it reads nothing but
 /// the prompt: the answer, what it cost when the AI says, and who answered.
 fn ask(agent: &Agent, prompt: &str) -> Result<(String, Option<Usage>, String), String> {
+    // `local` with a model server: its OpenAI API answers, and says what it used.
+    if let (Agent::Local(model), true) = (agent, crate::model_server::configured()) {
+        let (text, usage, by) = crate::model_server::chat(model.as_deref(), prompt, TIMEOUT)
+            .map_err(|e| format!("{e:#}"))?;
+        if text.trim().is_empty() {
+            return Err(format!("{by} answered nothing"));
+        }
+        return Ok((text, Some(usage), by));
+    }
     let quiet = std::env::temp_dir().join(format!("raido-summary-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&quiet);
     let answer_file = quiet.join("answer.txt");

@@ -79,6 +79,14 @@ format_on_save = ["go"]
 # model = "qwen2.5-coder"
 # env = { OPENAI_API_BASE = "http://localhost:8080/v1", OPENAI_API_KEY = "local" }
 
+# Your own model server, Ollama or vLLM, on another machine: OpenCode (key 6) and
+# the Local LLM (key 5) run on its models, and review_ai = "local" asks it.
+# [model_server]
+# url = "http://gpu-box:11434"       # Ollama; vLLM: "http://gpu-box:8000"
+# kind = "auto"                      # or "ollama", "vllm"
+# tunnel = "gpu-box"                 # through SSH; url as seen from gpu-box
+# key_env = "VLLM_API_KEY"           # the variable holding its API key
+
 # Command plugins launch ONLY when you type :run NAME.
 # Arguments are passed directly, with no shell interpolation.
 [plugins.check]

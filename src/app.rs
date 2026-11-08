@@ -148,8 +148,10 @@ pub const AGENTS: [(char, &str, &str, &str); 6] = [
 /// listed in the background (`ollama list` can be slow, or hang on a stuck server),
 /// then OpenCode's own choice.
 pub struct ModelChoice {
-    /// Your Ollama models, once listed.
+    /// The models, once listed: your model server's, else your Ollama's.
     pub models: Vec<String>,
+    /// Your model server's name, when the models are its.
+    pub server: Option<String>,
     /// Why there are none to offer, once that's known.
     pub problem: Option<String>,
     /// The row under the cursor: a model, or `models.len()` for OpenCode's own choice.
@@ -159,10 +161,11 @@ pub struct ModelChoice {
 }
 
 impl ModelChoice {
-    /// A choice whose models arrive on `listing`.
-    fn new(listing: mpsc::Receiver<Result<Vec<String>, String>>) -> Self {
+    /// A choice whose models arrive on `listing`, from your model `server` if any.
+    fn new(listing: mpsc::Receiver<Result<Vec<String>, String>>, server: Option<String>) -> Self {
         Self {
             models: Vec::new(),
+            server,
             problem: None,
             selected: 0,
             listing: Some(listing),
@@ -2226,7 +2229,7 @@ impl App {
                     _ => None,
                 };
                 if let Some(program) = chosen {
-                    if program == "opencode" && self.offers_ollama_models() {
+                    if program == "opencode" && self.offers_models() {
                         self.choose_opencode_model();
                         return Ok(());
                     }
@@ -4466,26 +4469,38 @@ impl App {
             }
         }
     }
-    /// Whether OpenCode first offers your Ollama models: both are installed, and
-    /// OpenCode isn't replaced by an `[ai.opencode]` of yours. Without Ollama it just
-    /// starts, on its own choice of model.
-    fn offers_ollama_models(&self) -> bool {
+    /// Whether OpenCode first offers models to start on: your model server's
+    /// (`[model_server]`), or your Ollama's when it's installed here, and OpenCode
+    /// isn't replaced by an `[ai.opencode]` of yours. Otherwise it just starts, on its
+    /// own choice of model.
+    fn offers_models(&self) -> bool {
         !self.config.ai.contains_key("opencode")
             && crate::lsp::on_path("opencode")
-            && crate::lsp::on_path("ollama")
+            && (crate::model_server::configured() || crate::lsp::on_path("ollama"))
     }
-    /// Turn the focused AI launcher into OpenCode's model choice, with your Ollama
-    /// models listed in the background.
+    /// Turn the focused AI launcher into OpenCode's model choice, with the models
+    /// listed in the background: your model server's, else your Ollama's.
     fn choose_opencode_model(&mut self) {
         let (send, listing) = mpsc::channel();
+        let server = crate::model_server::name();
+        let from = server.clone();
         std::thread::spawn(move || {
-            let models = crate::local_ai::ollama_models().map_err(|e| format!("{e:#}"));
+            let models = match &from {
+                Some(name) => crate::model_server::models()
+                    .map(|models| models.into_iter().map(|m| m.id).collect::<Vec<_>>())
+                    .map_err(|e| format!("{e:#}"))
+                    .and_then(|models| match models.is_empty() {
+                        true => Err(format!("{name} has no models yet")),
+                        false => Ok(models),
+                    }),
+                None => crate::local_ai::ollama_models().map_err(|e| format!("{e:#}")),
+            };
             let _ = send.send(models);
         });
         // Learnt meanwhile, so starting OpenCode on the model doesn't wait for it.
         std::thread::spawn(crate::local_ai::opencode_standalone);
         if let Some(pane @ Pane::Ai(_)) = self.panes.get_mut(&self.focused) {
-            *pane = Pane::Ai(Some(ModelChoice::new(listing)));
+            *pane = Pane::Ai(Some(ModelChoice::new(listing, server)));
         }
         self.notice("OpenCode: pick a model · ↑↓ Enter · 1–9 · 0 OpenCode's own choice · Esc back");
     }
@@ -4598,10 +4613,25 @@ impl App {
             session: None,
         };
         if program == "local" {
+            let configured = self.config.ai.get("local");
+            let server = match configured {
+                Some(_) => None,
+                None => crate::model_server::endpoint()?,
+            };
+            let models = || -> Result<Vec<String>> {
+                match &server {
+                    Some(_) => Ok(crate::model_server::models()?
+                        .into_iter()
+                        .map(|m| m.id)
+                        .collect()),
+                    None => local_ai::ollama_models(),
+                }
+            };
             return Ok(plain(local_ai::local(
-                self.config.ai.get("local"),
+                configured,
                 model,
-                local_ai::ollama_models,
+                server.as_ref(),
+                models,
                 crate::lsp::on_path,
             )?));
         }
@@ -4636,9 +4666,24 @@ impl App {
             gemini_ids,
             &conversation_id,
         );
-        // OpenCode on the Ollama model you chose (`:ai opencode <model>`, the choice).
+        // OpenCode on the model you chose (`:ai opencode <model>`, the choice): on
+        // your model server when you have one, else on your Ollama.
         let mut env = Vec::new();
-        if let Some(model) = model.filter(|m| program == "opencode" && !m.is_empty()) {
+        let chosen = model.filter(|m| program == "opencode" && !m.is_empty());
+        let server = match program {
+            "opencode" => crate::model_server::endpoint()?,
+            _ => None,
+        };
+        if let Some(server) = server {
+            let mut models = crate::model_server::known_models();
+            if models.is_empty() || chosen.is_some_and(|c| !models.iter().any(|m| m.id == c)) {
+                models = crate::model_server::models()?;
+            }
+            let v2 = local_ai::opencode_standalone();
+            let (extra, vars) = crate::model_server::opencode(&server, chosen, &models, v2);
+            args.extend(extra);
+            env = vars;
+        } else if let Some(model) = chosen {
             let (extra, vars) = local_ai::opencode_on(model, local_ai::opencode_standalone());
             args.extend(extra);
             env = vars;
@@ -5207,7 +5252,7 @@ impl App {
                 }
                 match program {
                     // `:ai opencode` alone asks which of your Ollama models first.
-                    Some("opencode") if model.is_none() && self.offers_ollama_models() => {
+                    Some("opencode") if model.is_none() && self.offers_models() => {
                         self.open_ai(axis)?;
                         self.choose_opencode_model();
                     }
@@ -6832,7 +6877,10 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         let dir = tempfile::tempdir().unwrap();
         let mut app = App::new(dir.path().into(), None, false).unwrap();
         let (send, listing) = mpsc::channel();
-        let pane = app.add_pane(Pane::Ai(Some(ModelChoice::new(listing))), Axis::Horizontal);
+        let pane = app.add_pane(
+            Pane::Ai(Some(ModelChoice::new(listing, None))),
+            Axis::Horizontal,
+        );
         let choice = |app: &App| match app.panes.get(&pane) {
             Some(Pane::Ai(Some(choice))) => (choice.models.clone(), choice.selected),
             _ => panic!("not choosing"),
@@ -6871,7 +6919,7 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         let mut app = App::new(dir.path().into(), None, false).unwrap();
         let problem = |result: Option<Result<Vec<String>, String>>| {
             let (send, listing) = mpsc::channel();
-            let mut choice = ModelChoice::new(listing);
+            let mut choice = ModelChoice::new(listing, None);
             match result {
                 Some(result) => send.send(result).unwrap(),
                 // The listing thread died without answering.
@@ -6889,7 +6937,7 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         assert!(problem(None).contains("Couldn't list"));
         // Your own [ai.opencode] is run as you wrote it, without asking.
         app.config.ai.insert("opencode".into(), Default::default());
-        assert!(!app.offers_ollama_models());
+        assert!(!app.offers_models());
     }
     // Raido's root is canonical, `\\?\C:\…` on Windows, where cmd.exe (and so every
     // npm `.cmd` shim: OpenCode, Codex, Gemini) started in C:\Windows instead.

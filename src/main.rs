@@ -17,6 +17,7 @@ mod local_ai;
 mod lsp;
 mod markdown;
 mod minimap;
+mod model_server;
 mod omarchy;
 mod outline;
 mod platform;
@@ -217,6 +218,10 @@ fn main() -> Result<()> {
     let claude_ide = config::Config::load().is_ok_and(|c| c.claude_ide);
     let ide = claude_ide.then(|| ide::listen(&root).ok()).flatten();
     let mut app = app::App::new(root, if restore { None } else { initial.clone() }, demo)?;
+    // Your model server, before restored panes start on it; its SSH tunnel closes
+    // when Raido ends.
+    model_server::configure(app.config.model_server.clone());
+    let _model_server = model_server::Guard;
     app.remote = server;
     app.ide = ide;
     if restore {

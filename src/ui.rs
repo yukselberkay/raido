@@ -2026,11 +2026,23 @@ fn model_choice(frame: &mut Frame, area: Rect, theme: &Theme, choice: &crate::ap
         Line::from(""),
     ];
     if choice.listing() {
-        lines.push(Line::styled("  Looking for your Ollama models…", muted));
+        lines.push(Line::styled(
+            match &choice.server {
+                Some(server) => format!("  Asking {server} for its models…"),
+                None => "  Looking for your Ollama models…".into(),
+            },
+            muted,
+        ));
     } else if let Some(problem) = &choice.problem {
         lines.push(Line::styled(format!("  {problem}"), muted));
     } else {
-        lines.push(Line::styled("  Your Ollama models:", muted));
+        lines.push(Line::styled(
+            match &choice.server {
+                Some(server) => format!("  Models on {server}:"),
+                None => "  Your Ollama models:".into(),
+            },
+            muted,
+        ));
     }
     for (n, model) in choice.models.iter().enumerate() {
         let key = if n < 9 {

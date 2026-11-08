@@ -8,6 +8,14 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ## [Unreleased]
 
+### Added
+
+- **Your own model server** (`[model_server]`): Ollama or vLLM on another machine
+  while the agents and your code stay here. OpenCode lists and runs on its models,
+  the Local LLM chats with an Ollama server, and `review_ai = "local"` explanations
+  come from it. `tunnel` reaches it through SSH so it needn't be on the network, and
+  `key_env` names the variable with its API key.
+
 ### Changed
 
 - The review explains new agent changes by itself once the agents stop, so the

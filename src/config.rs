@@ -193,6 +193,10 @@ pub struct Config {
     /// Your own AI launchers: `[ai.<name>] program = "…" args = […] env = {…}`.
     /// `[ai.local]` is used by the launcher's "Local LLM" entry.
     pub ai: BTreeMap<String, crate::local_ai::Launcher>,
+    /// Your own model server, Ollama or vLLM, here or on another machine:
+    /// `[model_server] url = "http://gpu-box:11434"` (with `kind`, `tunnel`,
+    /// `key_env`). The Local LLM, OpenCode and `review_ai = "local"` use it.
+    pub model_server: Option<crate::model_server::Settings>,
     pub plugins: BTreeMap<String, CommandPlugin>,
     /// Language servers (diagnostics, hover, definition, completion, format).
     pub lsp_enabled: bool,
@@ -232,6 +236,7 @@ impl Default for Config {
             claude_ide: true,
             mouse: true,
             ai: BTreeMap::new(),
+            model_server: None,
             plugins: BTreeMap::new(),
             lsp_enabled: true,
             format_on_save: vec!["go".into()],

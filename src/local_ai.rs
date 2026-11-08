@@ -52,10 +52,13 @@ pub fn command(launcher: &Launcher, model: Option<&str>) -> Result<Run> {
     Ok((launcher.program.clone(), args, env))
 }
 
-/// The "Local LLM" entry: `[ai.local]` if configured, else a detected runtime.
+/// The "Local LLM" entry: `[ai.local]` if configured, else your model `server`
+/// (`[model_server]`), else a runtime found here. `ollama_models` lists the
+/// server's models when there is one, this machine's Ollama's otherwise.
 pub fn local(
     configured: Option<&Launcher>,
     model: Option<&str>,
+    server: Option<&crate::model_server::Endpoint>,
     ollama_models: impl Fn() -> Result<Vec<String>>,
     on_path: impl Fn(&str) -> bool,
 ) -> Result<Run> {
@@ -64,6 +67,35 @@ pub fn local(
             bail!("`{}` from [ai.local] is not on PATH", launcher.program);
         }
         return command(launcher, model);
+    }
+    if let Some(server) = server {
+        if server.kind != crate::model_server::Kind::Ollama {
+            bail!(
+                "{} runs vLLM, which has no chat command of its own · OpenCode (6) runs on its models · or set [ai.local]",
+                server.name
+            );
+        }
+        if !on_path("ollama") {
+            bail!(
+                "Chatting with {}'s Ollama needs the ollama command here (ollama.com/download) · OpenCode (6) runs on its models without it",
+                server.name
+            );
+        }
+        let model = match model.filter(|m| !m.is_empty()) {
+            Some(model) => model.to_string(),
+            None => ollama_models()?.into_iter().next().with_context(|| {
+                format!(
+                    "{} has no models yet · pull one there: ollama pull qwen3-coder",
+                    server.name
+                )
+            })?,
+        };
+        // The ollama command here, talking to the server.
+        return Ok((
+            "ollama".into(),
+            vec!["run".into(), model],
+            vec![("OLLAMA_HOST".into(), server.root.clone())],
+        ));
     }
     if on_path("ollama") {
         let model = match model.filter(|m| !m.is_empty()) {
@@ -168,6 +200,62 @@ gpt-oss:20b           aa4295ac10c3    13 GB     5 weeks ago\n";
     }
 
     #[test]
+    fn the_local_llm_runs_on_your_model_server() {
+        use crate::model_server::{Endpoint, Kind};
+        let server = |kind| Endpoint {
+            root: "http://127.0.0.1:43123".into(),
+            kind,
+            name: "gpu-box".into(),
+            key: None,
+        };
+        let models = || Ok(vec!["qwen3-coder".to_string(), "gemma3".to_string()]);
+        // Ollama there: the ollama command here talks to it.
+        let ollama = server(Kind::Ollama);
+        let (program, args, env) = local(None, None, Some(&ollama), models, |_| true).unwrap();
+        assert_eq!(
+            (program.as_str(), args),
+            ("ollama", vec!["run".to_string(), "qwen3-coder".to_string()])
+        );
+        assert_eq!(
+            env,
+            [(
+                "OLLAMA_HOST".to_string(),
+                "http://127.0.0.1:43123".to_string()
+            )]
+        );
+        assert_eq!(
+            local(None, Some("gemma3"), Some(&ollama), models, |_| true)
+                .unwrap()
+                .1[1],
+            "gemma3"
+        );
+        let error = local(None, None, Some(&ollama), models, |_| false)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("needs the ollama command here"), "{error}");
+        let error = local(None, None, Some(&ollama), || Ok(Vec::new()), |_| true)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("gpu-box has no models yet"), "{error}");
+        // vLLM has no chat command: OpenCode is the way.
+        let error = local(None, None, Some(&server(Kind::Vllm)), models, |_| true)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("OpenCode (6)"), "{error}");
+        // Your own [ai.local] still comes first.
+        let mine = Launcher {
+            program: "llama-cli".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            local(Some(&mine), None, Some(&ollama), models, |_| true)
+                .unwrap()
+                .0,
+            "llama-cli"
+        );
+    }
+
+    #[test]
     fn parses_ollama_list() {
         assert_eq!(models().unwrap(), vec!["qwen3-coder:latest", "gpt-oss:20b"]);
         assert!(parse_list("NAME ID SIZE MODIFIED\n").is_empty());
@@ -237,26 +325,35 @@ gpt-oss:20b           aa4295ac10c3    13 GB     5 weeks ago\n";
             ..Launcher::default()
         };
         assert_eq!(
-            local(Some(&configured), None, models, |_| true).unwrap().0,
+            local(Some(&configured), None, None, models, |_| true)
+                .unwrap()
+                .0,
             "llama-cli"
         );
         assert_eq!(
-            local(None, None, models, |p| p == "ollama").unwrap().1,
+            local(None, None, None, models, |p| p == "ollama")
+                .unwrap()
+                .1,
             vec!["run".to_string(), "qwen3-coder:latest".into()]
         );
         assert_eq!(
-            local(None, Some("gpt-oss:20b"), models, |p| p == "ollama")
+            local(None, Some("gpt-oss:20b"), None, models, |p| p == "ollama")
                 .unwrap()
                 .1[1],
             "gpt-oss:20b"
         );
-        assert_eq!(local(None, None, models, |p| p == "lms").unwrap().0, "lms");
-        let error = local(None, None, models, |_| false)
+        assert_eq!(
+            local(None, None, None, models, |p| p == "lms").unwrap().0,
+            "lms"
+        );
+        let error = local(None, None, None, models, |_| false)
             .unwrap_err()
             .to_string();
         assert!(error.contains("[ai.local]"), "{error}");
         let none = || Ok(Vec::new());
-        let error = local(None, None, none, |_| true).unwrap_err().to_string();
+        let error = local(None, None, None, none, |_| true)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("ollama pull"), "{error}");
     }
 }

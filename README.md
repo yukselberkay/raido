@@ -1228,7 +1228,7 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 :ai [codex|claude|gemini|agy|opencode] [new] [right|below]
                           AI launcher, or launch a CLI, beside or below
                           (reopens a closed pane's conversation; new: a new one)
-:ai local [model]         Your local LLM ([ai.local], else Ollama / LM Studio)
+:ai local [model]         Your local LLM ([ai.local], else your model server, else Ollama / LM Studio)
 :ai <name> [model]        A launcher you defined as [ai.<name>]
 :themes                   Theme picker with live preview (also Ctrl-b t)
 :theme name               Switch theme directly (e.g. dracula or visual-studio-dark)
@@ -1307,7 +1307,7 @@ Install the desired CLI separately using its official instructions:
 | 2 | [Claude Code](https://code.claude.com/docs/en/overview) | `claude` | see its docs |
 | 3 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `gemini` | `npm install -g @google/gemini-cli` |
 | 4 | [Antigravity CLI](https://codelabs.developers.google.com/genai-for-dev-antigravity-cli) | `agy` | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` |
-| 5 | **Local LLM** — your `[ai.local]`, else Ollama or LM Studio | see below | see below |
+| 5 | **Local LLM** — your `[ai.local]`, else your [model server](#your-own-model-server-ollama-vllm), else Ollama or LM Studio | see below | see below |
 | 6 | [OpenCode](https://opencode.ai) — any provider or local model | `opencode` | `npm install -g opencode-ai` |
 | 7–9 | **Your own** `[ai.<name>]` entries | anything | — |
 
@@ -1385,8 +1385,58 @@ Do not put API keys into project files or Raido's TOML config.
 
 Raido does not store keys, wrap model requests, disable approvals, or bypass the
 CLI's sandbox/permission settings. AI tools run with the same OS permissions as
-the user, and their own usage/billing applies. No model request is made by Raido
-itself. A missing CLI produces a visible error without destroying a pane.
+the user, and their own usage/billing applies. The only model requests Raido makes
+itself are the review's explanations, to the AI you name in `review_ai` (through its
+CLI, or your model server's API). A missing CLI produces a visible error without
+destroying a pane.
+
+### Your own model server (Ollama, vLLM)
+
+The agents and your code stay on this machine; the model runs on another one, a GPU
+box or a server you rent, the way Claude Code runs here and its model on Anthropic's
+servers. Tell Raido where the server is:
+
+```toml
+[model_server]
+url = "http://gpu-box:11434"     # Ollama · vLLM: "http://gpu-box:8000"
+# kind = "vllm"                  # "auto" (default) asks the server; also "ollama"
+# tunnel = "gpu-box"             # reach it through SSH (url as seen from gpu-box)
+# key_env = "VLLM_API_KEY"       # the variable holding its API key (vLLM --api-key)
+```
+
+Then everything that picks a model uses the server's:
+
+- **OpenCode** (key 6, `:ai opencode`) lists the server's models (↑↓ Enter, 1–9, or 0
+  for OpenCode's own choice) and runs on the one you pick. Raido hands OpenCode the
+  server's address in its config for that pane; your OpenCode config isn't changed.
+  On Ollama, OpenCode's own Ollama provider finds the models and which can use tools.
+  On vLLM, Raido lists them with tools on, since an agent needs them: start vLLM
+  with `--enable-auto-tool-choice --tool-call-parser <parser>` for your model.
+- **Local LLM** (key 5, `:ai local [model]`) on Ollama runs `ollama run` here,
+  talking to the server (`OLLAMA_HOST`), on its first model or the one you name; it
+  needs Ollama's command installed here, not its models. vLLM has no chat command
+  of its own: use OpenCode.
+- **The review's explanations** with `review_ai = "local"` come from the server's
+  first model (or `"local:<model>"`), with the tokens they used.
+
+`kind = "auto"` asks the server once: Ollama answers `/api/version`; anything else is
+taken for the OpenAI API that vLLM, llama.cpp's server, LM Studio and SGLang speak.
+Raido talks to it with `curl`, which macOS, Linux and Windows 10 and later have.
+
+**Keep the server private.** Ollama has no password, so don't open its port to a
+network you don't trust. With `tunnel = "gpu-box"`, the server can keep listening
+only on its own `localhost`: Raido forwards a local port with `ssh -N -L` the first
+time it's needed, reopens it if the connection drops, and closes it when Raido
+quits. It needs an SSH login without a password prompt (a key or `ssh-agent`); a
+private network such as Tailscale works without one. For vLLM, start it with
+`--api-key` and name the variable holding the key in `key_env`: the key goes to the
+server in a header, never into Raido's config or onto a command line.
+
+| Server | Checked |
+| --- | --- |
+| Ollama | yes: the Local LLM pane and the review, on Ollama 0.34 |
+| vLLM | against a stand-in server speaking its API (models, chat, API key) |
+| OpenCode on either | built from OpenCode's documented config; not run here |
 
 ## Themes and command plugins
 
@@ -1522,6 +1572,7 @@ theme immediately. The configuration supports:
 | `git_pane` | `false` | Open the Git pane (branches, commit graph, details) at startup |
 | `restore_session` | `true` | Save each project's panes, buffers and terminals to `.raido/` and reopen them |
 | `[ai.name]` | None | Your own AI launcher: `program`, `args` (`{model}`), `model`, `env`; `[ai.local]` backs the Local LLM entry |
+| `[model_server]` | None | [Your own model server](#your-own-model-server-ollama-vllm), Ollama or vLLM: `url`, `kind`, `tunnel`, `key_env`; the Local LLM, OpenCode and `review_ai = "local"` use it |
 | `ai_split` | `"right"` | Where AI panes open: `"right"` (side by side) or `"below"` (stacked) |
 | `mouse` | `true` | Wheel scrolls the pane under the pointer, a click focuses it, a drag selects and copies inside that pane ([Mouse](#mouse)); `false` leaves the mouse to the terminal |
 | `ai_sound` | `"default"` | Sound when an AI pane finishes a prompt: `"default"`, `"off"`, `"bell"`, a system sound name (macOS `"Hero"`, Windows `"chimes"`) or a sound file; `:sound` plays it |
