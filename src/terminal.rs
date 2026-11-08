@@ -91,7 +91,7 @@ impl TerminalPane {
         // A full path lets Windows run `.cmd` shims (npm-installed CLIs) too.
         let mut command = CommandBuilder::new(crate::platform::resolve(program));
         command.args(args);
-        command.cwd(root);
+        command.cwd(crate::platform::startable(root));
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
         command.env("RAIDO", "1");

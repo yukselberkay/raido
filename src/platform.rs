@@ -75,6 +75,33 @@ pub fn resolve(program: &str) -> String {
         .unwrap_or_else(|| program.to_string())
 }
 
+/// `dir` as programs can start in it. Windows' canonical paths begin `\\?\`, and
+/// cmd.exe, which runs every `.cmd` shim (npm-installed CLIs, language servers),
+/// can't start in one: it starts in C:\Windows instead. The same place written the
+/// usual way (`C:\…`, `\\server\share\…`) works for every program; a path too long
+/// to be written so stays as it is. Elsewhere `dir` is already fine.
+pub fn startable(dir: &Path) -> PathBuf {
+    if !cfg!(windows) {
+        return dir.to_path_buf();
+    }
+    let Some(rest) = dir.to_str().and_then(|d| d.strip_prefix(r"\\?\")) else {
+        return dir.to_path_buf();
+    };
+    let usual = if let Some(share) = rest.strip_prefix(r"UNC\") {
+        format!(r"\\{share}")
+    } else if rest.as_bytes().get(1) == Some(&b':') {
+        rest.to_string()
+    } else {
+        return dir.to_path_buf();
+    };
+    // Windows' limit for a current directory, with room for its trailing `\`.
+    if usual.len() < 259 {
+        PathBuf::from(usual)
+    } else {
+        dir.to_path_buf()
+    }
+}
+
 /// The interactive shell for terminal panes: the configured one, else `$SHELL`
 /// (`/bin/sh` fallback) on Unix, or PowerShell (`cmd.exe` fallback) on Windows.
 pub fn shell(configured: Option<&str>) -> (String, Vec<String>) {
@@ -153,6 +180,35 @@ mod tests {
             resolve("raido-definitely-missing-tool"),
             "raido-definitely-missing-tool"
         );
+    }
+
+    #[test]
+    fn programs_start_in_the_project_written_the_usual_way() {
+        let plain = Path::new("/home/me/project");
+        assert_eq!(startable(plain), plain);
+        if cfg!(windows) {
+            let s = |p: &str| startable(Path::new(p));
+            assert_eq!(
+                s(r"\\?\C:\Users\me\project"),
+                Path::new(r"C:\Users\me\project")
+            );
+            assert_eq!(
+                s(r"\\?\UNC\server\share\project"),
+                Path::new(r"\\server\share\project")
+            );
+            assert_eq!(s(r"C:\Users\me\project"), Path::new(r"C:\Users\me\project"));
+            // Not a drive or a share (a volume GUID): left alone, as is a path too
+            // long to be written without the prefix.
+            let volume = r"\\?\Volume{0b1c}\project";
+            assert_eq!(s(volume), Path::new(volume));
+            let long = format!(r"\\?\C:\{}", "d".repeat(300));
+            assert_eq!(s(&long), Path::new(&long));
+            // What Raido's root is: a canonical path.
+            let here = std::env::current_dir().unwrap().canonicalize().unwrap();
+            assert!(here.to_string_lossy().starts_with(r"\\?\"));
+            assert!(!startable(&here).to_string_lossy().starts_with(r"\\?\"));
+            assert!(startable(&here).is_dir());
+        }
     }
 
     #[cfg(windows)]

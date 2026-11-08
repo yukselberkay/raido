@@ -6651,6 +6651,32 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         app.config.ai.insert("opencode".into(), Default::default());
         assert!(!app.offers_ollama_models());
     }
+    // Raido's root is canonical, `\\?\C:\…` on Windows, where cmd.exe (and so every
+    // npm `.cmd` shim: OpenCode, Codex, Gemini) started in C:\Windows instead.
+    #[cfg(windows)]
+    #[test]
+    fn windows_panes_start_in_the_project_not_in_c_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let mut app = App::new(root.clone(), None, false).unwrap();
+        let args = vec!["/D".into(), "/Q".into(), "/K".into(), "cd".into()];
+        app.open_terminal(Some(("cmd", args)), Some(Axis::Horizontal))
+            .unwrap();
+        let want = crate::platform::startable(&root).display().to_string();
+        let shell = app.focused;
+        let mut transcript = String::new();
+        for _ in 0..500 {
+            app.tick();
+            if let Some(Pane::Terminal(t)) = app.panes.get(&shell) {
+                transcript = t.transcript();
+            }
+            if transcript.contains(&want) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(transcript.contains(&want), "{want} not in {transcript:?}");
+    }
     #[test]
     fn missing_ai_binary_reports_error_without_losing_pane() {
         let dir = tempfile::tempdir().unwrap();

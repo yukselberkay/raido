@@ -268,7 +268,7 @@ impl Client {
     fn spawn(program: &str, args: &[String], root: &Path) -> Result<Self> {
         let mut child = Command::new(crate::platform::resolve(program))
             .args(args)
-            .current_dir(root)
+            .current_dir(crate::platform::startable(root))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
