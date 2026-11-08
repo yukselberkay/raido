@@ -6486,14 +6486,13 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         assert!(top.contains(" a-project-with-a-really-long-… "), "{top}");
     }
     #[test]
-    fn the_top_bar_shows_the_version_from_cargo_toml() {
+    fn the_top_bar_ends_with_the_branch_and_panes_not_the_version() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = App::new(dir.path().into(), None, false).unwrap();
         let top = screen(&mut app, 140, 30).remove(0);
-        assert!(
-            top.trim_end().ends_with(&format!("v{}", crate::VERSION)),
-            "{top}"
-        );
+        assert!(top.trim_end().ends_with("panes"), "{top}");
+        assert!(!top.contains(crate::VERSION), "{top}");
+        // `raido --version` and what Raido tells other programs still read this.
         assert_eq!(crate::VERSION, env!("CARGO_PKG_VERSION"));
     }
     #[test]

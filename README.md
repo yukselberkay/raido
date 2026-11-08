@@ -252,8 +252,8 @@ Uninstalling does not remove your projects or user configuration.
 
 ### Versions
 
-`raido --version` prints the version, which also shows in the top right corner. Raido
-uses [Semantic Versioning](https://semver.org): while it is 0.x, a minor release
+`raido --version` prints the version. Raido uses
+[Semantic Versioning](https://semver.org): while it is 0.x, a minor release
 (0.2 → 0.3) may change keys, settings or behavior, and a patch release only fixes
 things. [CHANGELOG.md](CHANGELOG.md) lists what changed in each version.
 

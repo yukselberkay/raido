@@ -14,6 +14,7 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
   explanation is waiting when you open it; `s` still asks at once. It asks once per
   round of agent changes, sends only files with new changes, and costs nothing while
   you keep or undo. `review_ai_auto = false` goes back to asking only on `s`.
+- The top bar no longer shows Raido's version; `raido --version` prints it.
 
 ## [0.2.0] - 2026-11-06
 
