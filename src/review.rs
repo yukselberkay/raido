@@ -187,27 +187,7 @@ impl Store {
             &["cat-file", "--batch", "--filters"],
             Some(input.as_bytes()),
         )?;
-        let mut blobs = Vec::new();
-        let mut rest = &out[..];
-        for _ in wanted {
-            let end = rest
-                .iter()
-                .position(|&b| b == b'\n')
-                .ok_or("short answer from git cat-file")?;
-            let header = String::from_utf8_lossy(&rest[..end]).to_string();
-            let size: usize = header
-                .rsplit(' ')
-                .next()
-                .and_then(|s| s.parse().ok())
-                .ok_or_else(|| format!("git cat-file: {header}"))?;
-            let start = end + 1;
-            let body = rest
-                .get(start..start + size)
-                .ok_or("short answer from git cat-file")?;
-            blobs.push(body.to_vec());
-            rest = rest.get(start + size + 1..).unwrap_or_default();
-        }
-        Ok(blobs)
+        split_batch(&out, wanted)
     }
 
     fn blob(&self, blob: &str, path: &str) -> Result<Vec<u8>, String> {
@@ -225,6 +205,38 @@ impl Store {
         )?;
         Ok(String::from_utf8_lossy(&out).trim().to_string())
     }
+}
+
+/// The blobs in `git cat-file --batch --filters` output, in `wanted` order. Git's
+/// header gives a blob's size before the filters, which differs when they change it
+/// (`core.autocrlf`, Git for Windows' default, adds a CR to every line), so sizes
+/// can't be trusted: each blob ends where the next one's header starts, the last one
+/// at the end.
+fn split_batch(out: &[u8], wanted: &[(&str, &str)]) -> Result<Vec<Vec<u8>>, String> {
+    let short = || "short answer from git cat-file".to_string();
+    let mut blobs = Vec::new();
+    let mut rest = out;
+    for (i, (blob, _)) in wanted.iter().enumerate() {
+        let end = rest.iter().position(|&b| b == b'\n').ok_or_else(short)?;
+        let header = String::from_utf8_lossy(&rest[..end]);
+        if !header.starts_with(&format!("{blob} blob ")) {
+            return Err(format!("git cat-file: {header}"));
+        }
+        let body = &rest[end + 1..];
+        // Every blob is followed by a newline of git's.
+        let len = match wanted.get(i + 1) {
+            Some((next, _)) => {
+                let next = format!("\n{next} blob ");
+                body.windows(next.len())
+                    .position(|w| w == next.as_bytes())
+                    .ok_or_else(short)?
+            }
+            None => body.len().checked_sub(1).ok_or_else(short)?,
+        };
+        blobs.push(body[..len].to_vec());
+        rest = &body[len + 1..];
+    }
+    Ok(blobs)
 }
 
 /// Run `command`, feeding it `input`, and return what it printed.
@@ -1652,6 +1664,9 @@ pub(crate) mod tests {
         let root = dir.path().join("project");
         fs::create_dir_all(root.join("src")).unwrap();
         git(&root, &["init", "-q"]);
+        // The files below are written as Git checks them out here: with LF, also where
+        // Git for Windows' default `core.autocrlf` would check them out with CRLF.
+        git(&root, &["config", "core.autocrlf", "false"]);
         fs::write(
             root.join("src/main.rs"),
             "fn main() {\n    one();\n    two();\n}\n",
@@ -1871,6 +1886,46 @@ pub(crate) mod tests {
                 out.push(entry.path());
             }
         }
+    }
+
+    #[test]
+    fn crlf_checkouts_review_just_the_changed_lines_and_undo_byte_for_byte() {
+        // Git for Windows' default: LF in the repository, CRLF on disk. Each file's
+        // version before is one CR a line longer than Git's header says.
+        let (_dir, root, mut changes) = project();
+        git(&root, &["config", "core.autocrlf", "true"]);
+        let crlf = |text: &str| text.replace('\n', "\r\n");
+        let main = crlf("fn main() {\n    one();\n    two();\n}\n");
+        fs::write(root.join("src/main.rs"), &main).unwrap();
+        fs::write(root.join("notes.txt"), crlf("a\nb\nc\n")).unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-q", "-m", "crlf"]);
+        turn(&mut changes, "Claude", |_| {
+            fs::write(root.join("notes.txt"), crlf("a\nB\nc\n")).unwrap();
+            fs::write(root.join("src/main.rs"), main.replace("two", "three")).unwrap();
+        });
+        assert_eq!(changes.error, None);
+        let lines: Vec<(&str, usize, usize)> = changes
+            .files
+            .iter()
+            .map(|f| (f.name.as_str(), f.added, f.removed))
+            .collect();
+        assert_eq!(lines, [("notes.txt", 1, 1), ("src/main.rs", 1, 1)]);
+        changes.undo(&Target::File("src/main.rs".into())).unwrap();
+        assert_eq!(fs::read(root.join("src/main.rs")).unwrap(), main.as_bytes());
+    }
+
+    #[test]
+    fn split_batch_trusts_the_next_header_over_the_size() {
+        // Sizes before filtering (4 and 2), bodies after (CRs added).
+        let out = b"aaa blob 4\nx\r\ny\r\n\nbbb blob 2\nz\r\n\n";
+        let wanted = [("aaa", "one"), ("bbb", "two")];
+        assert_eq!(
+            split_batch(out, &wanted).unwrap(),
+            [b"x\r\ny\r\n".to_vec(), b"z\r\n".to_vec()]
+        );
+        let missing = b"aaa missing\n";
+        assert!(split_batch(missing, &wanted[..1]).is_err());
     }
 
     #[test]
