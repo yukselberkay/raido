@@ -49,6 +49,8 @@ fn pane_panel<'a>(title: &str, theme: &Theme, active: bool) -> Block<'a> {
     panel(title, theme, active)
 }
 fn text(frame: &mut Frame, area: Rect, value: impl Into<String>, fg: Color) {
+    // Never past the screen's edge: drawing there panics.
+    let area = area.intersection(frame.area());
     if area.height > 0 && area.width > 0 {
         frame.render_widget(
             Paragraph::new(value.into()).style(Style::default().fg(fg)),
@@ -702,15 +704,21 @@ fn dock_tabs(frame: &mut Frame, app: &mut App, start: u16, end: u16, y: u16) {
         );
         let width = tab.chars().count() as u16;
         let more = format!(" +{} ", count - n);
-        // Leave room for "+N" unless this is the last tab.
-        let reserve = if n + 1 < count { more.len() as u16 } else { 0 };
+        // Leave room for "+N", and the gap before it, unless this is the last tab.
+        let reserve = if n + 1 < count {
+            more.len() as u16 + 1
+        } else {
+            0
+        };
         if x + width + reserve > end {
-            text(
-                frame,
-                Rect::new(x, y, more.len() as u16, 1),
-                more,
-                color(&theme.accent),
-            );
+            if x + more.len() as u16 <= end {
+                text(
+                    frame,
+                    Rect::new(x, y, more.len() as u16, 1),
+                    more,
+                    color(&theme.accent),
+                );
+            }
             break;
         }
         frame.render_widget(

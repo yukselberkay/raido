@@ -6540,6 +6540,24 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         assert_eq!(crate::VERSION, env!("CARGO_PKG_VERSION"));
     }
     #[test]
+    fn many_docked_panes_fit_the_top_bar_at_every_width() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().into(), None, false).unwrap();
+        for _ in 0..11 {
+            app.split_editor(Axis::Horizontal).unwrap();
+        }
+        // Dock all but the one on screen: "dock 1 [scratch] 2 [scratch] … +N".
+        while app.visible().len() > 1 {
+            app.command("dock").unwrap();
+        }
+        assert_eq!(app.docked.len(), 11);
+        // The "+N" for the tabs that don't fit used to land one column past the edge.
+        for width in 45..=160 {
+            let top = screen(&mut app, width, 30).remove(0);
+            assert!(top.contains(" dock "), "{width}: {top}");
+        }
+    }
+    #[test]
     fn pane_titles_count_the_open_panes_docked_ones_too() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = App::new(dir.path().into(), None, false).unwrap();
