@@ -1,0 +1,4 @@
+# Check text out with LF everywhere, also where Git for Windows' core.autocrlf would
+# give CRLF: Raido compiles README.md, the skill and the example config into itself
+# (include_str!), and those should be the same text on every platform.
+* text=auto eol=lf
