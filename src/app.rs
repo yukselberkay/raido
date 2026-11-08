@@ -6419,7 +6419,7 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
     fn terminals_open_below_or_beside_the_active_pane() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = App::new(dir.path().into(), None, false).unwrap();
-        app.config.shell = Some("sh".into());
+        app.config.shell = Some(if cfg!(windows) { "cmd" } else { "sh" }.into());
         let editor = app.focused;
         let area = Rect::new(0, 0, 120, 40);
         // Ctrl-b C: a shell to the right, full height.
@@ -7612,12 +7612,19 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
             mouse(app, MouseEventKind::Drag(MouseButton::Left), to);
             mouse(app, MouseEventKind::Up(MouseButton::Left), to);
         };
-        let script = "printf 'alpha beta\\nsrc/main.rs gamma\\n'; exec cat".to_string();
-        app.open_terminal(
-            Some(("/bin/sh", vec!["-c".into(), script])),
-            Some(Axis::Horizontal),
-        )
-        .unwrap();
+        // Two lines, then the shell stays open.
+        let (program, args) = if cfg!(windows) {
+            let script = "echo alpha beta& echo src/main.rs gamma";
+            (
+                "cmd",
+                vec!["/D".into(), "/Q".into(), "/K".into(), script.into()],
+            )
+        } else {
+            let script = "printf 'alpha beta\\nsrc/main.rs gamma\\n'; exec cat";
+            ("/bin/sh", vec!["-c".into(), script.into()])
+        };
+        app.open_terminal(Some((program, args)), Some(Axis::Horizontal))
+            .unwrap();
         let shell = app.focused;
         for _ in 0..300 {
             app.tick();
@@ -7692,6 +7699,9 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         assert_eq!(app.mode, Mode::Normal);
         assert!(app.grab.is_none());
     }
+    // Reads the wheel reports a program asked for back from `cat`'s echo, which
+    // Windows' console turns into input events instead.
+    #[cfg(unix)]
     #[test]
     fn mouse_wheel_scrolls_and_clicks_focus_what_is_under_the_pointer() {
         let dir = tempfile::tempdir().unwrap();
