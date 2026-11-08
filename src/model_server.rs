@@ -193,6 +193,13 @@ pub fn endpoint() -> Result<Option<Endpoint>> {
 /// The server `settings` name, ready to use, with what using it set up in `live`.
 fn resolve(settings: &Settings, live: &mut Live) -> Result<Endpoint> {
     let url = parse_url(&settings.url)?;
+    let tunneled = !settings.tunnel.trim().is_empty();
+    if tunneled && settings.url.trim().starts_with("https://") {
+        bail!(
+            "tunnel carries plain http: set url to the server's http address as seen from {} (e.g. http://localhost:11434)",
+            settings.tunnel.trim()
+        );
+    }
     let name = display_name(settings);
     let root = if settings.tunnel.trim().is_empty() {
         url.root.clone()
@@ -1115,6 +1122,17 @@ mod tests {
         };
         assert_eq!(resolve(&vllm, &mut fresh()).unwrap().kind, Kind::Vllm);
         assert_eq!(seen.len(), 3);
+    }
+
+    #[test]
+    fn https_through_a_tunnel_is_refused_with_the_reason() {
+        let settings = Settings {
+            url: "https://gpu-box".into(),
+            tunnel: "gpu-box".into(),
+            ..Default::default()
+        };
+        let error = resolve(&settings, &mut fresh()).unwrap_err().to_string();
+        assert!(error.starts_with("tunnel carries plain http"), "{error}");
     }
 
     #[test]
