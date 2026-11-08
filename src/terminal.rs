@@ -740,10 +740,25 @@ fn unbracketed(text: &str) -> String {
     text
 }
 
+/// xterm's modifier number: 1, plus 1 for Shift, 2 for Alt, 4 for Ctrl.
+fn modifiers(key: KeyEvent) -> u8 {
+    1 + u8::from(key.modifiers.contains(KeyModifiers::SHIFT))
+        + 2 * u8::from(key.modifiers.contains(KeyModifiers::ALT))
+        + 4 * u8::from(key.modifiers.contains(KeyModifiers::CONTROL))
+}
+
+/// `ESC[n~`, or `ESC[n;m~` with modifiers.
+fn tilde(n: u8, modifier: u8) -> Vec<u8> {
+    match modifier {
+        1 => format!("\x1b[{n}~"),
+        m => format!("\x1b[{n};{m}~"),
+    }
+    .into_bytes()
+}
+
 pub fn encode_key(key: KeyEvent, application: bool) -> Vec<u8> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     let mut result = Vec::new();
     let seq = match key.code {
         KeyCode::Char(c) => {
@@ -781,27 +796,29 @@ pub fn encode_key(key: KeyEvent, application: bool) -> Vec<u8> {
                 KeyCode::Home => 'H',
                 _ => 'F',
             };
-            let modifier = 1 + u8::from(shift) + 2 * u8::from(alt) + 4 * u8::from(ctrl);
+            let modifier = modifiers(key);
             return if modifier > 1 {
                 format!("\x1b[1;{modifier}{code}").into_bytes()
             } else {
                 format!("\x1b{}{code}", if application { 'O' } else { '[' }).into_bytes()
             };
         }
-        KeyCode::Delete => "\x1b[3~",
-        KeyCode::Insert => "\x1b[2~",
-        KeyCode::PageUp => "\x1b[5~",
-        KeyCode::PageDown => "\x1b[6~",
+        // xterm's: Shift, Alt and Ctrl as a number in the sequence (Alt+Delete is
+        // `ESC[3;3~`), not dropped or sent as Esc before the key.
+        KeyCode::Delete => return tilde(3, modifiers(key)),
+        KeyCode::Insert => return tilde(2, modifiers(key)),
+        KeyCode::PageUp => return tilde(5, modifiers(key)),
+        KeyCode::PageDown => return tilde(6, modifiers(key)),
         KeyCode::F(n) => {
+            let modifier = modifiers(key);
             return match n {
+                1..=4 if modifier > 1 => {
+                    format!("\x1b[1;{modifier}{}", (b'P' + n - 1) as char).into_bytes()
+                }
                 1..=4 => format!("\x1bO{}", (b'P' + n - 1) as char).into_bytes(),
-                5..=12 => format!(
-                    "\x1b[{}~",
-                    [15, 17, 18, 19, 20, 21, 23, 24][(n - 5) as usize]
-                )
-                .into_bytes(),
+                5..=12 => tilde([15, 17, 18, 19, 20, 21, 23, 24][(n - 5) as usize], modifier),
                 _ => Vec::new(),
-            }
+            };
         }
         _ => "",
     };
@@ -816,6 +833,29 @@ pub fn encode_key(key: KeyEvent, application: bool) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn keys_with_modifiers_are_sent_the_way_xterm_sends_them() {
+        let key = |code, modifiers| encode_key(KeyEvent::new(code, modifiers), false);
+        let (alt, ctrl, shift) = (
+            KeyModifiers::ALT,
+            KeyModifiers::CONTROL,
+            KeyModifiers::SHIFT,
+        );
+        assert_eq!(key(KeyCode::Delete, KeyModifiers::NONE), b"\x1b[3~");
+        assert_eq!(
+            key(KeyCode::Delete, alt),
+            b"\x1b[3;3~",
+            "not Esc, then Delete"
+        );
+        assert_eq!(key(KeyCode::Delete, ctrl), b"\x1b[3;5~");
+        assert_eq!(key(KeyCode::PageUp, shift), b"\x1b[5;2~");
+        assert_eq!(key(KeyCode::Insert, ctrl | shift), b"\x1b[2;6~");
+        assert_eq!(key(KeyCode::F(1), KeyModifiers::NONE), b"\x1bOP");
+        assert_eq!(key(KeyCode::F(2), shift), b"\x1b[1;2Q");
+        assert_eq!(key(KeyCode::F(5), KeyModifiers::NONE), b"\x1b[15~");
+        assert_eq!(key(KeyCode::F(12), ctrl), b"\x1b[24;5~");
+        assert!(key(KeyCode::F(13), KeyModifiers::NONE).is_empty());
+    }
     #[test]
     fn pasted_text_cant_end_the_paste_early() {
         let sneaky = "echo hi\x1b[201~rm -rf ~\r";
