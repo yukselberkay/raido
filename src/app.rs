@@ -171,7 +171,7 @@ impl ModelChoice {
             listing: Some(listing),
         }
     }
-    /// Still waiting for `ollama list`.
+    /// Still waiting for the models.
     pub fn listing(&self) -> bool {
         self.listing.is_some()
     }
@@ -183,13 +183,18 @@ impl ModelChoice {
         let result = match listing.try_recv() {
             Ok(result) => result,
             Err(mpsc::TryRecvError::Empty) => return false,
-            Err(mpsc::TryRecvError::Disconnected) => Err("Couldn't list Ollama's models".into()),
+            Err(mpsc::TryRecvError::Disconnected) => Err(match &self.server {
+                Some(server) => format!("Couldn't list {server}'s models"),
+                None => "Couldn't list Ollama's models".into(),
+            }),
         };
         self.listing = None;
         match result {
             Ok(models) if models.is_empty() => {
-                self.problem =
-                    Some("Ollama has no models yet · pull one: ollama pull <model>".into());
+                self.problem = Some(match &self.server {
+                    Some(server) => format!("{server} has no models yet"),
+                    None => "Ollama has no models yet · pull one: ollama pull <model>".into(),
+                });
             }
             Ok(models) => self.models = models,
             Err(error) => self.problem = Some(error),
@@ -4483,19 +4488,13 @@ impl App {
     fn choose_opencode_model(&mut self) {
         let (send, listing) = mpsc::channel();
         let server = crate::model_server::name();
-        let from = server.clone();
+        let on_server = server.is_some();
         std::thread::spawn(move || {
-            let models = match &from {
-                Some(name) => crate::model_server::models()
-                    .map(|models| models.into_iter().map(|m| m.id).collect::<Vec<_>>())
-                    .map_err(|e| format!("{e:#}"))
-                    .and_then(|models| match models.is_empty() {
-                        true => Err(format!("{name} has no models yet")),
-                        false => Ok(models),
-                    }),
-                None => crate::local_ai::ollama_models().map_err(|e| format!("{e:#}")),
+            let models = match on_server {
+                true => crate::model_server::model_ids(),
+                false => crate::local_ai::ollama_models(),
             };
-            let _ = send.send(models);
+            let _ = send.send(models.map_err(|e| format!("{e:#}")));
         });
         // Learnt meanwhile, so starting OpenCode on the model doesn't wait for it.
         std::thread::spawn(crate::local_ai::opencode_standalone);
@@ -4618,14 +4617,9 @@ impl App {
                 Some(_) => None,
                 None => crate::model_server::endpoint()?,
             };
-            let models = || -> Result<Vec<String>> {
-                match &server {
-                    Some(_) => Ok(crate::model_server::models()?
-                        .into_iter()
-                        .map(|m| m.id)
-                        .collect()),
-                    None => local_ai::ollama_models(),
-                }
+            let models = || match &server {
+                Some(_) => crate::model_server::model_ids(),
+                None => local_ai::ollama_models(),
             };
             return Ok(plain(local_ai::local(
                 configured,
@@ -4675,11 +4669,16 @@ impl App {
             _ => None,
         };
         if let Some(server) = server {
+            let v2 = local_ai::opencode_standalone();
+            // OpenCode 2's Ollama provider finds the models itself; the others are
+            // told them, asked again when the one you chose isn't among them.
+            let told = !(v2 && server.kind == crate::model_server::Kind::Ollama);
             let mut models = crate::model_server::known_models();
-            if models.is_empty() || chosen.is_some_and(|c| !models.iter().any(|m| m.id == c)) {
+            if told
+                && (models.is_empty() || chosen.is_some_and(|c| !models.iter().any(|m| m.id == c)))
+            {
                 models = crate::model_server::models()?;
             }
-            let v2 = local_ai::opencode_standalone();
             let (extra, vars) = crate::model_server::opencode(&server, chosen, &models, v2);
             args.extend(extra);
             env = vars;

@@ -197,12 +197,19 @@ fn resolve(settings: &Settings, live: &mut Live) -> Result<Endpoint> {
     let root = if settings.tunnel.trim().is_empty() {
         url.root.clone()
     } else {
-        // Reopen a tunnel whose ssh has ended (a dropped connection).
+        // Reopen a tunnel whose ssh has ended (a dropped connection), on its old
+        // port when it's free, so the panes started on it reach the server again.
+        let mut before = None;
         if live.tunnel.as_mut().is_some_and(|t| !t.alive()) {
-            live.tunnel = None;
+            before = live.tunnel.take().map(|t| t.local);
         }
         if live.tunnel.is_none() {
-            live.tunnel = Some(Tunnel::open(settings.tunnel.trim(), &url.host, url.port)?);
+            live.tunnel = Some(Tunnel::open(
+                settings.tunnel.trim(),
+                &url.host,
+                url.port,
+                before,
+            )?);
         }
         let local = live.tunnel.as_ref().map_or(0, |t| t.local);
         // The same path on the tunnel's local end; https would fail its certificate.
@@ -243,6 +250,11 @@ fn probe(root: &str, key: Option<&str>) -> Result<Kind> {
         key,
         Duration::from_secs(5),
     )?;
+    // A proxy in front, or a server still starting, can't say yet (5xx): asked
+    // again next time rather than taken for vLLM for as long as Raido runs.
+    if reply.status == 0 || reply.status >= 500 {
+        bail!("/api/version answered {}", reply.status);
+    }
     Ok(
         if reply.status == 200 && reply.body.contains("\"version\"") {
             Kind::Ollama
@@ -258,6 +270,11 @@ pub fn models() -> Result<Vec<Model>> {
     let models = list(&endpoint)?;
     LIVE.lock().unwrap_or_else(|e| e.into_inner()).models = models.clone();
     Ok(models)
+}
+
+/// The ids of the server's models, as `models` lists them.
+pub fn model_ids() -> Result<Vec<String>> {
+    Ok(models()?.into_iter().map(|m| m.id).collect())
 }
 
 /// The models listed last, without asking again.
@@ -441,18 +458,33 @@ struct HeaderFile {
 impl HeaderFile {
     fn new(line: &str) -> Result<Self> {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let dir = std::env::temp_dir().join(format!("raido-{}", std::process::id()));
-        std::fs::create_dir_all(&dir)?;
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let path = dir.join(format!("header-{n}"));
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "{}{n}-{stamp:x}",
+            header_prefix(std::process::id())
+        ));
+        // A file of its own, made now: never one (or a link) someone else put there
+        // first in a shared /tmp, which would get the key.
         let mut options = std::fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
+        options.write(true).create_new(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        let mut file = options.open(&path)?;
+        let mut file = options
+            .open(&path)
+            .with_context(|| format!("Create {}", path.display()))?;
+        let header = Self { path };
         writeln!(file, "{line}")?;
-        Ok(Self { path })
+        Ok(header)
     }
+}
+
+/// How the key's header files of Raido `pid` are named, in the temp folder.
+fn header_prefix(pid: u32) -> String {
+    format!("raido-header-{pid}-")
 }
 
 impl Drop for HeaderFile {
@@ -472,8 +504,14 @@ struct Tunnel {
 const TUNNEL_WAIT: Duration = Duration::from_secs(15);
 
 impl Tunnel {
-    fn open(destination: &str, host: &str, port: u16) -> Result<Self> {
-        let local = TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
+    /// Forward to `host:port` through `destination`, on local port `again` when
+    /// it's free, else on any free one.
+    fn open(destination: &str, host: &str, port: u16, again: Option<u16>) -> Result<Self> {
+        let local = again
+            .and_then(|p| TcpListener::bind(("127.0.0.1", p)).ok())
+            .map_or_else(|| TcpListener::bind("127.0.0.1:0"), Ok)?
+            .local_addr()?
+            .port();
         let ssh = crate::platform::which("ssh").context("ssh isn't installed; tunnel needs it")?;
         let mut child = Command::new(ssh)
             .args(tunnel_args(destination, local, host, port))
@@ -485,6 +523,13 @@ impl Tunnel {
         let start = Instant::now();
         loop {
             if TcpStream::connect(("127.0.0.1", local)).is_ok() {
+                // What ssh says from now on (each forward the server refuses) is read
+                // and dropped, so a full pipe never stops the tunnel.
+                if let Some(mut stderr) = child.stderr.take() {
+                    std::thread::spawn(move || {
+                        let _ = std::io::copy(&mut stderr, &mut std::io::sink());
+                    });
+                }
                 return Ok(Self { child, local });
             }
             if let Some(status) = child.try_wait()? {
@@ -1000,10 +1045,10 @@ mod tests {
         assert_eq!(seen[2].0, "POST /v1/chat/completions");
         assert!(seen[2].2.contains("Qwen/Qwen3-Coder-30B"));
         // The key's header file is gone again.
-        let dir = std::env::temp_dir().join(format!("raido-{}", std::process::id()));
-        let left = std::fs::read_dir(&dir).map_or(0, |d| {
+        let prefix = header_prefix(std::process::id());
+        let left = std::fs::read_dir(std::env::temp_dir()).map_or(0, |d| {
             d.flatten()
-                .filter(|f| f.file_name().to_string_lossy().starts_with("header-"))
+                .filter(|f| f.file_name().to_string_lossy().starts_with(&prefix))
                 .count()
         });
         assert_eq!(left, 0);
