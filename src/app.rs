@@ -281,6 +281,24 @@ fn agent_title(program: &str) -> &str {
         .map_or(program, |a| a.2)
 }
 
+/// A saved conversation id and model, as safe to hand to a CLI: ids are UUIDs (all
+/// these CLIs use them) and a model is a name, so neither can be a flag of the
+/// CLI's (`--yolo`) slipped in by a session file.
+fn launch_values<'a>(
+    session: Option<&'a str>,
+    model: Option<&'a str>,
+) -> (Option<&'a str>, Option<&'a str>) {
+    (
+        session.filter(|id| uuid_like(id)),
+        model.filter(|m| !m.starts_with('-')),
+    )
+}
+
+/// `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`, in hex.
+fn uuid_like(id: &str) -> bool {
+    id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
 /// A random (version 4) UUID for a new conversation id, from std's per-process
 /// random hasher keys.
 fn conversation_id() -> String {
@@ -340,8 +358,7 @@ fn claude_live_conversation(home: &Path, pid: u32) -> Option<String> {
         return None;
     }
     let id = entry.get("sessionId")?.as_str()?;
-    let well_formed = id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
-    well_formed.then(|| id.to_string())
+    uuid_like(id).then(|| id.to_string())
 }
 
 pub struct App {
@@ -4622,6 +4639,13 @@ impl App {
         resume: bool,
     ) -> Result<AgentRun> {
         use crate::local_ai;
+        // Only AI CLIs Raido knows or you added: a restored session comes from the
+        // project's `.raido/session.json`, which a repository you clone could carry,
+        // so what it names must never be a program (or a script) of its choosing.
+        if !AGENTS.iter().any(|a| a.1 == program) && !self.config.ai.contains_key(program) {
+            bail!("`{program}` isn't an AI CLI Raido knows · add [ai.{program}] to config.toml to run it");
+        }
+        let (session, model) = launch_values(session, model);
         let plain = |run| AgentRun {
             run,
             replay: true,
@@ -6359,7 +6383,7 @@ mod tests {
         // A CLI that is not installed explains how to get it.
         assert!(matches!(app.panes.get(&app.focused), Some(Pane::Ai(None))));
         let error = app.launch_agent("raido-no-such-agent", None).unwrap_err();
-        assert!(error.to_string().contains("not installed"));
+        assert!(error.to_string().contains("isn't an AI CLI Raido knows"));
         assert!(app.command("ai nonsense").is_err());
     }
     #[test]
@@ -7374,6 +7398,63 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         // Your own [ai.claude] command replaces the built-in: nothing to reopen.
         app.config.ai.insert("claude".into(), Default::default());
         assert!(!app.reopens("claude"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_cloned_projects_session_never_runs_a_program_of_its_choosing() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        // A repository carrying a script, and a session that starts it as an AI pane.
+        let marker = root.join("ran");
+        let payload = root.join("payload.sh");
+        std::fs::write(
+            &payload,
+            format!("#!/bin/sh\ntouch '{}'\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&payload, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut app = App::new(root.clone(), None, false).unwrap();
+        app.open_terminal(
+            Some(("/bin/sh", vec!["-c".into(), "exec cat".into()])),
+            Some(Axis::Horizontal),
+        )
+        .unwrap();
+        if let Some(Pane::Terminal(t)) = app.panes.get_mut(&app.focused) {
+            t.launch = Launch::Agent {
+                name: payload.display().to_string(),
+                model: None,
+                session: None,
+            };
+        }
+        app.save_session(true).unwrap();
+        drop(app);
+        let mut app = App::new(root.clone(), None, false).unwrap();
+        app.restore_session();
+        for _ in 0..50 {
+            app.tick();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!marker.exists(), "the session ran the repository's script");
+        let restored = app
+            .panes
+            .values()
+            .any(|p| matches!(p, Pane::Terminal(t) if matches!(t.launch, Launch::Shell)));
+        assert!(restored, "it comes back as a shell instead");
+        for name in ["./payload.sh", "sh", "/bin/sh"] {
+            assert!(app.agent_command(name, None, None, true).is_err(), "{name}");
+        }
+        // Ids are UUIDs and models are names: neither can be a flag of the CLI's.
+        let id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+        assert_eq!(
+            launch_values(Some(id), Some("qwen3")),
+            (Some(id), Some("qwen3"))
+        );
+        assert_eq!(
+            launch_values(Some("--yolo"), Some("--dangerously")),
+            (None, None)
+        );
+        assert_eq!(launch_values(Some("../../x"), None), (None, None));
     }
     #[test]
     fn claude_panes_reopen_exactly_their_own_conversation() {

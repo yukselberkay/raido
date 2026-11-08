@@ -16,6 +16,18 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
   come from it. `tunnel` reaches it through SSH so it needn't be on the network, and
   `key_env` names the variable with its API key.
 
+### Fixed
+
+- **Security:** opening a project whose `.raido/session.json` came with it (a
+  repository you cloned) could start a program or script it named, as if it were an
+  AI pane, and hand a CLI flags through a saved conversation id or model. A session
+  now only starts the AI CLIs Raido knows and your `[ai.<name>]` entries, with ids
+  that are UUIDs and models that aren't flags.
+- Pasted text can no longer end a bracketed paste early and run what follows.
+- With many panes docked, the top bar could draw past the screen's edge and crash.
+- OpenCode starts, without your model server, when the server can't be reached;
+  a restored OpenCode pane no longer comes back as a plain shell then.
+
 ### Changed
 
 - The review explains new agent changes by itself once the agents stop, so the

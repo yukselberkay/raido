@@ -1194,6 +1194,9 @@ conversation instead. A Codex pane that never got a message has nothing to reope
 and starts fresh; local models and your own `[ai.<name>]` launchers always do.
 
 The session lives in `.raido/session.json` in the project root, readable only by you.
+A session only ever starts the AI CLIs Raido knows and your own `[ai.<name>]` entries,
+with conversation ids and models it checks first, so a repository that carries a
+`.raido/session.json` of its own can't start a program of its choosing when you open it.
 `.raido/` contains its own `.gitignore`, so it is never committed. Raido saves on quit and every few seconds while you work (only when something
 changed), so a closed window or a crash loses at most a few seconds.
 
