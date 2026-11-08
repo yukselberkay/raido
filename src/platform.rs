@@ -49,17 +49,23 @@ pub fn which(program: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// The files `path` may name: itself, or on Windows, when it has no extension, only
+/// its PATHEXT names (`opencode.cmd`). Windows can't run an extension-less file, such
+/// as the shell script npm installs beside each `.cmd` shim, so that one never counts.
 fn with_extensions(path: &Path) -> Vec<PathBuf> {
-    let mut candidates = vec![path.to_path_buf()];
-    if cfg!(windows) && path.extension().is_none() {
-        let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
-        for ext in pathext.split(';').filter(|e| !e.is_empty()) {
+    if !cfg!(windows) || path.extension().is_some() {
+        return vec![path.to_path_buf()];
+    }
+    let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+    pathext
+        .split(';')
+        .filter(|e| !e.is_empty())
+        .map(|ext| {
             let mut name = path.as_os_str().to_owned();
             name.push(ext.to_ascii_lowercase());
-            candidates.push(PathBuf::from(name));
-        }
-    }
-    candidates
+            PathBuf::from(name)
+        })
+        .collect()
 }
 
 /// Program to run: resolved to a full path when found, so Windows `.cmd` shims work.
@@ -146,6 +152,26 @@ mod tests {
         assert_eq!(
             resolve("raido-definitely-missing-tool"),
             "raido-definitely-missing-tool"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_runs_the_npm_cmd_shim_not_the_shell_script_beside_it() {
+        // What `npm install -g` leaves in %APPDATA%\npm for each CLI.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("tool"), "#!/bin/sh\n").unwrap();
+        std::fs::write(dir.path().join("tool.cmd"), "@echo off\n").unwrap();
+        let tool = dir.path().join("tool");
+        assert_eq!(
+            which(tool.to_str().unwrap()),
+            Some(dir.path().join("tool.cmd"))
+        );
+        std::fs::remove_file(dir.path().join("tool.cmd")).unwrap();
+        assert_eq!(
+            which(tool.to_str().unwrap()),
+            None,
+            "a shell script alone can't run"
         );
     }
 
