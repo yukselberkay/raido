@@ -226,6 +226,8 @@ struct AgentRun {
     replay: bool,
     /// The conversation id the pane is pinned to (Claude Code).
     session: Option<String>,
+    /// It starts, but not as asked: why (your model server can't be reached).
+    warning: Option<String>,
 }
 
 /// Flags for a built-in AI CLI: (args, replay saved output, pinned conversation id).
@@ -449,6 +451,9 @@ pub struct App {
     /// Docked panes (Ctrl-b d), oldest first: still running and still in the
     /// layout, just not drawn, so they come back to the same place and size.
     pub docked: Vec<usize>,
+    /// Why a pane restored just now didn't start quite as it was (an unreachable
+    /// model server), for the "Session restored" line.
+    restore_warning: Option<String>,
     /// AI panes closed in this run, oldest first: (CLI, its conversation). Opening
     /// that CLI again reopens the newest one.
     closed_agents: Vec<(String, Option<String>)>,
@@ -559,6 +564,7 @@ impl App {
             git_area: Rect::default(),
             help_area: Rect::default(),
             docked: Vec::new(),
+            restore_warning: None,
             closed_agents: Vec::new(),
             fresh_launch: false,
             dock_list: None,
@@ -1267,12 +1273,15 @@ impl App {
         if let Some(problem) = problems.first() {
             note.push_str(&format!(" · {problem}"));
         }
+        if let Some(warning) = self.restore_warning.take() {
+            note.push_str(&format!(" · {warning}"));
+        }
         Ok(note)
     }
     /// Start a saved terminal again: shells in their last directory below their old
     /// output, AI CLIs resuming their latest conversation where they support it.
     fn restore_terminal(
-        &self,
+        &mut self,
         launch: Launch,
         cwd: Option<PathBuf>,
         transcript: &str,
@@ -1302,6 +1311,9 @@ impl App {
             // A CLI that reopens its conversation redraws it; don't show it twice.
             Some((agent, name, model)) => {
                 let (program, args, env) = agent.run;
+                if let Some(warning) = agent.warning {
+                    self.restore_warning.get_or_insert(warning);
+                }
                 let history = if agent.replay { history } else { Vec::new() };
                 let launch = Launch::Agent {
                     name,
@@ -4574,6 +4586,7 @@ impl App {
         let agent = self.agent_command(program, model, session.as_deref(), closed.is_some())?;
         let (command, args, env) = agent.run;
         self.open_terminal_with(Some((&command, args)), &env, split)?;
+        let warning = agent.warning;
         if let Some(Pane::Terminal(t)) = self.panes.get_mut(&self.focused) {
             t.launch = Launch::Agent {
                 name: program.into(),
@@ -4591,6 +4604,9 @@ impl App {
                     agent_title(program)
                 ));
             }
+        }
+        if let Some(warning) = warning {
+            self.fail(warning);
         }
         Ok(())
     }
@@ -4610,6 +4626,7 @@ impl App {
             run,
             replay: true,
             session: None,
+            warning: None,
         };
         if program == "local" {
             let configured = self.config.ai.get("local");
@@ -4663,9 +4680,18 @@ impl App {
         // OpenCode on the model you chose (`:ai opencode <model>`, the choice): on
         // your model server when you have one, else on your Ollama.
         let mut env = Vec::new();
+        let mut warning = None;
         let chosen = model.filter(|m| program == "opencode" && !m.is_empty());
+        // A server that can't be reached doesn't keep OpenCode from starting (nor a
+        // restored pane from coming back to its conversation): it starts without.
+        let unreached = |error: anyhow::Error| {
+            format!("OpenCode started without your model server · {error:#}")
+        };
         let server = match program {
-            "opencode" => crate::model_server::endpoint()?,
+            "opencode" => crate::model_server::endpoint().unwrap_or_else(|error| {
+                warning = Some(unreached(error));
+                None
+            }),
             _ => None,
         };
         if let Some(server) = server {
@@ -4677,12 +4703,15 @@ impl App {
             if told
                 && (models.is_empty() || chosen.is_some_and(|c| !models.iter().any(|m| m.id == c)))
             {
-                models = crate::model_server::models()?;
+                match crate::model_server::models() {
+                    Ok(listed) => models = listed,
+                    Err(error) => warning = Some(format!("{error:#}")),
+                }
             }
             let (extra, vars) = crate::model_server::opencode(&server, chosen, &models, v2);
             args.extend(extra);
             env = vars;
-        } else if let Some(model) = chosen {
+        } else if let Some(model) = chosen.filter(|_| !crate::model_server::configured()) {
             let (extra, vars) = local_ai::opencode_on(model, local_ai::opencode_standalone());
             args.extend(extra);
             env = vars;
@@ -4691,6 +4720,7 @@ impl App {
             run: (program.into(), args, env),
             replay,
             session,
+            warning,
         })
     }
     /// `:font`, `:font + | - | reset` (zoom), `:font size N`, `:font family NAME`, `:font list`.
