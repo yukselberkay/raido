@@ -2271,6 +2271,13 @@ impl App {
             self.apply_find();
         }
     }
+    /// Move to buffer `id`'s next search match (previous with `back`), or say `none`
+    /// when there isn't one.
+    fn find_next(&mut self, id: usize, back: bool, none: &str) {
+        if !self.buffers[id].find(back) {
+            self.notice(none);
+        }
+    }
     fn find_key(&mut self, key: KeyEvent) -> Result<()> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         // Ctrl-b, Ctrl-s and Ctrl-q still work: close the bar, then act on them.
@@ -2293,11 +2300,7 @@ impl App {
                     self.notice(format!("Replaced 1 · {left} left · ^A replaces all"));
                 }
             }
-            KeyCode::Enter | KeyCode::Down => {
-                if !self.buffers[id].find(false) {
-                    self.notice("No results");
-                }
-            }
+            KeyCode::Enter | KeyCode::Down => self.find_next(id, false, "No results"),
             KeyCode::Up => {
                 self.buffers[id].find(true);
             }
@@ -3603,16 +3606,8 @@ impl App {
             KeyCode::Char('v') => self.start_visual(Mode::Visual),
             KeyCode::Char('V') => self.start_visual(Mode::VisualLine),
             KeyCode::Char('u') => b.undo(false),
-            KeyCode::Char('n') => {
-                if !b.find(false) {
-                    self.notice("No match");
-                }
-            }
-            KeyCode::Char('N') => {
-                if !b.find(true) {
-                    self.notice("No match");
-                }
-            }
+            KeyCode::Char('n') => self.find_next(id, false, "No match"),
+            KeyCode::Char('N') => self.find_next(id, true, "No match"),
             KeyCode::PageUp => b.move_by(0, -20),
             KeyCode::PageDown => b.move_by(0, 20),
             _ => {}
