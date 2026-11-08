@@ -127,6 +127,11 @@ pub fn line_at(
     at: (u16, u16),
     wrapped: &[bool],
 ) -> (String, usize, Vec<(u16, u16)>) {
+    // A click outside the text (on the pane's border, or where it was before a
+    // resize) has no line under it.
+    if !area.contains(ratatui::layout::Position::new(at.0, at.1)) {
+        return (String::new(), 0, Vec::new());
+    }
     let runs_on = |y: u16| wrapped.get(usize::from(y - area.y)) == Some(&true);
     let mut top = at.1;
     while top > area.y && runs_on(top - 1) {
@@ -177,6 +182,21 @@ pub fn describe(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_click_outside_the_text_has_no_line() {
+        let buffer = Buffer::empty(Rect::new(0, 0, 20, 10));
+        let text = Rect::new(1, 1, 18, 8);
+        // On the border above the text, and left of it: used to underflow.
+        for at in [(5, 0), (0, 5), (19, 9), (40, 40)] {
+            assert_eq!(
+                line_at(&buffer, text, at, &[]),
+                (String::new(), 0, Vec::new()),
+                "{at:?}"
+            );
+        }
+        assert_eq!(line_at(&buffer, text, (5, 1), &[]).0.chars().count(), 18);
+    }
     use ratatui::style::Style;
 
     fn screen(rows: &[&str], area: Rect) -> Buffer {
