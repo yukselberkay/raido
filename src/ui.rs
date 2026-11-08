@@ -1896,10 +1896,12 @@ fn ai(frame: &mut Frame, area: Rect, theme: &Theme, customs: &[String]) {
         Line::styled("  [3]  Gemini CLI", fg),
         Line::styled("  [4]  Antigravity CLI (agy)", fg),
         Line::styled("  [5]  Local LLM (yours, or Ollama/LM Studio)", fg),
+        Line::styled("  [6]  OpenCode", fg),
     ];
-    // Your own [ai.<name>] launchers take keys 6–9.
-    for (i, name) in customs.iter().take(4).enumerate() {
-        lines.push(Line::styled(format!("  [{}]  {name}", i + 6), fg));
+    // Your own [ai.<name>] launchers take the digits after the built-ins (7–9).
+    let first = crate::app::AGENTS.len() + 1;
+    for (i, name) in customs.iter().take(10 - first).enumerate() {
+        lines.push(Line::styled(format!("  [{}]  {name}", first + i), fg));
     }
     lines.extend([
         Line::from(""),
@@ -3125,7 +3127,7 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         (":e path / :reload", "Open or create / reload a clean file"),
         (":q / :qa / :qa!", "Close / quit / discard and quit"),
         (
-            ":ai codex|claude|gemini|agy",
+            ":ai codex|claude|gemini|agy|opencode",
             "Run an AI CLI here; add `below` or `right` to place it",
         ),
         (
@@ -3134,7 +3136,7 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         ),
         (
             ":ai <name> [model]",
-            "Any tool you add as [ai.<name>] (keys 6–9 in launcher)",
+            "Any tool you add as [ai.<name>] (keys 7–9 in launcher)",
         ),
         (":run name", "Launch a configured command plugin"),
         (":set rnu / :set nornu", "Relative / absolute line numbers"),

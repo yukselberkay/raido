@@ -390,8 +390,9 @@ the history graph appears after you make commits.
   application cursor keys, bracketed paste, terminal query responses, and
   bounded scrollback. Shells and CLI tools run in the project directory.
   `raido FILE` typed in one opens FILE in a pane of this Raido, not a second Raido.
-- **AI panes:** run **OpenAI Codex**, **Claude Code**, **Gemini CLI** or the
-  **Antigravity CLI** (`agy`) as installed executables, beside or below your code.
+- **AI panes:** run **OpenAI Codex**, **Claude Code**, **Gemini CLI**, the
+  **Antigravity CLI** (`agy`) or **OpenCode** as installed executables, beside or
+  below your code.
   These are the real tools, not imitations or provider-specific chat widgets.
 - **Review AI changes:** everything Codex, Claude Code or any AI pane changes shows
   up as a diff, like VS Code's agent edits; keep or undo each change, each file or
@@ -1220,7 +1221,7 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 :new                      New scratch editor pane
 :split / :vsplit          Stack / side-by-side split
 :term                     New shell (in it, `raido FILE` opens FILE here)
-:ai [codex|claude|gemini|agy] [right|below]
+:ai [codex|claude|gemini|agy|opencode] [right|below]
                           AI launcher, or launch a CLI, beside or below
 :ai local [model]         Your local LLM ([ai.local], else Ollama / LM Studio)
 :ai <name> [model]        A launcher you defined as [ai.<name>]
@@ -1302,7 +1303,12 @@ Install the desired CLI separately using its official instructions:
 | 3 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `gemini` | `npm install -g @google/gemini-cli` |
 | 4 | [Antigravity CLI](https://codelabs.developers.google.com/genai-for-dev-antigravity-cli) | `agy` | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` |
 | 5 | **Local LLM** — your `[ai.local]`, else Ollama or LM Studio | see below | see below |
-| 6–9 | **Your own** `[ai.<name>]` entries | anything | — |
+| 6 | [OpenCode](https://opencode.ai) — any provider or local model | `opencode` | `npm install -g opencode-ai` |
+| 7–9 | **Your own** `[ai.<name>]` entries | anything | — |
+
+Letters work too: `c` Codex, `a` Claude, `g` Gemini, `y` Antigravity, `l` Local,
+`o` OpenCode. A restored Codex, Gemini, Antigravity or OpenCode pane reopens that
+CLI's latest conversation in the project; a Claude Code pane reopens exactly its own.
 
 **Placement:** `Ctrl-b a` or `:ai` opens AI panes **beside** your code; `Ctrl-b A` or
 `:ai below` stacks them **below**. Add `below`/`right` to any `:ai` command
@@ -1333,7 +1339,7 @@ Any AI tool or local model becomes a launcher entry with a few lines in
 no API keys or model traffic pass through Raido.
 
 ```toml
-[ai.<name>]            # shows up in the launcher (keys 6–9) and as :ai <name>
+[ai.<name>]            # shows up in the launcher (keys 7–9) and as :ai <name>
 program = "aider"      # any executable on PATH
 args = ["--model", "openai/{model}"]   # {model} = :ai <name> <model>, else `model`
 model = "qwen2.5-coder"

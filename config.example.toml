@@ -67,7 +67,7 @@ format_on_save = ["go"]
 # args = []
 
 # Bring your own AI / local LLM: each [ai.NAME] appears in the AI launcher
-# (Ctrl-b a, keys 6–9) and as :ai NAME [model]. [ai.local] backs key 5 and
+# (Ctrl-b a, keys 7–9) and as :ai NAME [model]. [ai.local] backs key 5 and
 # :ai local; without it Raido uses Ollama or LM Studio if installed.
 # [ai.local]
 # program = "ollama"

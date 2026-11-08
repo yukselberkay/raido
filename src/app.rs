@@ -108,8 +108,9 @@ pub struct ThemePicker {
     pub original: String,
 }
 
-/// AI CLIs the launcher offers: (key, program, name, install hint).
-pub const AGENTS: [(char, &str, &str, &str); 5] = [
+/// AI CLIs the launcher offers: (key, program, name, install hint). Your own
+/// `[ai.<name>]` entries take the digits after these.
+pub const AGENTS: [(char, &str, &str, &str); 6] = [
     ('1', "codex", "OpenAI Codex", "npm install -g @openai/codex"),
     (
         '2',
@@ -135,6 +136,7 @@ pub const AGENTS: [(char, &str, &str, &str); 5] = [
         "Local LLM (Ollama)",
         "curl -fsSL https://ollama.com/install.sh | sh",
     ),
+    ('6', "opencode", "OpenCode", "npm install -g opencode-ai"),
 ];
 
 /// Insert-mode completion popup.
@@ -183,7 +185,7 @@ fn agent_flags(
         }
         ("codex", true, _) => (words(&["resume", "--last"]), false, None),
         ("gemini", true, _) => (words(&["--resume", "latest"]), false, None),
-        ("agy", true, _) => (words(&["--continue"]), false, None),
+        ("agy" | "opencode", true, _) => (words(&["--continue"]), false, None),
         _ => (Vec::new(), true, None),
     }
 }
@@ -2120,17 +2122,19 @@ impl App {
                     KeyCode::Char('g') => Some("gemini"),
                     KeyCode::Char('y') => Some("agy"),
                     KeyCode::Char('l') => Some("local"),
+                    KeyCode::Char('o') => Some("opencode"),
                     KeyCode::Char(c) => AGENTS.iter().find(|a| a.0 == c).map(|a| a.1),
                     _ => None,
                 };
                 if let Some(program) = chosen {
                     return self.launch_agent(program, None);
                 }
-                // Keys 6–9 launch your own [ai.<name>] entries, in name order.
-                if let KeyCode::Char(c @ '6'..='9') = key.code {
-                    let customs = self.custom_agents();
-                    if let Some(name) = customs.get(c as usize - '6' as usize) {
-                        return self.launch_agent(&name.clone(), None);
+                // The digits after the built-ins (7–9) launch your own [ai.<name>]
+                // entries, in name order.
+                if let KeyCode::Char(c @ '1'..='9') = key.code {
+                    let custom = (c as usize - '1' as usize).checked_sub(AGENTS.len());
+                    if let Some(name) = custom.and_then(|i| self.custom_agents().get(i).cloned()) {
+                        return self.launch_agent(&name, None);
                     }
                 }
                 if key.code == KeyCode::Char(':') {
@@ -4270,7 +4274,7 @@ impl App {
         let axis = axis.unwrap_or_else(|| self.ai_axis());
         self.add_pane(Pane::Ai, axis);
         self.notice(
-            "AI launcher: 1 Codex · 2 Claude · 3 Gemini · 4 Antigravity · 5 Local (Ollama)",
+            "AI launcher: 1 Codex · 2 Claude · 3 Gemini · 4 Antigravity · 5 Local (Ollama) · 6 OpenCode",
         );
         Ok(())
     }
@@ -4890,7 +4894,7 @@ impl App {
                 }
                 _ => bail!("Use :git (open / focus / zoom the Git pane), :git all or :git side"),
             },
-            // :ai [codex|claude|gemini|agy|local|<[ai.name]>] [model] [right|below]
+            // :ai [codex|claude|gemini|agy|local|opencode|<[ai.name]>] [model] [right|below]
             "ai" => {
                 let mut program = None;
                 let mut axis = None;
@@ -4907,7 +4911,7 @@ impl App {
                         }
                         name if program.is_some() && model.is_none() => model = Some(name),
                         _ => bail!(
-                            "Use :ai [codex|claude|gemini|agy|local|<your [ai.name]>] [model] [right|below]"
+                            "Use :ai [codex|claude|gemini|agy|local|opencode|<your [ai.name]>] [model] [right|below]"
                         ),
                     }
                 }
@@ -6058,10 +6062,11 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         // :ai local uses [ai.local], with a model override.
         app.command("ai local big below").unwrap();
         assert_eq!(terminals(&app), 1);
-        // Launcher key 6 runs the first custom entry in the AI pane itself.
+        // Launcher key 7, after the built-ins, runs the first custom entry in the AI
+        // pane itself.
         app.command("ai").unwrap();
         assert!(matches!(app.panes.get(&app.focused), Some(Pane::Ai)));
-        press(&mut app, KeyCode::Char('6'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('7'), KeyModifiers::NONE);
         assert_eq!(terminals(&app), 2);
         assert!(matches!(app.panes.get(&app.focused), Some(Pane::Terminal(t)) if t.title == "sh"));
         // Unknown names and missing programs explain themselves.
@@ -6789,6 +6794,12 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
             ["resume", "--last"]
         );
         assert!(agent_flags("codex", false, None, &no, &new_id).0.is_empty());
+        let (args, replay, _) = agent_flags("opencode", true, None, &no, &new_id);
+        assert_eq!(args, ["--continue"]);
+        assert!(!replay, "OpenCode redraws the conversation itself");
+        assert!(agent_flags("opencode", false, None, &no, &new_id)
+            .0
+            .is_empty());
         let a = conversation_id();
         let b = conversation_id();
         assert_ne!(a, b);
