@@ -182,6 +182,12 @@ impl Agent {
         }
     }
     fn installed(&self) -> bool {
+        // Tests never pick a real AI, which would spend tokens: the review explains
+        // agent changes by itself, and tests read your config. Only commands of
+        // their own answer there (the real one is `real_ai_summarizes_a_real_change`).
+        if cfg!(test) && !matches!(self, Self::Command(_)) {
+            return false;
+        }
         crate::platform::which(self.program()).is_some()
     }
     /// "Claude (haiku)", "Codex", "Local (llama3.2)".
@@ -574,6 +580,18 @@ pub fn parse(text: &str, paths: &[String]) -> (HashMap<String, String>, String) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tests_never_pick_a_real_ai() {
+        for setting in ["auto", "claude", "codex:gpt-5", "gemini", "local"] {
+            assert!(
+                Agent::choose(&[setting.to_string()]).is_err(),
+                "{setting} would spend tokens"
+            );
+        }
+        let own = Agent::choose(&["sh -c cat".to_string()]).unwrap().unwrap();
+        assert_eq!(own.name(), "sh");
+    }
 
     /// A real change explained by `agent` (`RAIDO_AI`, default Claude Code).
     #[test]
