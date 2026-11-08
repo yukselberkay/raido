@@ -620,14 +620,30 @@ fn shots_git_diff() {
     let mut app = app(&root, "visual-studio-dark");
     app.command("git").unwrap();
     app.zoom = true;
-    until(&mut app, w, h, &["ecf0401"]);
+    // Wait for the commit to be loaded, not shown: newer commits push it down the
+    // list as history grows.
+    let start = Instant::now();
+    let at = loop {
+        app.tick();
+        frame(&mut app, w, h);
+        let found = match app.panes.get(&app.focused) {
+            Some(crate::app::Pane::Git(view)) => view
+                .data
+                .commits
+                .iter()
+                .position(|c| c.hash.starts_with("ecf0401")),
+            _ => None,
+        };
+        if let Some(at) = found {
+            break at;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(60),
+            "commit ecf0401 never loaded"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
     if let Some(crate::app::Pane::Git(view)) = app.panes.get_mut(&app.focused) {
-        let at = view
-            .data
-            .commits
-            .iter()
-            .position(|c| c.hash.starts_with("ecf0401"))
-            .unwrap();
         view.commit = at;
         view.open_diff();
     }
