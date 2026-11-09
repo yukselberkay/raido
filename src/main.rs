@@ -21,6 +21,7 @@ mod model_server;
 mod omarchy;
 mod outline;
 mod platform;
+mod pyenv;
 mod quickdiff;
 mod remote;
 mod review;

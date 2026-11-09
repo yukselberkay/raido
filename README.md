@@ -1092,6 +1092,29 @@ editing. C/C++ projects give clangd the best results with a `compile_commands.js
 (CMake: `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`). To use a different server, or turn
 LSP off, see `lsp` and `lsp_enabled` in [config.example.toml](config.example.toml).
 
+#### Python: virtual environments (uv, Poetry, venv)
+
+Raido runs the Python server on the project's virtual environment, as VS Code does
+once you pick its interpreter, so packages installed there resolve; there is nothing
+to select or configure:
+
+- **Which one:** the activated one (`$VIRTUAL_ENV` when you started Raido), else
+  `.venv` or `venv` beside the file or in a folder above it, up to the project root:
+  where `uv sync`, Poetry (in-project) and `python -m venv` make it. `:lsp` says which
+  (`python: pyright-langserver ready on .venv`).
+- **Packages added later** (`uv add`, `uv remove`, `pip install`) and modules created,
+  deleted or renamed outside Raido (by an AI, in a terminal) reach Pyright and
+  basedpyright within about two seconds, as VS Code's file watcher tells them; edits
+  to `pyproject.toml` or `pyrightconfig.json` too. Other servers restart when
+  packages change.
+- **A venv made later or rebuilt** (`uv sync` in a new clone, a new Python): the
+  server starts again on it by itself.
+- **The project's own server:** a `pyright-langserver` or `basedpyright-langserver`
+  in the venv (`uv add --dev basedpyright`) is used before one on PATH.
+
+`[tool.pyright]` `venvPath` / `venv` in `pyproject.toml` still take precedence for
+Pyright.
+
 #### Go: tidy on save
 
 Saving a `.go` file (`Ctrl-s`, `:w`, `:wq`, `:wa`) first lets **gopls** do what VS Code's

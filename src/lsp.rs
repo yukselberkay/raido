@@ -254,6 +254,11 @@ enum Incoming {
 struct Client {
     program: String,
     child: Child,
+    /// Registrations for file changes (Pyright makes them): while any is held,
+    /// Raido reports the changes it notices.
+    watching: HashSet<String>,
+    /// For Python: the environment the server runs on and what changes in it.
+    python: Option<Python>,
     send: mpsc::Sender<Vec<u8>>,
     receive: mpsc::Receiver<Incoming>,
     next_id: u64,
@@ -264,14 +269,37 @@ struct Client {
     pending: HashMap<u64, (Kind, usize)>,
 }
 
+struct Python {
+    /// The virtual environment, or none: the Python on PATH.
+    venv: Option<PathBuf>,
+    news: mpsc::Receiver<crate::pyenv::News>,
+    /// The watcher behind `news` stops once this is dropped with the client.
+    _alive: Arc<()>,
+}
+
 impl Client {
-    fn spawn(program: &str, args: &[String], root: &Path) -> Result<Self> {
-        let mut child = Command::new(crate::platform::resolve(program))
+    /// Start `program` (found as `command`); a Python server on `venv`, as if it
+    /// were activated.
+    fn spawn(
+        program: &str,
+        command: &str,
+        args: &[String],
+        root: &Path,
+        venv: Option<&Path>,
+    ) -> Result<Self> {
+        let mut command = Command::new(crate::platform::resolve(command));
+        command
             .args(args)
             .current_dir(crate::platform::startable(root))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(venv) = venv {
+            command
+                .envs(crate::pyenv::variables(venv))
+                .env_remove("PYTHONHOME");
+        }
+        let mut child = command
             .spawn()
             .with_context(|| format!("Start {program}"))?;
         let mut stdin = child.stdin.take().context("server stdin")?;
@@ -312,6 +340,8 @@ impl Client {
         Ok(Self {
             program: program.into(),
             child,
+            watching: HashSet::new(),
+            python: None,
             send,
             receive,
             next_id: 1,
@@ -418,27 +448,72 @@ impl Lsp {
         self.announced.clear();
     }
 
-    fn server(&self, key: &str) -> Option<(String, Vec<String>)> {
+    /// The server for `key`: yours from `[lsp.<key>]`, else the first default the
+    /// project's virtual environment has (`uv add --dev pyright`), else the first on
+    /// PATH. The name it goes by, the command that starts it, and its arguments.
+    fn server(&self, key: &str, venv: Option<&Path>) -> Option<(String, String, Vec<String>)> {
         if let Some(custom) = self.overrides.get(key) {
-            return Some((custom.program.clone(), custom.args.clone()));
+            return Some((
+                custom.program.clone(),
+                custom.program.clone(),
+                custom.args.clone(),
+            ));
         }
+        let args = |args: &[&str]| args.iter().map(|a| a.to_string()).collect();
+        let local = venv.map(crate::pyenv::bin);
         defaults(key)
             .iter()
-            .find(|(program, _)| on_path(program))
-            .map(|(program, args)| {
-                (
+            .find_map(|(program, a)| {
+                let found =
+                    crate::platform::which(&local.as_ref()?.join(program).to_string_lossy())?;
+                Some((
                     program.to_string(),
-                    args.iter().map(|a| a.to_string()).collect(),
-                )
+                    found.to_string_lossy().into_owned(),
+                    args(a),
+                ))
+            })
+            .or_else(|| {
+                defaults(key)
+                    .iter()
+                    .find(|(program, _)| on_path(program))
+                    .map(|(program, a)| (program.to_string(), program.to_string(), args(a)))
             })
     }
 
-    /// Start a server for `key` if needed; returns a message the first time it fails.
-    fn ensure(&mut self, key: &'static str) -> Option<String> {
+    /// The virtual environment a Python server for files in `folder` runs on.
+    fn venv(&self, key: &str, folder: &Path) -> Option<PathBuf> {
+        (key == "python")
+            .then(|| crate::pyenv::find(&self.root, folder))
+            .flatten()
+    }
+
+    /// `venv` as `:lsp` names it: relative to the project when inside it.
+    fn venv_name(&self, venv: Option<&Path>) -> String {
+        match venv {
+            Some(venv) => venv
+                .strip_prefix(&self.root)
+                .unwrap_or(venv)
+                .display()
+                .to_string(),
+            None => "the Python on PATH (no .venv)".into(),
+        }
+    }
+
+    /// Stop the server for `key`; it starts again, with its files, on the next sync.
+    fn stop(&mut self, key: &'static str) {
+        self.clients.remove(key);
+        self.docs.retain(|_, doc| doc.key != key);
+    }
+
+    /// Start a server for `key` if needed, for the file at `path`; returns a message
+    /// the first time it fails.
+    fn ensure(&mut self, key: &'static str, path: &Path) -> Option<String> {
         if self.clients.contains_key(key) || self.failed.contains_key(key) {
             return None;
         }
-        let Some((program, args)) = self.server(key) else {
+        let folder = path.parent().unwrap_or(&self.root).to_path_buf();
+        let venv = self.venv(key, &folder);
+        let Some((program, command, args)) = self.server(key, venv.as_deref()) else {
             let reason = format!(
                 "No {key} language server found · install: {}",
                 install_hint(key)
@@ -446,15 +521,15 @@ impl Lsp {
             self.failed.insert(key, reason.clone());
             return Some(reason);
         };
-        match Client::spawn(&program, &args, &self.root) {
-            Ok(client) => {
+        match Client::spawn(&program, &command, &args, &self.root, venv.as_deref()) {
+            Ok(mut client) => {
                 let root = uri(&self.root);
                 let name = self
                     .root
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "workspace".into());
-                let params = json!({
+                let mut params = json!({
                     "processId": std::process::id(),
                     "clientInfo": { "name": "raido", "version": crate::VERSION },
                     "rootUri": root,
@@ -476,6 +551,23 @@ impl Lsp {
                         "workspace": { "workspaceFolders": true }
                     }
                 });
+                if key == "python" {
+                    // Pyright then registers for file changes, which Raido reports;
+                    // other servers watch files themselves unless told otherwise.
+                    params["capabilities"]["workspace"]["didChangeWatchedFiles"] =
+                        json!({ "dynamicRegistration": true });
+                    let alive = Arc::new(());
+                    client.python = Some(Python {
+                        news: crate::pyenv::watch(
+                            self.root.clone(),
+                            folder,
+                            venv.clone(),
+                            Arc::downgrade(&alive),
+                        ),
+                        venv,
+                        _alive: alive,
+                    });
+                }
                 // The handshake request bypasses the queue that waits for it.
                 client.write(
                     &json!({ "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": params }),
@@ -508,7 +600,7 @@ impl Lsp {
             let Some(lang) = language(path) else {
                 continue;
             };
-            if let Some(reason) = self.ensure(lang.key) {
+            if let Some(reason) = self.ensure(lang.key, path) {
                 if self.announced.insert(lang.key) {
                     events.push(Event::Error(reason));
                 }
@@ -693,14 +785,20 @@ impl Lsp {
         let mut parts = Vec::new();
         for key in ["rust", "go", "python", "c"] {
             let state = if let Some(client) = self.clients.get(key) {
+                let on = match &client.python {
+                    Some(python) => format!(" on {}", self.venv_name(python.venv.as_deref())),
+                    None => String::new(),
+                };
                 format!(
-                    "{} {}",
+                    "{} {}{on}",
                     client.program,
                     if client.ready { "ready" } else { "starting" }
                 )
             } else if self.failed.contains_key(key) {
                 "unavailable".into()
-            } else if let Some((program, _)) = self.server(key) {
+            } else if let Some((program, ..)) =
+                self.server(key, self.venv(key, &self.root).as_deref())
+            {
                 format!("{program} (starts on first file)")
             } else {
                 format!("not installed — {}", install_hint(key))
@@ -741,8 +839,52 @@ impl Lsp {
                 };
                 changed |= self.handle(key, message, buffers, &mut events);
             }
+            if let Some(notice) = self.follow_python(key) {
+                events.push(Event::Notice(notice));
+                changed = true;
+            }
         }
         (events, changed)
+    }
+
+    /// Pass on what changed in the Python environment and the project: to a server
+    /// watching files, the files; otherwise a new environment or packages restart
+    /// the server. Returns a note when it restarts.
+    fn follow_python(&mut self, key: &'static str) -> Option<String> {
+        let client = self.clients.get_mut(key)?;
+        let python = client.python.as_ref()?;
+        let mut restart = None;
+        for news in python.news.try_iter().collect::<Vec<_>>() {
+            match news {
+                crate::pyenv::News::Environment(venv) => restart = Some(Some(venv)),
+                crate::pyenv::News::Files { changes, packages } => {
+                    if !client.watching.is_empty() {
+                        let changes: Vec<Value> = changes
+                            .iter()
+                            .map(
+                                |(path, change)| json!({ "uri": uri(path), "type": *change as u8 }),
+                            )
+                            .collect();
+                        client.notify(
+                            "workspace/didChangeWatchedFiles",
+                            json!({ "changes": changes }),
+                        );
+                    } else if packages {
+                        restart.get_or_insert(None);
+                    }
+                }
+            }
+        }
+        let program = client.program.clone();
+        let restart = restart?;
+        self.stop(key);
+        Some(match restart {
+            Some(venv) => format!(
+                "Python environment changed · {program} restarts on {}",
+                self.venv_name(venv.as_deref())
+            ),
+            None => format!("Python packages changed · {program} restarts"),
+        })
     }
 
     fn handle(
@@ -760,6 +902,29 @@ impl Lsp {
         match (method, id) {
             // A request from the server: answer so it never waits on us.
             (Some(method), Some(id)) => {
+                let params = &message["params"];
+                let ids = |list: &str, of: &str| -> Vec<String> {
+                    params[list]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|r| r["method"] == of)
+                        .filter_map(|r| r["id"].as_str().map(String::from))
+                        .collect()
+                };
+                const WATCH: &str = "workspace/didChangeWatchedFiles";
+                match method {
+                    "client/registerCapability" => {
+                        client.watching.extend(ids("registrations", WATCH));
+                    }
+                    // The protocol spells it "unregisterations".
+                    "client/unregisterCapability" => {
+                        for id in ids("unregisterations", WATCH) {
+                            client.watching.remove(&id);
+                        }
+                    }
+                    _ => {}
+                }
                 let result = if method == "workspace/configuration" {
                     let count = message
                         .pointer("/params/items")
@@ -1092,7 +1257,8 @@ fn strip_snippet(text: &str) -> String {
 /// A scripted server (Python) exercises the whole protocol path end to end.
 #[cfg(all(test, unix))]
 pub(crate) const FAKE_SERVER: &str = r#"
-import json, sys
+import json, os, sys
+opened = None
 def send(msg):
     body = json.dumps(msg)
     sys.stdout.write("Content-Length: %d\r\n\r\n%s" % (len(body.encode()), body)); sys.stdout.flush()
@@ -1109,8 +1275,17 @@ while True:
     msg = read(); method = msg.get("method"); id = msg.get("id")
     if method == "initialize":
         send({"jsonrpc": "2.0", "id": id, "result": {"capabilities": {"positionEncoding": "utf-16", "completionProvider": {"triggerCharacters": ["."]}}}})
+    elif method == "initialized":
+        send({"jsonrpc": "2.0", "id": 98, "method": "client/registerCapability", "params": {"registrations": [
+            {"id": "files", "method": "workspace/didChangeWatchedFiles", "registerOptions": {"watchers": [{"globPattern": "**"}]}}]}})
+    elif method == "workspace/didChangeWatchedFiles":
+        seen = " ".join(sorted("%d:%s" % (c["type"], c["uri"].rsplit("/", 1)[1]) for c in msg["params"]["changes"]))
+        venv = os.environ.get("VIRTUAL_ENV", "none").rsplit("/", 1)[-1]
+        send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {"uri": opened, "diagnostics": [
+            {"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}}, "severity": 1, "message": seen + " venv=" + venv}]}})
     elif method in ("textDocument/didOpen", "textDocument/didChange"):
         uri = msg["params"]["textDocument"]["uri"]
+        opened = opened or uri
         send({"jsonrpc": "2.0", "method": "workspace/configuration", "id": 99, "params": {"items": [{}]}})
         send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {"uri": uri, "diagnostics": [
             {"range": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 7}}, "severity": 1, "message": "bad name"}]}})
@@ -1271,6 +1446,77 @@ mod tests {
         assert_eq!(*buffer, 0);
         // Line 1 of "fn main() {\n    x;\n}\n" starts at char 12.
         assert_eq!(edits, &vec![(12, 12, "use std::fmt;\n".to_string())]);
+    }
+
+    /// Like Pyright: the server runs on the project's `.venv`, hears about packages
+    /// installed and modules made while it runs, and starts again on a new venv.
+    #[cfg(unix)]
+    #[test]
+    fn a_python_server_runs_on_the_venv_and_hears_about_new_files() {
+        if !on_path("python3") {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let site = root.join(".venv/lib/python3.14/site-packages");
+        std::fs::create_dir_all(&site).unwrap();
+        std::fs::write(root.join(".venv/pyvenv.cfg"), "home = /usr/bin\n").unwrap();
+        let path = root.join("main.py");
+        std::fs::write(&path, "import six\n").unwrap();
+        let buffers = vec![Buffer::open(&path).unwrap()];
+        let mut overrides = BTreeMap::new();
+        overrides.insert(
+            "python".to_string(),
+            CommandPlugin {
+                program: "python3".into(),
+                args: vec!["-c".into(), FAKE_SERVER.into()],
+            },
+        );
+        let mut lsp = Lsp::new(root.clone(), true, overrides);
+        let mut notices = Vec::new();
+        let mut wait = |lsp: &mut Lsp, done: &dyn Fn(&Lsp) -> bool| {
+            for _ in 0..800 {
+                lsp.sync(&buffers, &[0]);
+                let (events, _) = lsp.poll(&buffers);
+                notices.extend(events.into_iter().filter_map(|e| match e {
+                    Event::Notice(text) => Some(text),
+                    _ => None,
+                }));
+                if done(lsp) {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            panic!("server timed out: {:?}", lsp.diagnostics.get(&0));
+        };
+        let says = |text: &'static str| {
+            move |lsp: &Lsp| {
+                lsp.diagnostics
+                    .get(&0)
+                    .is_some_and(|d| d.iter().any(|d| d.message.contains(text)))
+            }
+        };
+        wait(&mut lsp, &|lsp| lsp.ready(0));
+        assert!(
+            lsp.report().contains("python3 ready on .venv"),
+            "{}",
+            lsp.report()
+        );
+        // `uv add six`, and a module an AI wrote.
+        std::fs::write(site.join("six.py"), "").unwrap();
+        std::fs::write(root.join("helper.py"), "").unwrap();
+        wait(&mut lsp, &says("1:helper.py 1:six.py venv=.venv"));
+        std::fs::remove_file(root.join("helper.py")).unwrap();
+        wait(&mut lsp, &says("3:helper.py venv=.venv"));
+        // The venv goes (`rm -rf .venv`): the server starts again without it.
+        std::fs::remove_file(root.join(".venv/pyvenv.cfg")).unwrap();
+        wait(&mut lsp, &|lsp| {
+            lsp.report().contains("ready on the Python on PATH")
+        });
+        assert_eq!(
+            notices,
+            ["Python environment changed · python3 restarts on the Python on PATH (no .venv)"]
+        );
     }
 
     #[test]

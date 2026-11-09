@@ -31,6 +31,13 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
   Terminal on Macs whose region writes decimals with a comma (Turkish, German,
   French…). There, such a size kept Raido's font from applying at all. `:font size`
   also takes `12,5`.
+- Python imports resolve from the project's virtual environment (uv's `.venv`,
+  Poetry's, `venv`) without activating it first: the server runs on it, as VS Code
+  does once you pick its interpreter. Packages added later (`uv add`) and modules an
+  AI or a terminal creates resolve within about two seconds instead of staying
+  "could not be resolved" until `:lsp restart`, and a venv made or rebuilt while
+  Raido runs restarts the server on it. `:lsp` names the environment, and a
+  `pyright-langserver` or `basedpyright-langserver` in the venv is used first.
 - The explorer shows files created, deleted or renamed outside it (in a terminal,
   by an AI pane, by another program) within half a second, with their Git marks,
   instead of waiting for `r` or a fold. It looks only at the folders on show.

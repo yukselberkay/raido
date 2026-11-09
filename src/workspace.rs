@@ -71,6 +71,16 @@ pub fn complete_path(root: &Path, typed: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether `folder` gained, lost or renamed an entry since it read `then`, and its
+/// time now. A time changed in the last moments counts too: on file systems with
+/// coarse times, a second change within the same tick leaves the time as it was.
+pub(crate) fn folder_moved(folder: &Path, then: Option<SystemTime>) -> (bool, Option<SystemTime>) {
+    let now = fs::metadata(folder).and_then(|m| m.modified()).ok();
+    let moved =
+        now != then || then.is_some_and(|t| t.elapsed().is_ok_and(|age| age < COARSE_TIMES));
+    (moved, now)
+}
+
 pub fn printable(value: &str) -> String {
     value
         .chars()
@@ -97,10 +107,10 @@ impl FileTree {
     /// Read the folders on show again if one of them changed on disk since it was
     /// read; true when the listing changed.
     pub fn follow_disk(&mut self) -> bool {
-        let changed = self.shown.iter().any(|(folder, then)| {
-            let now = fs::metadata(folder).and_then(|m| m.modified()).ok();
-            now != *then || then.is_some_and(|t| t.elapsed().is_ok_and(|age| age < COARSE_TIMES))
-        });
+        let changed = self
+            .shown
+            .iter()
+            .any(|(folder, then)| folder_moved(folder, *then).0);
         changed && self.reread().unwrap_or(false)
     }
     /// List the folders on show, keeping the selection on its entry; true when the
