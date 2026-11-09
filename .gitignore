@@ -51,3 +51,7 @@ desktop.ini
 *.log
 *.orig
 *.rej
+
+# ── Local notes ───────────────────────────────────────────────
+# Plans kept on this machine only.
+/debug.md
