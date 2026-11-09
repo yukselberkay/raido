@@ -4804,7 +4804,10 @@ impl App {
             .unwrap_or((arg, ""));
         let message = match verb {
             "" => fonts::summary(term),
-            "size" => return self.font_size(rest.parse().context("Usage: :font size 12")?),
+            "size" => {
+                let size = textsize::points(rest).context("Usage: :font size 12.5")?;
+                return self.font_size(size);
+            }
             "family" | "face" => fonts::set_family(term, rest)?,
             "list" => {
                 let all = fonts::list()?;
@@ -4816,11 +4819,11 @@ impl App {
                     if all.len() > shown.len() { ", …" } else { "" }
                 )
             }
-            size if size.parse::<f32>().is_ok() => {
-                return self.font_size(size.parse().expect("checked"))
+            size if textsize::points(size).is_some() => {
+                return self.font_size(textsize::points(size).expect("checked"))
             }
             _ => bail!(
-                "Use :font, :font + / - / reset, :font size 12, :font family \"Name\", :font list"
+                "Use :font, :font + / - / reset, :font size 12.5, :font family \"Name\", :font list"
             ),
         };
         self.notice(message);

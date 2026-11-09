@@ -368,10 +368,11 @@ fn save_font_size_in(path: &Path, size: Option<f32>) -> Result<()> {
     if size.is_some_and(|s| !(4.0..=96.0).contains(&s)) {
         bail!("Pick a text size between 4 and 96");
     }
-    // `{}` prints 13.0 as 13 and 12.5 as 12.5, as someone would write them.
-    let value = size.map(|s| format!("{}", (s * 10.0).round() / 10.0));
+    // 13, 12.5, 12.75: as someone would write them.
+    let value = size.map(crate::textsize::shown);
+    let hundredths = |s: f32| (f64::from(s) * 100.0).round();
     set_top_level(path, "font_size", value.as_deref(), |c| {
-        c.font_size.map(|s| (s * 10.0).round()) == size.map(|s| (s * 10.0).round())
+        c.font_size.map(hundredths) == size.map(hundredths)
     })
 }
 
@@ -652,6 +653,13 @@ mod tests {
         assert_eq!(
             (config.font.as_str(), config.font_size),
             ("Menlo", Some(13.3))
+        );
+        save_font_size_in(&path, Some(12.75)).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\nfont_size = 12.75\n"), "{text}");
+        assert_eq!(
+            toml::from_str::<Config>(&text).unwrap().font_size,
+            Some(12.75)
         );
         // Ctrl-b 0: back to the default, which is no setting at all. Tables keep theirs.
         save_font_size_in(&path, None).unwrap();

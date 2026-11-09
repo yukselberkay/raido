@@ -194,6 +194,9 @@ pub fn change(step: Step) -> Receiver<Result<Changed>> {
 
 /// Resize the font of the Terminal.app tab Raido runs in (found by its tty), leaving
 /// the profile and every other tab alone. Reset returns to the profile's size.
+/// Sizes cross in hundredths of a point as whole numbers ([`centipoints`]): AppleScript
+/// reads and writes decimals the way the Mac's region does, so "12.5" is no number
+/// where 12.5 is written 12,5 (Turkish, German, French…).
 const APPLE_SCRIPT: &str = r#"on run argv
     set target to item 1 of argv
     set change to item 2 of argv
@@ -203,7 +206,7 @@ const APPLE_SCRIPT: &str = r#"on run argv
                 if tty of t is target then
                     set s to current settings of t
                     if change starts with "=" then
-                        set pts to (text 2 thru -1 of change) as number
+                        set pts to ((text 2 thru -1 of change) as integer) / 100
                     else if change is "reset" then
                         try
                             set pts to font size of settings set (name of s)
@@ -216,7 +219,7 @@ const APPLE_SCRIPT: &str = r#"on run argv
                     if pts < 6 then set pts to 6
                     if pts > 72 then set pts to 72
                     set font size of s to pts
-                    return pts
+                    return round ((font size of s) * 100)
                 end if
             end repeat
         end repeat
@@ -237,12 +240,10 @@ fn own_tty() -> Result<String> {
 fn apple_terminal(step: Step) -> Result<Changed> {
     let tty = own_tty()?;
     let change = apple_change(step, DEFAULT_SIZE.get().copied());
-    let size = run(Command::new("osascript").args(["-e", APPLE_SCRIPT, &tty, &change]))
+    let answer = run(Command::new("osascript").args(["-e", APPLE_SCRIPT, &tty, &change]))
         .context("Terminal.app did not change the text size")?;
-    let size = size.trim().trim_end_matches(".0");
-    let points: f32 = size
-        .parse()
-        .context("Terminal.app answered without a size")?;
+    let points = from_centipoints(&answer).context("Terminal.app answered without a size")?;
+    let size = shown(points);
     Ok(match step {
         Step::Reset => Changed {
             status: format!("Text size {size} pt, the default"),
@@ -261,9 +262,31 @@ fn apple_change(step: Step, default: Option<f32>) -> String {
     match (step, default) {
         (Step::In, _) => "1".to_string(),
         (Step::Out, _) => "-1".to_string(),
-        (Step::To(size), _) | (Step::Reset, Some(size)) => format!("={size}"),
+        (Step::To(size), _) | (Step::Reset, Some(size)) => format!("={}", centipoints(size)),
         (Step::Reset, None) => "reset".to_string(),
     }
+}
+
+/// A size in hundredths of a point, as AppleScript reads it in any region: 12.5 → 1250.
+fn centipoints(size: f32) -> i64 {
+    (f64::from(size) * 100.0).round() as i64
+}
+
+/// Hundredths of a point from AppleScript back to points: "1250" → 12.5.
+fn from_centipoints(text: &str) -> Option<f32> {
+    let hundredths: i64 = text.trim().parse().ok()?;
+    Some((hundredths as f64 / 100.0) as f32)
+}
+
+/// A size typed as 12, 12.5 or, where decimals take a comma, 12,5.
+pub fn points(text: &str) -> Option<f32> {
+    let size: f32 = text.trim().replace(',', ".").parse().ok()?;
+    size.is_finite().then_some(size)
+}
+
+/// A size as people write it: 13, 12.5, 12.75.
+pub fn shown(size: f32) -> String {
+    format!("{}", (f64::from(size) * 100.0).round() / 100.0)
 }
 
 /// Raido's font for the terminal window it runs in, put back when Raido exits (on
@@ -288,7 +311,7 @@ impl WindowFont {
         let worker = match live_host() {
             Host::AppleTerminal => thread::spawn(move || {
                 let tty = own_tty().ok()?;
-                let old = apple_font(&tty, &family, &size.to_string()).ok()?;
+                let old = apple_font(&tty, &family, &centipoints(size).to_string()).ok()?;
                 let (name, size) = old.trim_end().split_once('\n')?;
                 Some(Restore {
                     tty,
@@ -339,18 +362,19 @@ fn startup_font(
         .then(|| (family.to_string(), size))
 }
 
-/// Set the font of the Terminal.app tab on `tty` (an empty name keeps the tab's);
-/// returns the previous name and size (one per line) so they can be put back.
+/// Set the font of the Terminal.app tab on `tty` (an empty name keeps the tab's) and
+/// size (hundredths of a point); returns the previous name and size (one per line, the
+/// same way) so they can be put back.
 const APPLE_FONT_SCRIPT: &str = r#"on run argv
     set target to item 1 of argv
     set fontName to item 2 of argv
-    set pts to (item 3 of argv) as number
+    set pts to ((item 3 of argv) as integer) / 100
     tell application "Terminal"
         repeat with w in windows
             repeat with t in tabs of w
                 if tty of t is target then
                     set s to current settings of t
-                    set previous to (font name of s) & linefeed & ((font size of s) as text)
+                    set previous to (font name of s) & linefeed & ((round ((font size of s) * 100)) as text)
                     if fontName is not "" then set font name of s to fontName
                     set font size of s to pts
                     return previous
@@ -453,9 +477,26 @@ mod tests {
         assert_eq!(startup_font("No Such Font", None, installed), None);
         assert_eq!(startup_font("Menlo", Some(500.0), installed), None);
         // Reset is the default size with Raido's font, the profile's size without.
-        assert_eq!(apple_change(Step::Reset, Some(14.0)), "=14");
+        assert_eq!(apple_change(Step::Reset, Some(14.0)), "=1400");
         assert_eq!(apple_change(Step::Reset, None), "reset");
-        assert_eq!(apple_change(Step::To(12.5), None), "=12.5");
+        // Sizes with decimals cross as whole hundredths, whatever the Mac's region.
+        assert_eq!(apple_change(Step::To(12.5), None), "=1250");
+        assert_eq!(apple_change(Step::To(12.7), None), "=1270");
+        assert_eq!(centipoints(12.3), 1230);
+        assert_eq!(from_centipoints("1250\n"), Some(12.5));
+        assert_eq!(from_centipoints("12,5"), None);
+        assert_eq!(
+            (points("12.5"), points(" 12,7 "), points("13")),
+            (Some(12.5), Some(12.7), Some(13.0))
+        );
+        assert_eq!(
+            (points("big"), points("inf"), points("NaN")),
+            (None, None, None)
+        );
+        assert_eq!(
+            (shown(13.0), shown(12.5), shown(12.75), shown(13.3)),
+            ("13".into(), "12.5".into(), "12.75".into(), "13.3".into())
+        );
         assert_eq!(apple_change(Step::Out, Some(14.0)), "-1");
         assert!(keys_hint().contains("-0"));
         assert_eq!(Step::key('='), Some(Step::In));

@@ -27,6 +27,10 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 - With many panes docked, the top bar could draw past the screen's edge and crash.
 - OpenCode starts, without your model server, when the server can't be reached;
   a restored OpenCode pane no longer comes back as a plain shell then.
+- Text sizes with decimals (`font_size = 12.5`, `:font size 12.7`) work in macOS
+  Terminal on Macs whose region writes decimals with a comma (Turkish, German,
+  French…). There, such a size kept Raido's font from applying at all. `:font size`
+  also takes `12,5`.
 
 ### Changed
 
@@ -36,7 +40,7 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
   you keep or undo. `review_ai_auto = false` goes back to asking only on `s`.
 - The top bar no longer shows Raido's version; `raido --version` prints it.
 - **The text size sticks** in macOS Terminal: the next Raido starts at the size you
-  zoomed to with `Ctrl-b +` / `-`, or set with `:font size 13` (which now works
+  zoomed to with `Ctrl-b +` / `-`, or set with `:font size 12.5` (which now works
   there). Raido saves it as `font_size` itself, as the theme picker saves the theme;
   `Ctrl-b 0` returns to the default and forgets it.
 

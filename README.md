@@ -521,8 +521,9 @@ pane, like `Ctrl-b z`). The layout, editors and terminal panes reflow to the new
 
 In macOS Terminal the size sticks: the next Raido starts at the size you zoomed to.
 Raido writes it as `font_size` in `config.toml` for you, the way the theme picker
-keeps your theme, so there's no file to edit. `:font size 13` sets an exact size,
-kept the same way. `Ctrl-b 0` goes back to the default (14 pt with Raido's font,
+keeps your theme, so there's no file to edit. `:font size 12.5` sets an exact size,
+kept the same way; sizes take decimals (12.5, 12.75, or `12,5` where your region
+writes decimals with a comma). `Ctrl-b 0` goes back to the default (14 pt with Raido's font,
 otherwise your profile's size) and forgets the kept size.
 
 A terminal program can't scale its own text, so Raido asks the terminal window:
@@ -555,7 +556,7 @@ itself, `:font` edits the terminal's config:
 | Command | What it does |
 | --- | --- |
 | `:font` | Names your terminal and how its font is set |
-| `:font size 12` (or `:font 12`) | macOS Terminal: sizes Raido's tab and keeps it for next time. Elsewhere saves the size in the terminal's config: foot (`foot.ini`), Ghostty, Kitty, Alacritty — Alacritty and Kitty also change at once |
+| `:font size 12.5` (or `:font 12.5`) | Decimals work. macOS Terminal: sizes Raido's tab and keeps it for next time. Elsewhere saves the size in the terminal's config: foot (`foot.ini`), Ghostty, Kitty, Alacritty — Alacritty and Kitty also change at once |
 | `:font family "JetBrainsMono Nerd Font"` | On **Omarchy** runs `omarchy font set` (all terminals); elsewhere saves it in the terminal's config |
 | `:font list` | Installed monospace fonts |
 | `:font +` / `-` / `reset` | Same as `Ctrl-b +` / `-` / `0` above |
