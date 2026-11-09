@@ -1615,7 +1615,7 @@ plugins are intentionally not part of v0.1.
 | No syntax colors / monochrome UI | Use a color-capable terminal. If you intentionally inherited `NO_COLOR`, `env -u NO_COLOR raido .` enables normal colors for this run. |
 | Sidebar missing or tiny panes | Widen the terminal; the sidebar hides below 70 columns. Ctrl-b s toggles it; Ctrl-b z zooms a pane. |
 | A split shortcut does nothing | Release Ctrl-b before the second key. Use `:vsplit` or `:split` if your keyboard makes `%`/`"` awkward. |
-| Running Raido inside tmux | tmux normally consumes Ctrl-b first. Send its literal prefix with Ctrl-b b, then the Raido action, or configure a different tmux prefix. |
+| Running Raido inside tmux | tmux reads Ctrl-b first. Press it twice, then the Raido key (`Ctrl-b Ctrl-b v` opens the review), or give tmux another prefix. (`Ctrl-b b` is the other way round: tmux running in a Raido terminal pane.) |
 | C compilation fails | Run from the Raido project directory; ensure `cc` exists and create `target` with `mkdir -p target`. |
 | New file is absent from the sidebar | Save it first, then focus the explorer and press `r`. |
 | `codex` or `claude` cannot launch | Install that CLI separately and verify `command -v codex` or `command -v claude` in the shell that launches Raido. |
