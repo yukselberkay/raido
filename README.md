@@ -398,7 +398,8 @@ the history graph appears after you make commits.
   you are, what changed, find matches and errors; click or drag it to go there
   ([Minimap](#minimap)).
 - **External-change refresh:** clean open files refresh when AI/shell tools edit
-  them. Dirty buffers remain yours; saving detects conflicting disk changes.
+  them, and the explorer shows files they create, delete or rename within half a
+  second. Dirty buffers remain yours; saving detects conflicting disk changes.
 - **Extensions:** user-owned TOML themes and explicitly invoked command plugins.
 
 ## Keyboard
@@ -456,7 +457,7 @@ These shortcuts apply while the sidebar has focus (`FILES` or `GIT` in the statu
 | Space | Fold or unfold the selected folder; on a file, fold the folder holding it |
 | `c` | Collapse all folders (also `:collapse`) |
 | `E` | Expand the selected folder and every folder inside it; on a top-level file, the whole project. `.git`, `target` and `node_modules` stay folded (also `:expand`) |
-| `r` | Refresh file tree (e.g. after creating files in a terminal) |
+| `r` | Refresh the file tree now (it follows files made, removed or renamed in a terminal or by an AI by itself, within half a second) |
 | `n` | Start a new-file command; supply the path and press Enter |
 | Tab | Switch between file explorer and Git section |
 | Escape | Return focus to the active pane |

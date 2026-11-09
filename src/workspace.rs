@@ -6,10 +6,15 @@ use std::{
     process::{Command, Stdio},
     sync::mpsc::{self, Receiver},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
-#[derive(Clone)]
+/// How long after a folder last changed it is read again at every check: file
+/// systems with coarse times (whole seconds on HFS+, two on FAT) give a second
+/// change within that window the same time as the first.
+const COARSE_TIMES: Duration = Duration::from_secs(2);
+
+#[derive(Clone, PartialEq)]
 pub struct Entry {
     pub path: PathBuf,
     pub depth: usize,
@@ -23,6 +28,11 @@ pub struct FileTree {
     pub expanded: BTreeSet<PathBuf>,
     pub selected: usize,
     pub offset: usize,
+    /// The folders on show (the root and each unfolded one) with their modified
+    /// times when they were read. Adding, removing or renaming an entry changes
+    /// its folder's time, so changes made in a terminal, an AI pane or another
+    /// program are noticed without watching the disk.
+    shown: Vec<(PathBuf, Option<SystemTime>)>,
 }
 
 /// Tab completion for a path typed in Ctrl-p (relative to `root`, or absolute): the
@@ -76,27 +86,54 @@ impl FileTree {
             expanded: BTreeSet::new(),
             selected: 0,
             offset: 0,
+            shown: Vec::new(),
         };
         tree.refresh()?;
         Ok(tree)
     }
     pub fn refresh(&mut self) -> Result<()> {
+        self.reread().map(drop)
+    }
+    /// Read the folders on show again if one of them changed on disk since it was
+    /// read; true when the listing changed.
+    pub fn follow_disk(&mut self) -> bool {
+        let changed = self.shown.iter().any(|(folder, then)| {
+            let now = fs::metadata(folder).and_then(|m| m.modified()).ok();
+            now != *then || then.is_some_and(|t| t.elapsed().is_ok_and(|age| age < COARSE_TIMES))
+        });
+        changed && self.reread().unwrap_or(false)
+    }
+    /// List the folders on show, keeping the selection on its entry; true when the
+    /// listing changed.
+    fn reread(&mut self) -> Result<bool> {
         let selected = self.entries.get(self.selected).map(|e| e.path.clone());
         let mut entries = Vec::new();
-        self.walk(&self.root, 0, &mut entries)?;
+        let mut shown = Vec::new();
+        self.walk(&self.root, 0, &mut entries, &mut shown)?;
+        let changed = entries != self.entries;
         self.entries = entries;
+        self.shown = shown;
         if let Some(path) = selected {
             if let Some(i) = self.entries.iter().position(|e| e.path == path) {
                 self.selected = i;
             }
         }
         self.selected = self.selected.min(self.entries.len().saturating_sub(1));
-        Ok(())
+        Ok(changed)
     }
-    fn walk(&self, directory: &Path, depth: usize, out: &mut Vec<Entry>) -> Result<()> {
+    fn walk(
+        &self,
+        directory: &Path,
+        depth: usize,
+        out: &mut Vec<Entry>,
+        shown: &mut Vec<(PathBuf, Option<SystemTime>)>,
+    ) -> Result<()> {
         if depth > 32 || out.len() >= 10_000 {
             return Ok(());
         }
+        // Timed before it is read: a change made while reading shows as a newer time.
+        let time = fs::metadata(directory).and_then(|m| m.modified()).ok();
+        shown.push((directory.to_path_buf(), time));
         let mut children = fs::read_dir(directory)?
             .filter_map(|e| e.ok())
             .filter_map(|entry| {
@@ -128,7 +165,7 @@ impl FileTree {
             let path = entry.path.clone();
             out.push(entry);
             if recurse {
-                let _ = self.walk(&path, depth + 1, out);
+                let _ = self.walk(&path, depth + 1, out, shown);
             }
         }
         Ok(())
@@ -625,6 +662,52 @@ mod tests {
         assert!(tree.expanded.contains(&root.join("src/a/b")));
         assert!(tree.expanded.contains(&root.join("docs")));
         assert!(!tree.expanded.contains(&root.join(".git")));
+    }
+
+    #[test]
+    fn the_explorer_follows_files_made_and_removed_outside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir(root.join("src")).unwrap();
+        fs::create_dir(root.join("docs")).unwrap();
+        let mut tree = FileTree::new(root.into()).unwrap();
+        let names = |tree: &FileTree| {
+            tree.entries
+                .iter()
+                .map(|e| {
+                    e.path
+                        .strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(!tree.follow_disk(), "nothing changed");
+        fs::write(root.join("new.txt"), "").unwrap();
+        assert!(tree.follow_disk());
+        assert_eq!(names(&tree), ["docs", "src", "new.txt"]);
+        // In an unfolded folder too; a folded one stays folded.
+        tree.selected = 1;
+        tree.activate().unwrap();
+        fs::write(root.join("src/main.rs"), "").unwrap();
+        fs::write(root.join("docs/guide.md"), "").unwrap();
+        assert!(tree.follow_disk());
+        assert_eq!(names(&tree), ["docs", "src", "src/main.rs", "new.txt"]);
+        // The selection stays on its file when an entry above it goes.
+        tree.selected = 3;
+        fs::remove_dir_all(root.join("docs")).unwrap();
+        assert!(tree.follow_disk());
+        assert_eq!(names(&tree), ["src", "src/main.rs", "new.txt"]);
+        assert_eq!(names(&tree)[tree.selected], "new.txt");
+        fs::rename(root.join("src/main.rs"), root.join("src/lib.rs")).unwrap();
+        assert!(tree.follow_disk());
+        assert_eq!(names(&tree), ["src", "src/lib.rs", "new.txt"]);
+        fs::remove_file(root.join("new.txt")).unwrap();
+        assert!(tree.follow_disk());
+        assert_eq!(names(&tree), ["src", "src/lib.rs"]);
+        assert_eq!(tree.selected, 1);
+        assert!(!tree.follow_disk());
     }
 
     #[test]

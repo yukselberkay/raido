@@ -31,6 +31,9 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
   Terminal on Macs whose region writes decimals with a comma (Turkish, German,
   French…). There, such a size kept Raido's font from applying at all. `:font size`
   also takes `12,5`.
+- The explorer shows files created, deleted or renamed outside it (in a terminal,
+  by an AI pane, by another program) within half a second, with their Git marks,
+  instead of waiting for `r` or a fold. It looks only at the folders on show.
 
 ### Changed
 

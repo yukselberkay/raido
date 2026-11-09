@@ -429,6 +429,8 @@ pub struct App {
     git_receiver: Option<Receiver<GitInfo>>,
     last_git: Instant,
     last_reload: Instant,
+    /// When the explorer last looked for files made or removed outside it.
+    last_tree_check: Instant,
     theme_stamp: Option<std::time::SystemTime>,
     completion: Option<(String, usize)>,
     /// Last session JSON written to `.raido/session.json`, to skip unchanged saves.
@@ -562,6 +564,7 @@ impl App {
             git_receiver: Some(workspace::refresh_git(root.clone())),
             last_git: Instant::now(),
             last_reload: Instant::now(),
+            last_tree_check: Instant::now(),
             theme_stamp,
             completion: None,
             session_json: String::new(),
@@ -1617,6 +1620,15 @@ impl App {
             .is_some_and(|since| (2..3).contains(&since.elapsed().as_secs()))
         {
             self.redraw = true;
+        }
+        // Files made, removed or renamed outside the explorer (a terminal, an AI pane,
+        // another program) show up within half a second, their Git marks with them.
+        if self.sidebar_visible && self.last_tree_check.elapsed() >= Duration::from_millis(500) {
+            self.last_tree_check = Instant::now();
+            if self.tree.follow_disk() {
+                self.redraw = true;
+                self.last_git = Instant::now() - Duration::from_secs(5);
+            }
         }
         if self.git_receiver.is_none() && self.last_git.elapsed() >= Duration::from_secs(4) {
             self.git_receiver = Some(workspace::refresh_git(self.root.clone()));
