@@ -35,6 +35,10 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
   round of agent changes, sends only files with new changes, and costs nothing while
   you keep or undo. `review_ai_auto = false` goes back to asking only on `s`.
 - The top bar no longer shows Raido's version; `raido --version` prints it.
+- **The text size sticks** in macOS Terminal: the next Raido starts at the size you
+  zoomed to with `Ctrl-b +` / `-`, or set with `:font size 13` (which now works
+  there). Raido saves it as `font_size` itself, as the theme picker saves the theme;
+  `Ctrl-b 0` returns to the default and forgets it.
 
 ## [0.2.0] - 2026-11-06
 

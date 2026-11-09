@@ -159,6 +159,10 @@ fn omarchy() -> bool {
 pub fn summary(term: Emulator) -> String {
     let lasting = match term.config() {
         Some(_) => " · :font size 12 saves a size".to_string(),
+        // Terminal.app: Raido sets its tab's size and keeps it.
+        None if crate::textsize::sets_size() => {
+            " · that size and :font size 12 are kept for next time".to_string()
+        }
         None => format!(" · to keep a size: {}", term.manual()),
     };
     let family = if omarchy() {

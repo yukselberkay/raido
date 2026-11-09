@@ -128,6 +128,8 @@ pub struct CommandPlugin {
 
 /// JetBrains Mono with Nerd Font icons, one cell wide.
 pub const DEFAULT_FONT: &str = "JetBrainsMono Nerd Font Mono";
+/// The size Raido's `font` comes in when no `font_size` is set.
+pub const DEFAULT_FONT_SIZE: f32 = 14.0;
 
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -160,8 +162,9 @@ pub struct Config {
     /// Font for Raido's terminal window while Raido runs; `""` keeps the terminal's.
     /// Applied in Terminal.app when installed (see `textsize::WindowFont`).
     pub font: String,
-    /// Font size in points, with `font`.
-    pub font_size: f32,
+    /// Text size in points. Unset: 14 with Raido's `font`, else the terminal's own.
+    /// Ctrl-b + / - and `:font size` save it here (Terminal.app), Ctrl-b 0 removes it.
+    pub font_size: Option<f32>,
     /// Where new AI panes open: "right" (side by side) or "below" (stacked).
     pub ai_split: String,
     /// Install the Raido skill (interactive docs) for AI agents when one is launched.
@@ -225,7 +228,7 @@ impl Default for Config {
             git_pane: false,
             restore_session: true,
             font: DEFAULT_FONT.into(),
-            font_size: 14.0,
+            font_size: None,
             ai_split: "right".into(),
             ai_skill: true,
             ai_sound: "default".into(),
@@ -343,18 +346,49 @@ pub fn save_theme(name: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
-/// Rewrite only the top-level `theme = ...` line (or add one), keeping every
-/// other setting and comment as the user wrote it.
 fn save_theme_in(path: &Path, name: &str) -> Result<()> {
     if !valid_name(name) {
         bail!("Theme names may contain letters, numbers, - and _ only");
     }
+    set_top_level(path, "theme", Some(&format!("\"{name}\"")), |c| {
+        c.theme == name
+    })
+}
+
+/// Remember the text size for the next launch (`None` forgets it: the default again).
+pub fn save_font_size(size: Option<f32>) -> Result<PathBuf> {
+    let path = config_dir().join("config.toml");
+    if !cfg!(test) {
+        save_font_size_in(&path, size)?;
+    }
+    Ok(path)
+}
+
+fn save_font_size_in(path: &Path, size: Option<f32>) -> Result<()> {
+    if size.is_some_and(|s| !(4.0..=96.0).contains(&s)) {
+        bail!("Pick a text size between 4 and 96");
+    }
+    // `{}` prints 13.0 as 13 and 12.5 as 12.5, as someone would write them.
+    let value = size.map(|s| format!("{}", (s * 10.0).round() / 10.0));
+    set_top_level(path, "font_size", value.as_deref(), |c| {
+        c.font_size.map(|s| (s * 10.0).round()) == size.map(|s| (s * 10.0).round())
+    })
+}
+
+/// Rewrite only the top-level `key = ...` line (add one, or with `None` remove it),
+/// keeping every other setting and comment as the user wrote it. `took` checks the
+/// result loads back as meant.
+fn set_top_level(
+    path: &Path,
+    key: &str,
+    value: Option<&str>,
+    took: impl Fn(&Config) -> bool,
+) -> Result<()> {
     let old = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(error).with_context(|| format!("Read {}", path.display())),
     };
-    let setting = format!("theme = \"{name}\"");
     let mut lines: Vec<String> = old.lines().map(String::from).collect();
     // Top-level keys end at the first [table] header.
     let top = lines
@@ -363,19 +397,23 @@ fn save_theme_in(path: &Path, name: &str) -> Result<()> {
         .unwrap_or(lines.len());
     let existing = lines[..top].iter().position(|l| {
         l.trim_start()
-            .strip_prefix("theme")
+            .strip_prefix(key)
             .is_some_and(|rest| rest.trim_start().starts_with('='))
     });
-    match existing {
-        Some(i) => lines[i] = setting,
-        None => lines.insert(0, setting),
+    match (existing, value) {
+        (Some(i), Some(value)) => lines[i] = format!("{key} = {value}"),
+        (None, Some(value)) => lines.insert(0, format!("{key} = {value}")),
+        (Some(i), None) => {
+            lines.remove(i);
+        }
+        (None, None) => return Ok(()),
     }
     let mut text = lines.join("\n");
     text.push('\n');
     // Never write a config Raido itself could not load back.
     let check: Config = toml::from_str(&text).context("Config would become invalid")?;
-    if check.theme != name {
-        bail!("Could not update the theme setting in {}", path.display());
+    if !took(&check) {
+        bail!("Could not update the {key} setting in {}", path.display());
     }
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
@@ -597,6 +635,42 @@ mod tests {
         assert!(save_theme_in(&path, "../bad").is_err());
     }
     #[test]
+    fn the_text_size_is_kept_and_forgotten_in_the_config_without_touching_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("raido/config.toml");
+        save_font_size_in(&path, Some(13.0)).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "font_size = 13\n");
+        let original = "theme = \"nord\"\n# my font\nfont = \"Menlo\"\nfont_size = 12.3\n\n[plugins.test]\nprogram = \"cargo\"\n";
+        fs::write(&path, original).unwrap();
+        save_font_size_in(&path, Some(13.3)).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            text,
+            original.replace("font_size = 12.3", "font_size = 13.3")
+        );
+        let config: Config = toml::from_str(&text).unwrap();
+        assert_eq!(
+            (config.font.as_str(), config.font_size),
+            ("Menlo", Some(13.3))
+        );
+        // Ctrl-b 0: back to the default, which is no setting at all. Tables keep theirs.
+        save_font_size_in(&path, None).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(text, original.replace("font_size = 12.3\n", ""));
+        assert_eq!(toml::from_str::<Config>(&text).unwrap().font_size, None);
+        save_font_size_in(&path, None).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            text,
+            "nothing to forget"
+        );
+        assert!(save_font_size_in(&path, Some(500.0)).is_err());
+        // A broken config is left as it is rather than half rewritten.
+        fs::write(&path, "theme = [\n").unwrap();
+        assert!(save_font_size_in(&path, Some(13.0)).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "theme = [\n");
+    }
+    #[test]
     fn icons_accept_booleans_and_names() {
         let icons =
             |value: &str| toml::from_str::<Config>(&format!("icons = {value}")).map(|c| c.icons);
@@ -611,10 +685,13 @@ mod tests {
     fn font_defaults_to_jetbrains_mono_and_can_be_turned_off() {
         let config = Config::default();
         assert_eq!(config.font, "JetBrainsMono Nerd Font Mono");
-        assert_eq!(config.font_size, 14.0);
+        assert_eq!(
+            config.font_size, None,
+            "14 pt comes with the font, not the setting"
+        );
         let config: Config = toml::from_str("font = \"\"\nfont_size = 13").unwrap();
         assert!(config.font.is_empty());
-        assert_eq!(config.font_size, 13.0);
+        assert_eq!(config.font_size, Some(13.0));
         let example: Config = toml::from_str(include_str!("../config.example.toml")).unwrap();
         assert_eq!(example.font, DEFAULT_FONT);
     }

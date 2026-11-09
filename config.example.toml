@@ -33,7 +33,9 @@ restore_session = true
 # terminal's own (set it there, or with :font family). "" always keeps it.
 # scripts/install.sh installs JetBrains Mono Nerd Font.
 font = "JetBrainsMono Nerd Font Mono"
-font_size = 14
+# Text size in points: 14 with that font, else the terminal's own. In macOS Terminal,
+# Ctrl-b + / - and :font size keep the size here for you; Ctrl-b 0 removes it.
+# font_size = 14
 # Where AI panes open: "right" (side by side) or "below" (stacked).
 ai_split = "right"
 # Teach your AI agents about Raido (an Agent Skills skill for every project; kept

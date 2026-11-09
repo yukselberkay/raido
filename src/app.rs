@@ -437,7 +437,7 @@ pub struct App {
     /// Autosave this project's session (`:session forget` turns it off until restart).
     session_enabled: bool,
     /// The terminal's answer to a text size change.
-    text_size: Option<Receiver<Result<String>>>,
+    text_size: Option<Receiver<Result<textsize::Changed>>>,
     /// Right after Ctrl-b +, `-` or `0`, those keys repeat without the prefix.
     text_size_repeat: Option<Instant>,
     /// `raido FILE` typed in a terminal pane arrives here.
@@ -778,7 +778,50 @@ impl App {
     /// layout follows the resize that results.
     fn change_text_size(&mut self, step: textsize::Step) {
         self.text_size = Some(textsize::change(step));
-        self.text_size_repeat = Some(Instant::now());
+        // `:font size 13` is no key to repeat.
+        if !matches!(step, textsize::Step::To(_)) {
+            self.text_size_repeat = Some(Instant::now());
+        }
+    }
+    /// The terminal's answer to a text size change. Where Raido sets the size
+    /// (Terminal.app) it's kept for the next launch, the way the theme picker keeps
+    /// a theme: `font_size` in config.toml, written for you.
+    fn text_size_changed(&mut self, changed: textsize::Changed) {
+        use textsize::Remember;
+        let keep = match changed.remember {
+            Remember::Size(size) => Some(size),
+            Remember::Default => None,
+            Remember::Nothing => {
+                self.notice(changed.status);
+                return;
+            }
+        };
+        match config::save_font_size(keep) {
+            Ok(_) => {
+                self.config.font_size = keep;
+                let hint = if keep.is_some() {
+                    " · Ctrl-b 0 default"
+                } else {
+                    ""
+                };
+                self.notice(format!("{} · kept for next time{hint}", changed.status));
+            }
+            Err(error) => self.fail(format!("{} (not kept: {error:#})", changed.status)),
+        }
+    }
+    /// `:font size N`: Raido sizes Terminal.app itself and keeps the size; other
+    /// terminals get it saved in their own config.
+    fn font_size(&mut self, size: f32) -> Result<()> {
+        if textsize::sets_size() {
+            if !(6.0..=72.0).contains(&size) {
+                bail!("Pick a text size between 6 and 72");
+            }
+            self.change_text_size(textsize::Step::To(size));
+        } else {
+            let message = crate::fonts::set_size(crate::fonts::detect(), size)?;
+            self.notice(message);
+        }
+        Ok(())
     }
     /// Show the file highlighted in the sidebar without leaving the sidebar.
     /// Keys in the explorer's find-in-files view: typing searches, arrows preview,
@@ -1540,9 +1583,9 @@ impl App {
         }
         if let Some(receiver) = &self.text_size {
             match receiver.try_recv() {
-                Ok(Ok(status)) => {
+                Ok(Ok(changed)) => {
                     self.text_size = None;
-                    self.notice(status);
+                    self.text_size_changed(changed);
                 }
                 Ok(Err(error)) => {
                     self.text_size = None;
@@ -4761,7 +4804,7 @@ impl App {
             .unwrap_or((arg, ""));
         let message = match verb {
             "" => fonts::summary(term),
-            "size" => fonts::set_size(term, rest.parse().context("Usage: :font size 12")?)?,
+            "size" => return self.font_size(rest.parse().context("Usage: :font size 12")?),
             "family" | "face" => fonts::set_family(term, rest)?,
             "list" => {
                 let all = fonts::list()?;
@@ -4774,7 +4817,7 @@ impl App {
                 )
             }
             size if size.parse::<f32>().is_ok() => {
-                fonts::set_size(term, size.parse().expect("checked"))?
+                return self.font_size(size.parse().expect("checked"))
             }
             _ => bail!(
                 "Use :font, :font + / - / reset, :font size 12, :font family \"Name\", :font list"
@@ -5520,6 +5563,45 @@ mod tests {
         press(&mut app, KeyCode::Char('n'), KeyModifiers::NONE);
         assert_eq!(app.active_buffer().unwrap().row, 1);
         assert!(app.quit(false).is_ok());
+    }
+    #[test]
+    fn a_text_size_raido_sets_is_kept_for_next_time_and_reset_forgets_it() {
+        use textsize::{Changed, Remember};
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().into(), None, false).unwrap();
+        let answer = |app: &mut App, status: &str, remember| {
+            let (send, receive) = std::sync::mpsc::channel();
+            send.send(Ok(Changed {
+                status: status.into(),
+                remember,
+            }))
+            .unwrap();
+            app.text_size = Some(receive);
+            app.tick();
+        };
+        answer(&mut app, "Text size 13.3 pt", Remember::Size(13.3));
+        assert_eq!(app.config.font_size, Some(13.3));
+        assert!(
+            app.message
+                .contains("13.3 pt · kept for next time · Ctrl-b 0"),
+            "{}",
+            app.message
+        );
+        answer(&mut app, "Text size 14 pt, the default", Remember::Default);
+        assert_eq!(app.config.font_size, None);
+        assert!(
+            app.message.contains("the default · kept for next time"),
+            "{}",
+            app.message
+        );
+        // A terminal that sized itself has nothing Raido could set next time.
+        app.config.font_size = Some(12.0);
+        answer(&mut app, "Text bigger", Remember::Nothing);
+        assert_eq!(
+            (app.config.font_size, app.message.as_str()),
+            (Some(12.0), "Text bigger")
+        );
+        assert!(app.text_size.is_none());
     }
     #[test]
     fn a_count_before_dd_and_yy_takes_that_many_lines() {

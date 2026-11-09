@@ -4,7 +4,8 @@
 //! font escape, kitty through remote control. Elsewhere it names the terminal's keys.
 //!
 //! [`WindowFont`] also gives Raido's Terminal.app tab its own font (config `font`,
-//! `font_size`) while Raido runs.
+//! `font_size`) while Raido runs. There the size you zoom to is kept: the app saves
+//! it as `font_size` ([`Remember`]), so the next launch starts at it.
 use anyhow::{bail, Context, Result};
 use std::{
     io::Write,
@@ -17,14 +18,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// The size Raido gave its window; Ctrl-b 0 returns to it.
-static RAIDO_SIZE: OnceLock<f32> = OnceLock::new();
+/// The size Ctrl-b 0 returns to when Raido gave the window its own font; without
+/// one it returns to the terminal profile's size.
+static DEFAULT_SIZE: OnceLock<f32> = OnceLock::new();
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Step {
     In,
     Out,
     Reset,
+    /// An exact size in points (`:font size 13`).
+    To(f32),
 }
 
 impl Step {
@@ -50,6 +54,34 @@ impl Step {
             Self::In => "bigger",
             Self::Out => "smaller",
             Self::Reset => "back to normal",
+            Self::To(_) => "set",
+        }
+    }
+}
+
+/// A text size change, for the status line.
+#[derive(Debug, PartialEq)]
+pub struct Changed {
+    pub status: String,
+    pub remember: Remember,
+}
+
+/// What the next launch should start at after a change.
+#[derive(Debug, PartialEq)]
+pub enum Remember {
+    /// Keep this size (points).
+    Size(f32),
+    /// Back to the default: forget the kept size.
+    Default,
+    /// The terminal sized itself; Raido can't set it at the next launch.
+    Nothing,
+}
+
+impl Changed {
+    fn only(status: String) -> Self {
+        Self {
+            status,
+            remember: Remember::Nothing,
         }
     }
 }
@@ -77,6 +109,15 @@ fn host(env: &dyn Fn(&str) -> Option<String>) -> Host {
     }
 }
 
+/// The terminal Raido runs in; tests never drive the one they run in.
+fn live_host() -> Host {
+    if cfg!(test) {
+        Host::Other
+    } else {
+        host(&|name| std::env::var(name).ok())
+    }
+}
+
 /// What to tell someone whose terminal Raido can't drive.
 fn keys_hint() -> String {
     let keys = if cfg!(target_os = "macos") {
@@ -87,22 +128,34 @@ fn keys_hint() -> String {
     format!("This terminal sets its own text size: {keys}")
 }
 
-/// Change the text size. The answer (a status line) arrives on the receiver, since
-/// asking another program can take a moment.
-pub fn change(step: Step) -> Receiver<Result<String>> {
+/// Whether Raido sets this terminal's text size in points, and so can keep it for
+/// the next launch (Terminal.app).
+pub fn sets_size() -> bool {
+    live_host() == Host::AppleTerminal
+}
+
+/// Change the text size. The answer arrives on the receiver, since asking another
+/// program can take a moment.
+pub fn change(step: Step) -> Receiver<Result<Changed>> {
     let (sender, receiver) = mpsc::channel();
-    match host(&|name| std::env::var(name).ok()) {
+    match live_host() {
         Host::Xterm => {
             // OSC 50 with `#` walks xterm's font menu; a bare `#` is its default.
             let menu = match step {
                 Step::In => "#+1",
                 Step::Out => "#-1",
                 Step::Reset => "#",
+                Step::To(_) => {
+                    let _ = sender.send(Ok(Changed::only(
+                        "xterm steps through its font menu: Ctrl-b + / - / 0".into(),
+                    )));
+                    return receiver;
+                }
             };
             let mut out = std::io::stdout();
             let sent = write!(out, "\x1b]50;{menu}\x07").and_then(|_| out.flush());
             let _ = sender.send(
-                sent.map(|_| format!("Text {}", step.word()))
+                sent.map(|_| Changed::only(format!("Text {}", step.word())))
                     .map_err(Into::into),
             );
         }
@@ -114,9 +167,10 @@ pub fn change(step: Step) -> Receiver<Result<String>> {
         Host::Kitty(socket) => {
             thread::spawn(move || {
                 let size = match step {
-                    Step::In => "+1",
-                    Step::Out => "-1",
-                    Step::Reset => "0",
+                    Step::In => "+1".to_string(),
+                    Step::Out => "-1".to_string(),
+                    Step::Reset => "0".to_string(),
+                    Step::To(size) => size.to_string(),
                 };
                 let result = run(Command::new("kitty").args([
                     "@",
@@ -124,15 +178,15 @@ pub fn change(step: Step) -> Receiver<Result<String>> {
                     &socket,
                     "set-font-size",
                     "--",
-                    size,
+                    &size,
                 ]))
-                .map(|_| format!("Text {}", step.word()))
-                .or_else(|_| Ok(keys_hint()));
+                .map(|_| Changed::only(format!("Text {}", step.word())))
+                .or_else(|_| Ok(Changed::only(keys_hint())));
                 let _ = sender.send(result);
             });
         }
         Host::Other => {
-            let _ = sender.send(Ok(keys_hint()));
+            let _ = sender.send(Ok(Changed::only(keys_hint())));
         }
     }
     receiver
@@ -180,21 +234,36 @@ fn own_tty() -> Result<String> {
     Ok(format!("/dev/{tty}"))
 }
 
-fn apple_terminal(step: Step) -> Result<String> {
+fn apple_terminal(step: Step) -> Result<Changed> {
     let tty = own_tty()?;
-    // Reset returns to Raido's own size when it set one, else to the profile's.
-    let change = match (step, RAIDO_SIZE.get()) {
-        (Step::In, _) => "1".to_string(),
-        (Step::Out, _) => "-1".to_string(),
-        (Step::Reset, Some(size)) => format!("={size}"),
-        (Step::Reset, None) => "reset".to_string(),
-    };
+    let change = apple_change(step, DEFAULT_SIZE.get().copied());
     let size = run(Command::new("osascript").args(["-e", APPLE_SCRIPT, &tty, &change]))
         .context("Terminal.app did not change the text size")?;
-    Ok(format!(
-        "Text size {} pt · Ctrl-b + / - / 0",
-        size.trim().trim_end_matches(".0")
-    ))
+    let size = size.trim().trim_end_matches(".0");
+    let points: f32 = size
+        .parse()
+        .context("Terminal.app answered without a size")?;
+    Ok(match step {
+        Step::Reset => Changed {
+            status: format!("Text size {size} pt, the default"),
+            remember: Remember::Default,
+        },
+        _ => Changed {
+            status: format!("Text size {size} pt"),
+            remember: Remember::Size(points),
+        },
+    })
+}
+
+/// The AppleScript's change: a step, `=N` for a size, or `reset` for the profile's.
+/// Reset goes to the default size when Raido gave the tab its own font.
+fn apple_change(step: Step, default: Option<f32>) -> String {
+    match (step, default) {
+        (Step::In, _) => "1".to_string(),
+        (Step::Out, _) => "-1".to_string(),
+        (Step::To(size), _) | (Step::Reset, Some(size)) => format!("={size}"),
+        (Step::Reset, None) => "reset".to_string(),
+    }
 }
 
 /// Raido's font for the terminal window it runs in, put back when Raido exits (on
@@ -213,16 +282,10 @@ struct Restore {
 }
 
 impl WindowFont {
-    pub fn apply(family: &str, size: f32) -> Option<Self> {
-        let family = family.trim().to_string();
-        if family.is_empty()
-            || family.contains('"')
-            || !(4.0..=96.0).contains(&size)
-            || !crate::icons::font_installed(&family)
-        {
-            return None;
-        }
-        let worker = match host(&|name| std::env::var(name).ok()) {
+    pub fn apply(family: &str, size: Option<f32>) -> Option<Self> {
+        let (family, size) = startup_font(family, size, crate::icons::font_installed)?;
+        let own = !family.is_empty();
+        let worker = match live_host() {
             Host::AppleTerminal => thread::spawn(move || {
                 let tty = own_tty().ok()?;
                 let old = apple_font(&tty, &family, &size.to_string()).ok()?;
@@ -235,7 +298,9 @@ impl WindowFont {
             }),
             _ => return None,
         };
-        let _ = RAIDO_SIZE.set(size);
+        if own {
+            let _ = DEFAULT_SIZE.set(crate::config::DEFAULT_FONT_SIZE);
+        }
         Some(Self {
             worker: Some(worker),
         })
@@ -251,8 +316,31 @@ impl Drop for WindowFont {
     }
 }
 
-/// Set the font of the Terminal.app tab on `tty`; returns the previous name and size
-/// (one per line) so they can be put back.
+/// The font and size the window starts with: Raido's font (if installed) at the kept
+/// size or 14 pt, or, without it, only a kept size in the terminal's own font (`""`).
+/// Neither: the window is left alone.
+fn startup_font(
+    family: &str,
+    size: Option<f32>,
+    installed: impl Fn(&str) -> bool,
+) -> Option<(String, f32)> {
+    let family = family.trim();
+    let family = if family.is_empty() || family.contains('"') || !installed(family) {
+        ""
+    } else {
+        family
+    };
+    let size = match (family, size) {
+        ("", None) => return None,
+        (_, size) => size.unwrap_or(crate::config::DEFAULT_FONT_SIZE),
+    };
+    (4.0..=96.0)
+        .contains(&size)
+        .then(|| (family.to_string(), size))
+}
+
+/// Set the font of the Terminal.app tab on `tty` (an empty name keeps the tab's);
+/// returns the previous name and size (one per line) so they can be put back.
 const APPLE_FONT_SCRIPT: &str = r#"on run argv
     set target to item 1 of argv
     set fontName to item 2 of argv
@@ -263,7 +351,7 @@ const APPLE_FONT_SCRIPT: &str = r#"on run argv
                 if tty of t is target then
                     set s to current settings of t
                     set previous to (font name of s) & linefeed & ((font size of s) as text)
-                    set font name of s to fontName
+                    if fontName is not "" then set font name of s to fontName
                     set font size of s to pts
                     return previous
                 end if
@@ -341,10 +429,34 @@ mod tests {
             Host::Other
         );
         assert_eq!(host(&env(&[("TERM_PROGRAM", "WezTerm")])), Host::Other);
-        // No font asked for, or one that isn't installed: the terminal keeps its own.
-        assert!(WindowFont::apply("", 14.0).is_none());
-        assert!(WindowFont::apply("No Such Font Raido Test", 14.0).is_none());
-        assert!(WindowFont::apply(crate::config::DEFAULT_FONT, 500.0).is_none());
+        // Raido's font comes at the kept size, or 14 pt.
+        let installed = |name: &str| name == "Menlo";
+        assert_eq!(
+            startup_font("Menlo", None, installed),
+            Some(("Menlo".into(), 14.0))
+        );
+        assert_eq!(
+            startup_font(" Menlo ", Some(12.3), installed),
+            Some(("Menlo".into(), 12.3))
+        );
+        // Without it (none asked for, or not installed) only a kept size applies, in
+        // the terminal's own font; with no size either, the window is left alone.
+        assert_eq!(
+            startup_font("", Some(16.0), installed),
+            Some(("".into(), 16.0))
+        );
+        assert_eq!(
+            startup_font("No Such Font", Some(16.0), installed),
+            Some(("".into(), 16.0))
+        );
+        assert_eq!(startup_font("", None, installed), None);
+        assert_eq!(startup_font("No Such Font", None, installed), None);
+        assert_eq!(startup_font("Menlo", Some(500.0), installed), None);
+        // Reset is the default size with Raido's font, the profile's size without.
+        assert_eq!(apple_change(Step::Reset, Some(14.0)), "=14");
+        assert_eq!(apple_change(Step::Reset, None), "reset");
+        assert_eq!(apple_change(Step::To(12.5), None), "=12.5");
+        assert_eq!(apple_change(Step::Out, Some(14.0)), "-1");
         assert!(keys_hint().contains("-0"));
         assert_eq!(Step::key('='), Some(Step::In));
         assert_eq!(Step::key('-'), Some(Step::Out));

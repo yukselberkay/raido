@@ -519,11 +519,17 @@ after one of them, `+`, `-` and `0` keep working without the prefix for a second
 `:zoom in`, `:zoom out` and `:zoom reset` do the same (`:zoom` alone maximizes the
 pane, like `Ctrl-b z`). The layout, editors and terminal panes reflow to the new size.
 
+In macOS Terminal the size sticks: the next Raido starts at the size you zoomed to.
+Raido writes it as `font_size` in `config.toml` for you, the way the theme picker
+keeps your theme, so there's no file to edit. `:font size 13` sets an exact size,
+kept the same way. `Ctrl-b 0` goes back to the default (14 pt with Raido's font,
+otherwise your profile's size) and forgets the kept size.
+
 A terminal program can't scale its own text, so Raido asks the terminal window:
 
 | Terminal | How |
 | --- | --- |
-| macOS Terminal | AppleScript, 1 pt per step, only for Raido's own tab; your profile is untouched and reset returns to its size |
+| macOS Terminal | AppleScript, 1 pt per step, only for Raido's own tab (your profile is untouched); the size is kept for the next launch |
 | xterm | Its font menu escape (`allowFontOps`, on by default) |
 | kitty | `kitty @ set-font-size`, when remote control is on (`allow_remote_control` and `listen_on`) |
 | Others (iTerm2, Ghostty, WezTerm, Alacritty, Windows Terminal, …) | Raido names your terminal's own keys: Cmd-+ / Cmd-- / Cmd-0 on macOS, Ctrl-+ / Ctrl-- / Ctrl-0 elsewhere |
@@ -536,7 +542,7 @@ it depends on the terminal:
 
 - **macOS Terminal:** while Raido runs, its tab switches to that font and size, and
   gets its own font back when Raido exits. Your profile and other tabs don't change.
-  `Ctrl-b 0` returns to 14 pt.
+  The size you zoom to is kept for the next launch; `Ctrl-b 0` returns to 14 pt.
 - **Other terminals** can't have one window's font changed from outside, so they
   keep their own font. Make JetBrains Mono your terminal's font with
   `:font family "JetBrainsMono Nerd Font Mono"` (below) or in its settings.
@@ -549,15 +555,15 @@ itself, `:font` edits the terminal's config:
 | Command | What it does |
 | --- | --- |
 | `:font` | Names your terminal and how its font is set |
-| `:font size 12` (or `:font 12`) | Saves the size in the terminal's config: foot (`foot.ini`), Ghostty, Kitty, Alacritty — Alacritty and Kitty also change at once |
+| `:font size 12` (or `:font 12`) | macOS Terminal: sizes Raido's tab and keeps it for next time. Elsewhere saves the size in the terminal's config: foot (`foot.ini`), Ghostty, Kitty, Alacritty — Alacritty and Kitty also change at once |
 | `:font family "JetBrainsMono Nerd Font"` | On **Omarchy** runs `omarchy font set` (all terminals); elsewhere saves it in the terminal's config |
 | `:font list` | Installed monospace fonts |
 | `:font +` / `-` / `reset` | Same as `Ctrl-b +` / `-` / `0` above |
 
 Raido finds the terminal from its environment, or on Linux from the process that
 started it (foot under Omarchy sets no variable). Only the font lines change; the
-rest of the file is kept. For WezTerm, Windows Terminal and macOS terminals, `:font`
-says where the setting lives. Use a [Nerd Font](https://www.nerdfonts.com/) for the
+rest of the file is kept. For WezTerm, Windows Terminal and iTerm2 (and the family in
+macOS Terminal), `:font` says where the setting lives. Use a [Nerd Font](https://www.nerdfonts.com/) for the
 explorer icons.
 
 ### Git pane
