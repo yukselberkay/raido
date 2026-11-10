@@ -668,14 +668,16 @@ impl Renderer<'_> {
         self.emit(pad(top, width, base));
         let grammar = Some(label)
             .filter(|l| !l.is_empty())
-            .and_then(|l| self.syntax.syntaxes.find_syntax_by_token(l));
-        let mut highlighter = grammar.map(|g| HighlightLines::new(g, &self.syntax.theme));
+            .and_then(|l| self.syntax.by_token(l));
+        let set = grammar.map(|(_, set)| set);
+        let mut highlighter = grammar.map(|(g, _)| HighlightLines::new(g, &self.syntax.theme));
         for line in LinesWithEndings::from(text) {
             let line = line.replace('\t', "    ");
             let mut spans = vec![Span::styled("  ", base)];
             let regions = highlighter
                 .as_mut()
-                .and_then(|h| h.highlight_line(&line, &self.syntax.syntaxes).ok());
+                .zip(set)
+                .and_then(|(h, set)| h.highlight_line(&line, set).ok());
             match regions {
                 Some(regions) => {
                     for (style, part) in regions {

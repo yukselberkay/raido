@@ -369,7 +369,9 @@ the history graph appears after you make commits.
   lists, tables, highlighted code blocks, quotes and GitHub alerts — with a live
   side-by-side preview that follows your cursor while you edit.
 - **Source highlighting:** bundled Rust, C, C++, Python, Go grammars, plus the
-  other bundled Syntect languages. Absolute/relative line numbers.
+  other bundled Syntect languages (JSON and YAML among them) and Raido's own TOML
+  grammar (`pyproject.toml`, `Cargo.toml`, `config.toml`, and ```` ```toml ```` blocks
+  in Markdown). Absolute/relative line numbers.
 - **File explorer:** keyboard traversal, folders that fold one at a time or all at
   once, dotfiles always shown, VS Code-style Git status colors and letters, new
   file buffers, visible-path completion, open-buffer cycling.

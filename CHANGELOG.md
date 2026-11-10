@@ -10,6 +10,11 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **TOML is highlighted:** `pyproject.toml`, `Cargo.toml`, Raido's own `config.toml`
+  and ```` ```toml ```` blocks in Markdown color their tables, keys, strings, numbers,
+  dates and comments in every theme. The grammar is Raido's own and loads apart from
+  the bundled ones, so starting stays as quick as before.
+
 - **Drag a pane border to resize**, as in tmux: the panes on both sides of the line
   follow the mouse, every one along it, so a pane the whole height on the right
   resizes with all the panes stacked beside it. Focus stays where it was.

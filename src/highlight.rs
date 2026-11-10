@@ -8,12 +8,20 @@ use syntect::{
         Color, HighlightIterator, HighlightState, Highlighter, Style, StyleModifier, Theme,
         ThemeItem, ThemeSet, ThemeSettings,
     },
-    parsing::{ParseState, ScopeStack, SyntaxSet},
+    parsing::{
+        ParseState, ScopeStack, SyntaxDefinition, SyntaxReference, SyntaxSet, SyntaxSetBuilder,
+    },
 };
+
+/// Grammars Raido adds to the bundled ones: TOML (`pyproject.toml`, `Cargo.toml`,
+/// Raido's own settings).
+const EXTRA: [&str; 1] = [include_str!("syntaxes/toml.sublime-syntax")];
 
 pub struct Cached {
     revision: u64,
     name: String,
+    /// The grammar is one of Raido's own (`Syntax::extra`), parsed with that set.
+    extra: bool,
     parse: ParseState,
     state: HighlightState,
     pub lines: Vec<Vec<(Style, String)>>,
@@ -35,6 +43,9 @@ fn line_hash(line: ropey::RopeSlice) -> u64 {
 
 pub struct Syntax {
     pub syntaxes: SyntaxSet,
+    /// Raido's own grammars, kept in a set of their own: adding them to the
+    /// bundled set means rebuilding it, a tenth of a second at every start.
+    extra: SyntaxSet,
     pub theme: Theme,
     pub cache: HashMap<usize, Cached>,
 }
@@ -42,6 +53,12 @@ pub struct Syntax {
 impl Syntax {
     pub fn new(palette: &config::Theme) -> Self {
         let syntaxes = SyntaxSet::load_defaults_newlines();
+        let mut extra = SyntaxSetBuilder::new();
+        for source in EXTRA {
+            extra
+                .add(SyntaxDefinition::load_from_str(source, true, None).expect("bundled grammar"));
+        }
+        let extra = extra.build();
         let theme = if let Some(colors) = &palette.syntax_colors {
             let mut theme = Theme {
                 settings: ThemeSettings {
@@ -91,8 +108,41 @@ impl Syntax {
         };
         Self {
             syntaxes,
+            extra,
             theme,
             cache: HashMap::new(),
+        }
+    }
+    /// The grammar for files ending in `extension`, and the set to parse it with.
+    pub fn by_extension(&self, extension: &str) -> Option<(&SyntaxReference, &SyntaxSet)> {
+        (self
+            .syntaxes
+            .find_syntax_by_extension(extension)
+            .map(|g| (g, &self.syntaxes)))
+        .or_else(|| {
+            self.extra
+                .find_syntax_by_extension(extension)
+                .map(|g| (g, &self.extra))
+        })
+    }
+    /// The grammar a Markdown code block labeled `token` (`rust`, `toml`) means,
+    /// and the set to parse it with.
+    pub fn by_token(&self, token: &str) -> Option<(&SyntaxReference, &SyntaxSet)> {
+        (self
+            .syntaxes
+            .find_syntax_by_token(token)
+            .map(|g| (g, &self.syntaxes)))
+        .or_else(|| {
+            self.extra
+                .find_syntax_by_token(token)
+                .map(|g| (g, &self.extra))
+        })
+    }
+    fn set(&self, extra: bool) -> &SyntaxSet {
+        if extra {
+            &self.extra
+        } else {
+            &self.syntaxes
         }
     }
     pub fn language(&self, buffer: &Buffer) -> String {
@@ -101,8 +151,8 @@ impl Syntax {
             .as_ref()
             .and_then(|p| p.extension())
             .and_then(|e| e.to_str())
-            .and_then(|e| self.syntaxes.find_syntax_by_extension(e))
-            .map(|s| s.name.clone())
+            .and_then(|e| self.by_extension(e))
+            .map(|(g, _)| g.name.clone())
             .unwrap_or_else(|| "Plain text".into())
     }
     /// Highlight `buffer` down to line `end`, a bounded amount per call; true when
@@ -138,19 +188,21 @@ impl Syntax {
             .get(&id)
             .is_none_or(|c| c.revision != buffer.revision || c.name != name);
         if reset {
-            let syntax = buffer
+            let (syntax, set) = buffer
                 .path
                 .as_ref()
                 .and_then(|p| p.extension())
                 .and_then(|s| s.to_str())
-                .and_then(|extension| self.syntaxes.find_syntax_by_extension(extension))
-                .unwrap_or_else(|| self.syntaxes.find_syntax_plain_text());
+                .and_then(|extension| self.by_extension(extension))
+                .unwrap_or_else(|| (self.syntaxes.find_syntax_plain_text(), &self.syntaxes));
+            let extra = std::ptr::eq(set, &self.extra);
             let highlighter = Highlighter::new(&self.theme);
             self.cache.insert(
                 id,
                 Cached {
                     revision: buffer.revision,
                     name,
+                    extra,
                     parse: ParseState::new(syntax),
                     state: HighlightState::new(&highlighter, ScopeStack::new()),
                     lines: Vec::new(),
@@ -161,6 +213,11 @@ impl Syntax {
             );
         }
         let cache = self.cache.get_mut(&id).expect("cache just inserted");
+        let set = if cache.extra {
+            &self.extra
+        } else {
+            &self.syntaxes
+        };
         let highlighter = Highlighter::new(&self.theme);
         let target = end.min(buffer.lines());
         let stop = target.min(cache.lines.len() + budget);
@@ -176,7 +233,7 @@ impl Syntax {
                 cache.lines.push(Vec::new());
                 continue;
             }
-            let regions = match cache.parse.parse_line(&line, &self.syntaxes) {
+            let regions = match cache.parse.parse_line(&line, set) {
                 Ok(ops) => HighlightIterator::new(&mut cache.state, &ops, &line, &highlighter)
                     .map(|(style, text)| (style, text.to_owned()))
                     .collect(),
@@ -186,10 +243,11 @@ impl Syntax {
         }
         cache.lines.len() < target
     }
-    /// The grammar for a file named `name`, unless it's plain text.
-    pub fn grammar(&self, name: &str) -> Option<&syntect::parsing::SyntaxReference> {
+    /// The grammar for a file named `name`, unless it's plain text, and the set to
+    /// parse it with.
+    pub fn grammar(&self, name: &str) -> Option<(&SyntaxReference, &SyntaxSet)> {
         let extension = std::path::Path::new(name).extension()?.to_str()?;
-        self.syntaxes.find_syntax_by_extension(extension)
+        self.by_extension(extension)
     }
     /// A review hunk's lines in the colors of file `name`'s language. The lines as
     /// they were (context and removed) and as they are (context and added) each go
@@ -205,7 +263,7 @@ impl Syntax {
         if lines.len() > 5_000 {
             return None;
         }
-        let grammar = self.grammar(name)?;
+        let (grammar, set) = self.grammar(name)?;
         let highlighter = Highlighter::new(&self.theme);
         let fresh = || {
             (
@@ -221,7 +279,7 @@ impl Syntax {
                 if text.len() > 16_384 {
                     return Vec::new();
                 }
-                match parse.parse_line(&text, &self.syntaxes) {
+                match parse.parse_line(&text, set) {
                     Ok(ops) => HighlightIterator::new(state, &ops, &text, &highlighter)
                         .map(|(style, piece)| (style, piece.trim_end_matches('\n').to_owned()))
                         .filter(|(_, piece)| !piece.is_empty())
@@ -251,13 +309,17 @@ impl Syntax {
         col: usize,
     ) -> bool {
         while self.prepare(id, buffer, row + 1) {}
-        let Some((parse, state)) = self.cache.get(&id).and_then(|c| c.starts.get(row)) else {
+        let Some(cache) = self.cache.get(&id) else {
+            return false;
+        };
+        let set = self.set(cache.extra);
+        let Some((parse, state)) = cache.starts.get(row) else {
             return false;
         };
         let (mut parse, mut scopes) = (parse.clone(), state.path.clone());
         let line = buffer.text.line(row).to_string();
         let byte = line.char_indices().nth(col).map_or(line.len(), |(i, _)| i);
-        let Ok(ops) = parse.parse_line(&line, &self.syntaxes) else {
+        let Ok(ops) = parse.parse_line(&line, set) else {
             return false;
         };
         for (offset, op) in ops {
@@ -335,6 +397,130 @@ mod tests {
         assert_eq!(pieces(&syntax, 30), code);
         assert_eq!(comment(&syntax, 30), before);
     }
+    /// The scopes the TOML grammar gives `token` where it first appears after
+    /// `after` in `text`, line by line as the editor parses it.
+    fn toml_scope(text: &str, after: &str, token: &str) -> String {
+        let syntax = Syntax::new(&config::Theme::default());
+        let (grammar, set) = syntax.by_extension("toml").expect("toml grammar");
+        let mut parse = ParseState::new(grammar);
+        let mut stack = ScopeStack::new();
+        let from = text.find(after).expect("anchor");
+        let target = from + text[from..].find(token).expect("token");
+        let mut offset = 0;
+        for line in text.split_inclusive('\n') {
+            let ops = parse.parse_line(line, set).unwrap();
+            for (at, op) in ops {
+                if offset + at > target {
+                    return stack.to_string();
+                }
+                stack.apply(&op).unwrap();
+            }
+            if offset + line.len() > target {
+                return stack.to_string();
+            }
+            offset += line.len();
+        }
+        stack.to_string()
+    }
+
+    #[test]
+    fn toml_is_highlighted_by_raidos_own_grammar() {
+        let text = r#"# Project settings
+[project]
+name = "helios"  # trailing
+version = '0.1.0'
+dependencies = [
+    "pyyaml==6.0.3",   # pinned
+    "requests",
+]
+point = { x = 1, y = -2.5e3, label = "a\tb" }
+site."google.com".enabled = true
+hex = 0xDEAD_BEEF
+big = 1_000_000
+odd = nan
+when = 1979-05-27T07:32:00Z
+day = 1979-05-27
+at = 07:32:00
+text = """
+two "quoted" lines \
+here"""
+raw = '''C:\path'''
+
+[[servers.alpha]]
+ip = "10.0.0.1"
+"#;
+        for (after, token, scope) in [
+            ("# Project", "Project", "comment.line"),
+            ("[project]", "project", "entity.name.type.table"),
+            ("name =", "name", "variable.other.key"),
+            ("name =", "=", "keyword.operator.assignment"),
+            ("name =", "helios", "string.quoted.double"),
+            ("helios\"", "trailing", "comment.line"),
+            ("version", "0.1.0", "string.quoted.single"),
+            ("dependencies", "pyyaml", "string.quoted.double"),
+            ("pyyaml", "pinned", "comment.line"),
+            ("\"requests\"", "requests", "string.quoted.double"),
+            ("point", "x", "variable.other.key"),
+            ("point", "1", "constant.numeric"),
+            ("point", "-2.5e3", "constant.numeric"),
+            ("label", "\\t", "constant.character.escape"),
+            ("site.", "google.com", "variable.other.key"),
+            ("enabled", "true", "constant.language.boolean"),
+            ("hex", "0xDEAD", "constant.numeric"),
+            ("big", "1_000", "constant.numeric"),
+            ("odd", "nan", "constant.numeric"),
+            ("when", "1979", "constant.other.datetime"),
+            ("day", "1979", "constant.other.datetime"),
+            ("at =", "07:32", "constant.other.time"),
+            ("text", "quoted", "string.quoted.triple"),
+            ("text", "here", "string.quoted.triple"),
+            ("raw", "path", "string.quoted.triple.single"),
+            ("[[servers", "alpha", "entity.name.type.table"),
+            ("ip", "10.0.0.1", "string.quoted.double"),
+        ] {
+            let found = toml_scope(text, after, token);
+            assert!(found.contains(scope), "{token} after {after:?}: {found}");
+        }
+        // After the multi-line string, keys are keys again.
+        assert!(!toml_scope(text, "here\"\"\"", "raw").contains("string"));
+    }
+
+    #[test]
+    fn every_palette_colors_toml_in_the_editor() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pyproject.toml");
+        std::fs::write(&path, "[project]\nname = \"x\"  # note\nversion = 3\n").unwrap();
+        let buffer = Buffer::open(&path).unwrap();
+        for (name, _) in config::BUNDLED_THEMES {
+            let palette = config::load_theme_from(name, None).unwrap();
+            let colors = palette.syntax_colors.as_ref().unwrap();
+            let mut syntax = Syntax::new(&palette);
+            assert_eq!(syntax.language(&buffer), "TOML");
+            while syntax.prepare(0, &buffer, 3) {}
+            let lines = &syntax.cache[&0].lines;
+            let color = |row: usize, text: &str| {
+                lines[row]
+                    .iter()
+                    .find(|(_, t)| t.contains(text))
+                    .map(|(s, _)| s.foreground)
+            };
+            assert_eq!(color(1, "x"), Some(syntax_color(&colors.string)), "{name}");
+            assert_eq!(
+                color(1, "note"),
+                Some(syntax_color(&colors.comment)),
+                "{name}"
+            );
+            assert_eq!(color(2, "3"), Some(syntax_color(&colors.number)), "{name}");
+            assert_eq!(
+                color(0, "project"),
+                Some(syntax_color(&colors.r#type)),
+                "{name}"
+            );
+            assert!(syntax.in_string_or_comment(0, &buffer, 1, 9));
+            assert!(!syntax.in_string_or_comment(0, &buffer, 2, 3));
+        }
+    }
+
     #[test]
     fn all_required_languages_are_bundled() {
         let syntax = Syntax::new(&config::Theme::default());
