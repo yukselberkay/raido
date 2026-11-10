@@ -43,8 +43,12 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
   Raido runs restarts the server on it. `:lsp` names the environment, and a
   `pyright-langserver` or `basedpyright-langserver` in the venv is used first.
 - A file open in a pane shows what an AI or a terminal writes to it within a quarter
-  of a second (it took up to two), keeping your cursor; files with unsaved edits are
-  still left alone.
+  of a second (it took up to two), keeping your cursor.
+- **A file with unsaved edits follows the disk too.** It used to keep showing only
+  your edits while an AI changed the file; now changes on other lines are merged in
+  (one undo step), as `git merge` would. Where both changed the same lines, yours
+  stay and Raido says so once: `:e!` (or `:reload!`) loads the file with `u` to get
+  yours back, and `:w!` saves yours over it.
 - The explorer shows files created, deleted or renamed outside it (in a terminal,
   by an AI pane, by another program) within half a second, with their Git marks,
   instead of waiting for `r` or a fold. It looks only at the folders on show.

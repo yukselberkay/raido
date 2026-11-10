@@ -39,9 +39,25 @@ pub struct Buffer {
     saved: Rope,
     disk_hash: Option<u64>,
     pub disk_stamp: Option<(SystemTime, u64)>,
+    /// The file's stamp when its changes on disk met unsaved edits here: not merged
+    /// again until it changes once more.
+    pub conflict: Option<(SystemTime, u64)>,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     grouping: bool,
+}
+
+/// What a buffer with unsaved edits did with the file's new text on disk.
+#[derive(Debug, PartialEq, Eq)]
+pub enum FromDisk {
+    /// Nothing new: the file was only touched.
+    Same,
+    /// The file now holds just what the buffer does: nothing is unsaved any more.
+    Matches,
+    /// Its changes were carried into the unsaved edits, as one undo step.
+    Merged,
+    /// They meet the unsaved edits, which are kept as they are.
+    Conflict,
 }
 
 fn hash(text: &[u8]) -> u64 {
@@ -69,6 +85,7 @@ impl Buffer {
             saved: Rope::new(),
             disk_hash: None,
             disk_stamp: None,
+            conflict: None,
             undo: Vec::new(),
             redo: Vec::new(),
             grouping: false,
@@ -525,6 +542,80 @@ impl Buffer {
         );
         count
     }
+    /// Bring into this buffer, which has unsaved edits, what changed in its file:
+    /// `disk` is the file opened again. Changes away from yours are merged in as one
+    /// undo step, the cursor and view staying on the same text; ones meeting yours
+    /// leave the buffer as it is.
+    pub fn take_disk(&mut self, disk: Buffer) -> FromDisk {
+        if disk.text == self.saved {
+            self.disk_stamp = disk.disk_stamp;
+            return FromDisk::Same;
+        }
+        if disk.text == self.text {
+            self.adopt(&disk);
+            self.dirty = false;
+            return FromDisk::Matches;
+        }
+        let ours = self.text.to_string();
+        let merged = crate::merge::merge(&self.saved.to_string(), &ours, &disk.text.to_string());
+        let Some(edits) = merged else {
+            self.conflict = disk.disk_stamp;
+            return FromDisk::Conflict;
+        };
+        // A place in the text moves by what was added or removed before it.
+        let moved = |at: usize| -> usize {
+            let shift: isize = edits
+                .iter()
+                .filter(|(_, end, _)| *end <= at)
+                .map(|(start, end, with)| with.chars().count() as isize - (end - start) as isize)
+                .sum();
+            at.saturating_add_signed(shift)
+        };
+        let cursor = moved(self.index());
+        let top = moved(self.text.line_to_char(self.scroll.min(self.lines() - 1)));
+        self.apply_edits(edits);
+        self.set_index(cursor);
+        self.scroll = self.text.char_to_line(top.min(self.text.len_chars()));
+        self.adopt(&disk);
+        self.dirty = self.text != self.saved;
+        FromDisk::Merged
+    }
+
+    /// Take the file as it is on disk, setting aside unsaved edits as one undo step
+    /// (`u` brings them back): `:e!`.
+    pub fn load_disk(&mut self, disk: Buffer) {
+        if self.text != disk.text {
+            let (row, col, scroll) = (self.row, self.col, self.scroll);
+            self.apply_edits(vec![(0, self.text.len_chars(), disk.text.to_string())]);
+            (self.row, self.col, self.scroll) = (row, col, scroll);
+            self.clamp();
+        }
+        self.adopt(&disk);
+        self.dirty = false;
+        self.end_group();
+    }
+
+    /// Let the next save write over the file as it is on disk now, whatever changed
+    /// it since it was read: `:w!`.
+    pub fn claim_disk(&mut self) -> Result<()> {
+        if let Some(path) = &self.path {
+            self.disk_hash = match fs::read(path) {
+                Ok(bytes) => Some(hash(&bytes)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            };
+        }
+        Ok(())
+    }
+
+    /// `disk` (the file opened again) is now what the buffer was last read from.
+    fn adopt(&mut self, disk: &Buffer) {
+        self.saved = disk.text.clone();
+        self.disk_hash = disk.disk_hash;
+        self.disk_stamp = disk.disk_stamp;
+        self.conflict = None;
+    }
+
     pub fn save(&mut self, new_path: Option<PathBuf>) -> Result<()> {
         let proposed = new_path
             .or_else(|| self.path.clone())
@@ -545,8 +636,11 @@ impl Buffer {
         };
         let same_path = self.path.as_ref() == Some(&path);
         if let Some(bytes) = &existing {
-            if !same_path || Some(hash(bytes)) != self.disk_hash {
-                bail!("File changed on disk or destination exists; refusing to overwrite. Reload or save to a new name.");
+            if !same_path {
+                bail!("{} exists; refusing to overwrite it", path.display());
+            }
+            if Some(hash(bytes)) != self.disk_hash {
+                bail!("Not saved: the file changed on disk · :w! saves yours over it, :e! loads it (u undoes)");
             }
             // Atomic rename must not silently replace a read-only file.
             if fs::metadata(&path)?.permissions().readonly() {
@@ -602,6 +696,7 @@ impl Buffer {
             .and_then(|p| fs::metadata(p).ok())
             .and_then(|m| m.modified().ok().map(|time| (time, m.len())));
         self.dirty = false;
+        self.conflict = None;
         self.end_group();
         Ok(())
     }
@@ -672,6 +767,29 @@ pub fn find_all(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_touched_file_or_one_matching_your_edits_needs_no_merge() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        fs::write(&path, "one\n").unwrap();
+        let mut buffer = Buffer::open(&path).unwrap();
+        buffer.insert("new ");
+        assert_eq!(
+            buffer.take_disk(Buffer::open(&path).unwrap()),
+            FromDisk::Same
+        );
+        assert!(buffer.dirty);
+        // An agent wrote just what you typed: nothing is unsaved any more.
+        fs::write(&path, "new one\n").unwrap();
+        assert_eq!(
+            buffer.take_disk(Buffer::open(&path).unwrap()),
+            FromDisk::Matches
+        );
+        assert!(!buffer.dirty);
+        buffer.insert("x");
+        buffer.save(None).unwrap();
+    }
     #[test]
     fn find_all_ignores_case_and_keeps_whole_words() {
         let text = "Ünïcode ünïcode_x x ünïcode";

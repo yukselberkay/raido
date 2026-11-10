@@ -16,6 +16,7 @@ mod link;
 mod local_ai;
 mod lsp;
 mod markdown;
+mod merge;
 mod minimap;
 mod model_server;
 mod omarchy;

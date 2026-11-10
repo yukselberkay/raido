@@ -398,8 +398,9 @@ the history graph appears after you make commits.
   you are, what changed, find matches and errors; click or drag it to go there
   ([Minimap](#minimap)).
 - **External-change refresh:** open files show what AI/shell tools write to them
-  within a quarter of a second, cursor kept, and the explorer shows files they
-  create, delete or rename within half a second. Dirty buffers remain yours; saving detects conflicting disk changes.
+  within a quarter of a second, cursor kept, merged with your unsaved edits when they
+  touch other lines (`:e!` / `:w!` when they meet), and the explorer shows files
+  they create, delete or rename within half a second. Dirty buffers remain yours; saving detects conflicting disk changes.
 - **Extensions:** user-owned TOML themes and explicitly invoked command plugins.
 
 ## Keyboard
@@ -1256,12 +1257,14 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 
 ```text
 :w [path]                 Save atomically; unnamed buffers need a path
+:w!                       Save over the file even though something else changed it
 :wa                       Save all modified buffers
 :wq                       Save and close view
 :q / :q!                  Close view / allow closing an unsaved view
 :qa / :qa!                Quit / discard unsaved changes and quit
 :e path                   Open a file, or a new buffer if absent
 :reload                   Reload a clean file
+:e! / :reload!            Load the file as it is on disk; `u` brings your unsaved edits back
 :new                      New scratch editor pane
 :split / :vsplit          Stack / side-by-side split
 :term                     New shell (in it, `raido FILE` opens FILE here)
@@ -1656,12 +1659,13 @@ plugins are intentionally not part of v0.1.
 | C compilation fails | Run from the Raido project directory; ensure `cc` exists and create `target` with `mkdir -p target`. |
 | New file is absent from the sidebar | Save it first, then focus the explorer and press `r`. |
 | `codex` or `claude` cannot launch | Install that CLI separately and verify `command -v codex` or `command -v claude` in the shell that launches Raido. |
-| File changed on disk | Raido refuses to overwrite it. Save your buffer under a new name with `:w recovery-name`, then compare with the disk version. |
+| File changed on disk | With no unsaved edits, the pane shows the new text. With unsaved edits, changes on other lines are merged into yours (`u` undoes the merge). Where both changed the same lines, yours are kept and saving refuses to overwrite: `:e!` loads the file (`u` brings yours back), `:w!` saves yours over it, or `:w recovery-name` keeps both. |
 | Read-only, binary or non-UTF-8 file | Raido respects read-only files and only edits UTF-8 text. Convert a copy externally if needed. |
 | Custom theme not found | Use a simple name with letters, digits, hyphens or underscores, and place its TOML in the user themes directory. |
 | Code turns faint near language-server problems (older Raido in macOS Terminal.app) | Update Raido. Terminal.app doesn't know the colored-underline code and read part of it as "faint"; Raido now draws plain underlines there. |
 
-Clean buffers refresh within a quarter of a second of an external edit; buffers with unsaved changes do not.
+Files on screen follow external edits within a quarter of a second; unsaved edits of
+yours are merged with them, never thrown away.
 Raido does not provide automatic crash recovery in v0.1.
 
 ### macOS, Linux and Windows

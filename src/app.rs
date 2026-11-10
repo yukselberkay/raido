@@ -2,7 +2,7 @@ use crate::{
     clipboard::Clipboard,
     config::{self, Config, Theme},
     copymode,
-    editor::Buffer,
+    editor::{Buffer, FromDisk},
     gitgraph::{self, GitView},
     highlight::Syntax,
     language,
@@ -1673,10 +1673,11 @@ impl App {
             self.follow_open_files();
         }
     }
-    /// Reload clean buffers shown in a pane whose file changed on disk, keeping the
-    /// cursor and scroll. Buffers with unsaved changes stay yours; saving one then
-    /// detects the conflict.
+    /// Show what changed on disk in the files on screen, keeping the cursor and
+    /// scroll: a clean buffer is reloaded; one with unsaved edits takes the changes
+    /// that don't meet them (one undo step), and keeps yours where they do.
     fn follow_open_files(&mut self) {
+        let mut news = Vec::new();
         for id in self
             .panes
             .values()
@@ -1687,14 +1688,33 @@ impl App {
             .collect::<std::collections::BTreeSet<_>>()
         {
             let b = &mut self.buffers[id];
-            if b.dirty {
-                continue;
-            }
             if let Some(path) = b.path.clone() {
                 let stamp = std::fs::metadata(&path)
                     .ok()
                     .and_then(|m| m.modified().ok().map(|time| (time, m.len())));
-                if stamp.is_none() || stamp == b.disk_stamp {
+                if stamp.is_none() || stamp == b.disk_stamp || (b.dirty && stamp == b.conflict) {
+                    continue;
+                }
+                if b.dirty {
+                    let Ok(fresh) = Buffer::open(&path) else {
+                        continue;
+                    };
+                    let name = b.name();
+                    match b.take_disk(fresh) {
+                        FromDisk::Same => {}
+                        FromDisk::Matches => news.push((
+                            false,
+                            format!("{name} on disk now matches your edits · nothing unsaved"),
+                        )),
+                        FromDisk::Merged => news.push((
+                            false,
+                            format!("{name} changed on disk · merged into your unsaved edits (u undoes)"),
+                        )),
+                        FromDisk::Conflict => news.push((
+                            true,
+                            format!("{name} also changed on disk · kept your edits · :e! loads the file (u undoes), :w! saves yours"),
+                        )),
+                    }
                     continue;
                 }
                 if let Ok(mut fresh) = Buffer::open(&path) {
@@ -1710,6 +1730,13 @@ impl App {
                         b.disk_stamp = fresh.disk_stamp;
                     }
                 }
+            }
+        }
+        for (problem, text) in news {
+            if problem {
+                self.fail(text);
+            } else {
+                self.notice(text);
             }
         }
     }
@@ -5166,6 +5193,12 @@ impl App {
             .unwrap_or((command, ""));
         match verb {
             "w" | "write" => self.save((!arg.is_empty()).then(|| self.root.join(arg)))?,
+            // Over the file even though something else changed it since it was read.
+            "w!" | "write!" if arg.is_empty() => {
+                let id = self.buffer_id().context("Focus an editor")?;
+                self.buffers[id].claim_disk()?;
+                self.save(None)?;
+            }
             "wa" => {
                 for id in 0..self.buffers.len() {
                     if self.buffers[id].dirty {
@@ -5197,10 +5230,26 @@ impl App {
                 self.buffers.push(Buffer::empty());
                 self.add_pane(Pane::Editor(self.buffers.len() - 1), Axis::Horizontal);
             }
+            // The file as it is on disk; unsaved edits stay one `u` away.
+            "e!" | "edit!" | "reload!" if arg.is_empty() => {
+                let id = self.buffer_id().context("Focus an editor")?;
+                let path = self.buffers[id].path.clone().context("Unnamed buffer")?;
+                let fresh = Buffer::open(&path)?;
+                let unsaved = self.buffers[id].dirty;
+                self.buffers[id].load_disk(fresh);
+                self.notice(if unsaved {
+                    format!(
+                        "Loaded {} from disk · u brings your edits back",
+                        self.buffers[id].name()
+                    )
+                } else {
+                    format!("Loaded {} from disk", self.buffers[id].name())
+                });
+            }
             "reload" => {
                 let id = self.buffer_id().context("Focus an editor")?;
                 if self.buffers[id].dirty {
-                    bail!("Unsaved changes; save to another name first");
+                    bail!("Unsaved changes · :e! loads the file anyway (u brings yours back)");
                 }
                 let path = self.buffers[id].path.clone().context("Unnamed buffer")?;
                 let mut fresh = Buffer::open(&path)?;
@@ -7031,7 +7080,8 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
             .is_none());
     }
     /// An AI rewrites the file you have open: the pane shows it within a quarter of
-    /// a second, cursor kept; with unsaved edits of yours it is left alone.
+    /// a second, cursor kept. With unsaved edits of yours, its changes are merged in
+    /// where they don't meet yours; where they do, yours stay until you choose.
     #[test]
     fn a_file_on_screen_follows_what_an_ai_writes_to_it() {
         let dir = tempfile::tempdir().unwrap();
@@ -7043,7 +7093,11 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         let wait_for = |app: &mut App, text: &str| {
             let start = Instant::now();
             while app.buffers[id].text != text {
-                assert!(start.elapsed() < Duration::from_secs(1), "not reloaded");
+                assert!(
+                    start.elapsed() < Duration::from_secs(1),
+                    "not reloaded: {:?}",
+                    app.buffers[id].text.to_string()
+                );
                 app.tick();
                 std::thread::sleep(Duration::from_millis(20));
             }
@@ -7053,15 +7107,71 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         let took = wait_for(&mut app, "a = 1\nb = 20\nc = 3\nd = 4\n");
         assert!(took <= DISK_CHECK + Duration::from_millis(150), "{took:?}");
         assert_eq!(app.buffers[id].row, 2);
-        // Unsaved edits of yours win; saving then warns about the change on disk.
-        app.buffers[id].insert("x");
-        std::fs::write(&path, "rewritten\n").unwrap();
+
+        // You add a line at the top and don't save; the AI adds one under `a`,
+        // changes `d` and appends `e`. Both are there, and the cursor stays on `c`.
+        let b = &mut app.buffers[id];
+        (b.row, b.col) = (0, 0);
+        b.insert("# mine\n");
+        b.row = 3;
+        std::fs::write(&path, "a = 1\nz = 0\nb = 20\nc = 3\nd = 40\ne = 5\n").unwrap();
+        wait_for(
+            &mut app,
+            "# mine\na = 1\nz = 0\nb = 20\nc = 3\nd = 40\ne = 5\n",
+        );
+        assert!(
+            app.buffers[id].dirty && app.message.contains("merged"),
+            "{}",
+            app.message
+        );
+        assert_eq!(app.buffers[id].line(app.buffers[id].row), "c = 3");
+        // `u` takes the merge back out, your line still there.
+        app.buffers[id].undo(false);
+        assert_eq!(
+            app.buffers[id].text,
+            "# mine\na = 1\nb = 20\nc = 3\nd = 4\n"
+        );
+        app.buffers[id].undo(true);
+
+        // Both change `c`: yours is kept, said once, until you choose.
+        let b = &mut app.buffers[id];
+        (b.row, b.col) = (4, 5);
+        b.insert("3");
+        std::fs::write(&path, "a = 1\nz = 0\nb = 20\nc = 300\nd = 40\ne = 5\n").unwrap();
         let start = Instant::now();
-        while start.elapsed() < DISK_CHECK * 3 {
+        while !app.error {
+            assert!(
+                start.elapsed() < Duration::from_secs(1),
+                "no conflict reported"
+            );
             app.tick();
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert!(app.buffers[id].text.to_string().contains('x'));
+        assert!(
+            app.message.contains(":e!") && app.message.contains(":w!"),
+            "{}",
+            app.message
+        );
+        let mine = "# mine\na = 1\nz = 0\nb = 20\nc = 33\nd = 40\ne = 5\n";
+        assert_eq!(app.buffers[id].text, mine);
+        app.notice("");
+        for _ in 0..20 {
+            app.tick();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(app.message, "", "said once");
+        assert!(app.save(None).unwrap_err().to_string().contains(":w!"));
+        // :e! takes the file; `u` brings yours back; :w! writes yours over it.
+        app.command("e!").unwrap();
+        let disk = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(app.buffers[id].text, disk.as_str());
+        assert!(!app.buffers[id].dirty);
+        app.buffers[id].undo(false);
+        assert_eq!(app.buffers[id].text, mine);
+        assert!(app.buffers[id].dirty);
+        app.command("w!").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), mine);
+        assert!(!app.buffers[id].dirty);
     }
     #[test]
     fn the_active_pane_carries_the_raido_mark() {
