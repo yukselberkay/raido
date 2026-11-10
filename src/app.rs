@@ -434,6 +434,8 @@ pub struct App {
     git_receiver: Option<Receiver<GitInfo>>,
     last_git: Instant,
     last_reload: Instant,
+    /// When the open files were last compared with the disk.
+    last_disk_check: Instant,
     /// When the explorer last looked for files made or removed outside it.
     last_tree_check: Instant,
     theme_stamp: Option<std::time::SystemTime>,
@@ -571,6 +573,7 @@ impl App {
             git_receiver: Some(workspace::refresh_git(root.clone())),
             last_git: Instant::now(),
             last_reload: Instant::now(),
+            last_disk_check: Instant::now(),
             last_tree_check: Instant::now(),
             theme_stamp,
             completion: None,
@@ -1662,39 +1665,49 @@ impl App {
                     Err(error) => self.fail(format!("Theme {name}: {error:#}")),
                 }
             }
-            // Refresh clean, open buffers so AI/terminal edits appear in the editor.
-            for id in self
-                .panes
-                .values()
-                .filter_map(|p| match p {
-                    Pane::Editor(id) | Pane::Preview(Preview { buffer: id, .. }) => Some(*id),
-                    _ => None,
-                })
-                .collect::<std::collections::BTreeSet<_>>()
-            {
-                let b = &mut self.buffers[id];
-                if b.dirty {
+        }
+        // Files on screen show what an AI or a terminal writes to them within a
+        // quarter of a second: a look at each one's time and size.
+        if self.last_disk_check.elapsed() >= DISK_CHECK {
+            self.last_disk_check = Instant::now();
+            self.follow_open_files();
+        }
+    }
+    /// Reload clean buffers shown in a pane whose file changed on disk, keeping the
+    /// cursor and scroll. Buffers with unsaved changes stay yours; saving one then
+    /// detects the conflict.
+    fn follow_open_files(&mut self) {
+        for id in self
+            .panes
+            .values()
+            .filter_map(|p| match p {
+                Pane::Editor(id) | Pane::Preview(Preview { buffer: id, .. }) => Some(*id),
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+        {
+            let b = &mut self.buffers[id];
+            if b.dirty {
+                continue;
+            }
+            if let Some(path) = b.path.clone() {
+                let stamp = std::fs::metadata(&path)
+                    .ok()
+                    .and_then(|m| m.modified().ok().map(|time| (time, m.len())));
+                if stamp.is_none() || stamp == b.disk_stamp {
                     continue;
                 }
-                if let Some(path) = b.path.clone() {
-                    let stamp = std::fs::metadata(&path)
-                        .ok()
-                        .and_then(|m| m.modified().ok().map(|time| (time, m.len())));
-                    if stamp.is_none() || stamp == b.disk_stamp {
-                        continue;
-                    }
-                    if let Ok(mut fresh) = Buffer::open(&path) {
-                        if fresh.text != b.text {
-                            fresh.row = b.row;
-                            fresh.col = b.col;
-                            fresh.scroll = b.scroll;
-                            fresh.revision = b.revision + 1;
-                            fresh.clamp();
-                            *b = fresh;
-                            self.redraw = true;
-                        } else {
-                            b.disk_stamp = fresh.disk_stamp;
-                        }
+                if let Ok(mut fresh) = Buffer::open(&path) {
+                    if fresh.text != b.text {
+                        fresh.row = b.row;
+                        fresh.col = b.col;
+                        fresh.scroll = b.scroll;
+                        fresh.revision = b.revision + 1;
+                        fresh.clamp();
+                        *b = fresh;
+                        self.redraw = true;
+                    } else {
+                        b.disk_stamp = fresh.disk_stamp;
                     }
                 }
             }
@@ -4421,8 +4434,8 @@ impl App {
             Target::All => String::new(),
         };
         let written = self.changes.undo(target).map_err(anyhow::Error::msg)?;
-        // Open buffers of those files show their text again on the next tick.
-        self.last_reload = Instant::now() - Duration::from_secs(5);
+        // Open buffers of those files show their text again.
+        self.follow_open_files();
         let unsaved: Vec<String> = self
             .buffers
             .iter()
@@ -5492,6 +5505,8 @@ impl App {
 const SIDEBAR_PAGE: isize = 5;
 /// Two clicks on one cell within this make a double click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+/// How often files on screen are compared with the disk, for an AI's edits.
+const DISK_CHECK: Duration = Duration::from_millis(250);
 
 /// The word (letters, digits, `_`) under or just before the cursor, and where it
 /// starts (a char index).
@@ -7014,6 +7029,39 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
             .tiles
             .divider_at(app.panes_area, &app.docked, (line, 20))
             .is_none());
+    }
+    /// An AI rewrites the file you have open: the pane shows it within a quarter of
+    /// a second, cursor kept; with unsaved edits of yours it is left alone.
+    #[test]
+    fn a_file_on_screen_follows_what_an_ai_writes_to_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.py");
+        std::fs::write(&path, "a = 1\nb = 2\nc = 3\n").unwrap();
+        let mut app = App::new(dir.path().into(), Some(path.clone()), false).unwrap();
+        let id = app.buffer_id().unwrap();
+        app.buffers[id].row = 2;
+        let wait_for = |app: &mut App, text: &str| {
+            let start = Instant::now();
+            while app.buffers[id].text != text {
+                assert!(start.elapsed() < Duration::from_secs(1), "not reloaded");
+                app.tick();
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            start.elapsed()
+        };
+        std::fs::write(&path, "a = 1\nb = 20\nc = 3\nd = 4\n").unwrap();
+        let took = wait_for(&mut app, "a = 1\nb = 20\nc = 3\nd = 4\n");
+        assert!(took <= DISK_CHECK + Duration::from_millis(150), "{took:?}");
+        assert_eq!(app.buffers[id].row, 2);
+        // Unsaved edits of yours win; saving then warns about the change on disk.
+        app.buffers[id].insert("x");
+        std::fs::write(&path, "rewritten\n").unwrap();
+        let start = Instant::now();
+        while start.elapsed() < DISK_CHECK * 3 {
+            app.tick();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(app.buffers[id].text.to_string().contains('x'));
     }
     #[test]
     fn the_active_pane_carries_the_raido_mark() {

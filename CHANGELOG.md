@@ -42,6 +42,9 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
   "could not be resolved" until `:lsp restart`, and a venv made or rebuilt while
   Raido runs restarts the server on it. `:lsp` names the environment, and a
   `pyright-langserver` or `basedpyright-langserver` in the venv is used first.
+- A file open in a pane shows what an AI or a terminal writes to it within a quarter
+  of a second (it took up to two), keeping your cursor; files with unsaved edits are
+  still left alone.
 - The explorer shows files created, deleted or renamed outside it (in a terminal,
   by an AI pane, by another program) within half a second, with their Git marks,
   instead of waiting for `r` or a fold. It looks only at the folders on show.

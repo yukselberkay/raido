@@ -397,9 +397,9 @@ the history graph appears after you make commits.
 - **Minimap:** the whole file from far away beside the code, as in VS Code: where
   you are, what changed, find matches and errors; click or drag it to go there
   ([Minimap](#minimap)).
-- **External-change refresh:** clean open files refresh when AI/shell tools edit
-  them, and the explorer shows files they create, delete or rename within half a
-  second. Dirty buffers remain yours; saving detects conflicting disk changes.
+- **External-change refresh:** open files show what AI/shell tools write to them
+  within a quarter of a second, cursor kept, and the explorer shows files they
+  create, delete or rename within half a second. Dirty buffers remain yours; saving detects conflicting disk changes.
 - **Extensions:** user-owned TOML themes and explicitly invoked command plugins.
 
 ## Keyboard
@@ -1661,7 +1661,7 @@ plugins are intentionally not part of v0.1.
 | Custom theme not found | Use a simple name with letters, digits, hyphens or underscores, and place its TOML in the user themes directory. |
 | Code turns faint near language-server problems (older Raido in macOS Terminal.app) | Update Raido. Terminal.app doesn't know the colored-underline code and read part of it as "faint"; Raido now draws plain underlines there. |
 
-Clean buffers refresh after external edits; buffers with unsaved changes do not.
+Clean buffers refresh within a quarter of a second of an external edit; buffers with unsaved changes do not.
 Raido does not provide automatic crash recovery in v0.1.
 
 ### macOS, Linux and Windows
