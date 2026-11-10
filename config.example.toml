@@ -62,7 +62,8 @@ mouse = true
 # Language servers start automatically for Rust, Go, Python, C and C++ files.
 lsp_enabled = true
 # On save, organize imports and format with the language server, as VS Code does
-# for Go (gopls: goimports + gofmt). Keys: go, rust, python, c. [] turns it off.
+# for Go (gopls: goimports + gofmt). Keys: go, rust, python, c, and json (laid out
+# by Raido itself, no server needed). [] turns it off.
 format_on_save = ["go"]
 # Optional: choose a different server per language (keys: rust, go, python, c).
 # [lsp.python]

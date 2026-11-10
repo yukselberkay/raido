@@ -204,7 +204,8 @@ pub struct Config {
     /// Language servers (diagnostics, hover, definition, completion, format).
     pub lsp_enabled: bool,
     /// Languages whose files get their imports organized and are formatted by their
-    /// language server on save, as VS Code does for Go (keys: go, rust, python, c).
+    /// language server on save, as VS Code does for Go (keys: go, rust, python, c),
+    /// and `json`, which Raido lays out itself.
     pub format_on_save: Vec<String>,
     /// Per-language server overrides: `[lsp.python] program = "pylsp"`.
     /// Keys: rust, go, python, c (C and C++).

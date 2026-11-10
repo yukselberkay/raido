@@ -1441,6 +1441,16 @@ impl App {
     /// Gives up after two seconds or on an error and saves the text as it is.
     /// Returns a note for the status line, or `None` when the file isn't covered.
     fn tidy_on_save(&mut self, id: usize) -> Option<String> {
+        if is_json(&self.buffers[id]) {
+            if !self.config.format_on_save.iter().any(|l| l == "json") {
+                return None;
+            }
+            return Some(match self.format_json(id) {
+                Ok(true) => " · formatted as JSON".into(),
+                Ok(false) => String::new(),
+                Err(error) => format!(" · not formatted, {error}"),
+            });
+        }
         let key = self.buffers[id]
             .path
             .as_deref()
@@ -3889,6 +3899,44 @@ impl App {
         }
         Ok(())
     }
+    /// `:format`: JSON is laid out by Raido itself, other files by their language
+    /// server. Invalid JSON is left as it is, the cursor put where it goes wrong.
+    fn format(&mut self) -> Result<()> {
+        let id = self.buffer_id().context("Focus an editor")?;
+        if !is_json(&self.buffers[id]) {
+            return self.lsp_request(lsp::Kind::Format);
+        }
+        match self.format_json(id) {
+            Ok(true) => self.notice("Formatted as JSON · u undoes"),
+            Ok(false) => self.notice("Already formatted"),
+            Err(error) => {
+                let b = &mut self.buffers[id];
+                b.goto(error.line);
+                b.col = error.column - 1;
+                b.clamp();
+                bail!("Not formatted: {error}");
+            }
+        }
+        Ok(())
+    }
+    /// Lay out JSON buffer `id` one value per line, indented as the file is (else by
+    /// `tab_width`), as one undo step with the cursor on the same character. False
+    /// when it already was.
+    fn format_json(&mut self, id: usize) -> std::result::Result<bool, crate::json::Invalid> {
+        let b = &self.buffers[id];
+        let unit = crate::language::Rules::new(b, self.config.tab_width).unit;
+        let eol = if b.crlf { "\r\n" } else { "\n" };
+        let text = b.text.to_string();
+        let pretty = crate::json::pretty(&text, &unit, eol)?;
+        if pretty == text {
+            return Ok(false);
+        }
+        let cursor = crate::json::same_place(&text, &pretty, b.index());
+        let b = &mut self.buffers[id];
+        b.apply_edits(vec![(0, b.text.len_chars(), pretty)]);
+        b.set_index(cursor);
+        Ok(true)
+    }
     fn lsp_request(&mut self, kind: lsp::Kind) -> Result<()> {
         let id = self.buffer_id().context("Focus an editor")?;
         self.lsp
@@ -5261,7 +5309,7 @@ impl App {
                 "split" | "vs" => self.split_preview()?,
                 _ => bail!("Use :preview or :preview split"),
             },
-            "format" | "fmt" => self.lsp_request(lsp::Kind::Format)?,
+            "format" | "fmt" => self.format()?,
             "font" | "fonts" => self.font_command(arg)?,
             "docs" | "manual" => {
                 crate::skill::write_source()?;
@@ -5554,6 +5602,15 @@ impl App {
 const SIDEBAR_PAGE: isize = 5;
 /// Two clicks on one cell within this make a double click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+
+/// A `.json` file: `:format` lays it out without a language server.
+fn is_json(buffer: &Buffer) -> bool {
+    buffer
+        .path
+        .as_deref()
+        .and_then(Path::extension)
+        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+}
 /// How often files on screen are compared with the disk, for an AI's edits.
 const DISK_CHECK: Duration = Duration::from_millis(250);
 
@@ -7172,6 +7229,54 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         app.command("w!").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), mine);
         assert!(!app.buffers[id].dirty);
+    }
+    /// `:format` on a JSON file needs no language server: laid out, indented as the
+    /// file is (else `tab_width`), undoable; invalid JSON is left alone with the
+    /// cursor on the problem; `format_on_save = ["json"]` does it when saving.
+    #[test]
+    fn json_files_are_formatted_by_raido_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.json");
+        let minified = "{\"name\":\"raido\",\"tags\":[\"a\",\"b\"],\"n\":1.50}\n";
+        std::fs::write(&path, minified).unwrap();
+        let mut app = App::new(dir.path().into(), Some(path.clone()), false).unwrap();
+        let id = app.buffer_id().unwrap();
+        app.buffers[id].col = 37; // on the `1` of 1.50
+        app.command("format").unwrap();
+        let pretty = "{\n    \"name\": \"raido\",\n    \"tags\": [\n        \"a\",\n        \"b\"\n    ],\n    \"n\": 1.50\n}\n";
+        assert_eq!(app.buffers[id].text, pretty);
+        assert!(app.message.contains("Formatted as JSON"), "{}", app.message);
+        let b = &app.buffers[id];
+        assert_eq!(&b.line(b.row)[b.col..], "1.50");
+        app.command("format").unwrap();
+        assert_eq!(app.message, "Already formatted");
+        app.buffers[id].undo(false);
+        assert_eq!(app.buffers[id].text, minified);
+        // A file indented with two spaces keeps two.
+        app.buffers[id].load_disk(Buffer::open(&path).unwrap());
+        let two = "{\n  \"a\": [1,\n    2]}\n";
+        let all = app.buffers[id].text.len_chars();
+        app.buffers[id].replace(0, all, two);
+        app.command("format").unwrap();
+        assert_eq!(
+            app.buffers[id].text,
+            "{\n  \"a\": [\n    1,\n    2\n  ]\n}\n"
+        );
+        // Invalid: nothing changes, and the cursor goes to the problem.
+        let broken = "{\n  \"a\": 1\n  \"b\": 2\n}\n";
+        let all = app.buffers[id].text.len_chars();
+        app.buffers[id].replace(0, all, broken);
+        let error = app.command("format").unwrap_err().to_string();
+        assert!(error.contains("line 3, column 3"), "{error}");
+        assert_eq!(app.buffers[id].text, broken);
+        assert_eq!((app.buffers[id].row, app.buffers[id].col), (2, 2));
+        // Formatted on save when asked to.
+        app.config.format_on_save = vec!["json".into()];
+        let all = app.buffers[id].text.len_chars();
+        app.buffers[id].replace(0, all, "[1,2]\n");
+        app.command("w!").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[\n    1,\n    2\n]\n");
+        assert!(app.message.contains("formatted as JSON"), "{}", app.message);
     }
     #[test]
     fn the_active_pane_carries_the_raido_mark() {

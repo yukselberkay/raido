@@ -1092,7 +1092,7 @@ the project root, and talks to it in the background. Install the server once:
 | Hover | `K` shows types and docs in a popup; any key closes it |
 | Go to definition | `gd` opens the definition (even in another file); `Ctrl-o` jumps back |
 | Completion | Pops up after two letters or `.`; `Ctrl-Space` or `Ctrl-n` asks; keywords and words from your files without a server |
-| Format | `:format` formats the file with the server's formatter (rustfmt, gofmt, clang-format…) |
+| Format | `:format` formats the file with the server's formatter (rustfmt, gofmt, clang-format…); a `.json` file is laid out by Raido itself, no server needed ([JSON](#json-formatting)) |
 | Tidy on save | Go files are tidied every time you save, as in VS Code: [details below](#go-tidy-on-save) |
 | Status | The pane footer names the server and counts errors/warnings; `:lsp` lists every language; `:lsp restart` restarts them |
 
@@ -1140,8 +1140,19 @@ large module), the file is saved exactly as typed and the status line says why.
 `:w other.go` (a different name) also saves the text as is.
 
 The languages are listed in `format_on_save` (default `["go"]`). Add `"rust"`,
-`"python"` or `"c"` to do the same with their servers, or set `format_on_save = []`
-to turn it off.
+`"python"` or `"c"` to do the same with their servers, `"json"` for
+[JSON](#json-formatting), or set `format_on_save = []` to turn it off.
+
+#### JSON formatting
+
+`:format` in a `.json` file lays it out one value per line, indented, without a
+language server. Nothing else changes: keys keep their order, and strings and
+numbers keep their exact text (`1.50` stays `1.50`, long integers keep every digit).
+The indentation is the file's own (two spaces stay two), else `tab_width`; `{}` and
+`[]` stay on one line, the cursor stays on its character, and `u` undoes it. JSON
+that isn't valid is left as it is: the status line says where and why (a missing
+comma, a trailing comma, a comment) and the cursor goes there. Add `"json"` to
+`format_on_save` to format on every save.
 
 ### Markdown preview
 
@@ -1278,7 +1289,7 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 :themes                   Theme picker with live preview (also Ctrl-b t)
 :theme name               Switch theme directly (e.g. dracula or visual-studio-dark)
 :preview [split]          Rendered Markdown in place / beside the source
-:format                   Format the file with its language server
+:format                   Format the file with its language server (JSON: by Raido)
 :lsp / :lsp restart       Language server status / restart all servers
 :font [size N|family X|list]  Terminal font: show, save size or family, list fonts
 :docs                     Open the full Raido manual (rendered)

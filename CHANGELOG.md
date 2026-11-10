@@ -10,6 +10,12 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **JSON formatting:** `:format` lays out a `.json` file one value per line,
+  indented as the file is (else `tab_width`), with no language server. Key order and
+  the exact text of strings and numbers are kept; invalid JSON is left alone and
+  the status line says where and why. `format_on_save = ["go", "json"]` formats JSON
+  on every save.
+
 - **TOML is highlighted:** `pyproject.toml`, `Cargo.toml`, Raido's own `config.toml`
   and ```` ```toml ```` blocks in Markdown color their tables, keys, strings, numbers,
   dates and comments in every theme. The grammar is Raido's own and loads apart from

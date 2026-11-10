@@ -10,6 +10,7 @@ mod grab;
 mod highlight;
 mod icons;
 mod ide;
+mod json;
 mod language;
 mod layout;
 mod link;
