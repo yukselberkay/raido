@@ -395,6 +395,11 @@ pub struct App {
     /// A minimap being dragged: the map, the row it was picked up at, and the
     /// editor's scroll then.
     minimap_drag: Option<(crate::minimap::Placed, u16, usize)>,
+    /// Where the panes were laid out when last drawn (none while one is maximized).
+    pub panes_area: Rect,
+    /// The line between panes being dragged with the mouse to resize them, and
+    /// the pane it was picked up on, focused if it is let go without moving.
+    divider: Option<(crate::layout::Divider, Option<usize>)>,
     /// The left button went down in this pane (drawn at this rect, at this cell);
     /// a drag from there selects text in it.
     press: Option<(usize, Rect, (u16, u16))>,
@@ -543,6 +548,8 @@ impl App {
             rectangles: Vec::new(),
             minimaps: Vec::new(),
             minimap_drag: None,
+            panes_area: Rect::default(),
+            divider: None,
             press: None,
             last_click: None,
             grab: None,
@@ -1809,6 +1816,14 @@ impl App {
                     .is_some_and(|(when, cell)| cell == at && when.elapsed() < DOUBLE_CLICK);
                 self.last_click = (!double).then(|| (Instant::now(), at));
                 self.close_find();
+                // The line between two panes: dragging it resizes them, and every
+                // pane along it, as tmux does. A click on it without dragging (a
+                // stacked pane's title) still focuses the pane.
+                if let Some(divider) = self.tiles.divider_at(self.panes_area, &self.docked, at) {
+                    self.divider = Some((divider, pane.map(|(id, _)| id)));
+                    self.last_click = None;
+                    return Ok(());
+                }
                 if let Some(map) = self.minimaps.iter().copied().find(|m| inside(m.area)) {
                     if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
                         self.end_visual();
@@ -1873,6 +1888,13 @@ impl App {
                     }
                 }
             }
+            MouseEventKind::Drag(MouseButton::Left) if self.divider.is_some() => {
+                if let Some((divider, clicked)) = &mut self.divider {
+                    if self.tiles.drag(divider, at) {
+                        *clicked = None;
+                    }
+                }
+            }
             MouseEventKind::Drag(MouseButton::Left) if self.minimap_drag.is_some() => {
                 self.minimap_drag_to(at.1)
             }
@@ -1883,6 +1905,13 @@ impl App {
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.minimap_drag = None;
+                if let Some((_, Some(id))) = self.divider.take() {
+                    if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+                        self.end_visual();
+                    }
+                    self.focused = id;
+                    self.sidebar_focus = false;
+                }
                 if self.press.take().is_some() {
                     self.drag_select(at);
                     self.copy_mouse_selection();
@@ -6892,6 +6921,99 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         press(&mut app, KeyCode::Char('r'), KeyModifiers::NONE);
         press(&mut app, KeyCode::Char(':'), KeyModifiers::NONE);
         assert!(!app.resizing && app.input.is_some());
+    }
+    /// Three panes stacked on the left and one the whole height on the right: the
+    /// line between them, dragged with the mouse, resizes all four.
+    #[test]
+    fn dragging_the_line_between_panes_resizes_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().into(), None, false).unwrap();
+        let left = app.focused;
+        app.split_editor(Axis::Horizontal).unwrap();
+        let right = app.focused;
+        app.focused = left;
+        app.split_editor(Axis::Vertical).unwrap();
+        app.split_editor(Axis::Vertical).unwrap();
+        app.focused = right;
+        screen(&mut app, 160, 40);
+        let rect = |app: &App, id: usize| app.rectangles.iter().find(|(p, _)| *p == id).unwrap().1;
+        let before = app.rectangles.clone();
+        let line = rect(&app, right).x;
+        let mouse = |app: &mut App, kind, column, row| {
+            app.event(Event::Mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            }));
+        };
+        mouse(
+            &mut app,
+            MouseEventKind::Down(MouseButton::Left),
+            line - 1,
+            20,
+        );
+        mouse(
+            &mut app,
+            MouseEventKind::Drag(MouseButton::Left),
+            line - 21,
+            20,
+        );
+        mouse(
+            &mut app,
+            MouseEventKind::Up(MouseButton::Left),
+            line - 21,
+            20,
+        );
+        screen(&mut app, 160, 40);
+        let after = rect(&app, right);
+        assert!(after.x <= line - 19 && after.x >= line - 21, "{after:?}");
+        for (id, was) in before.iter().filter(|(id, _)| *id != right) {
+            let now = rect(&app, *id);
+            assert_eq!(
+                (now.x, now.right()),
+                (was.x, after.x),
+                "pane {id} narrows with it"
+            );
+            assert_eq!((now.y, now.height), (was.y, was.height));
+        }
+        // Dragging the line selected nothing and left the focus where it was.
+        assert!(app.press.is_none() && app.grab.is_none());
+        assert_eq!(app.focused, right);
+        assert_eq!(app.mode, Mode::Normal);
+        // A click on a stacked pane's title (on a line too) focuses that pane.
+        let lower = before
+            .iter()
+            .map(|(_, r)| *r)
+            .filter(|r| r.y > 3)
+            .min_by_key(|r| r.y)
+            .unwrap();
+        let id = app
+            .rectangles
+            .iter()
+            .find(|(_, r)| r.y == lower.y)
+            .unwrap()
+            .0;
+        mouse(
+            &mut app,
+            MouseEventKind::Down(MouseButton::Left),
+            lower.x + 4,
+            lower.y,
+        );
+        mouse(
+            &mut app,
+            MouseEventKind::Up(MouseButton::Left),
+            lower.x + 4,
+            lower.y,
+        );
+        assert_eq!(app.focused, id);
+        // Maximized, there are no lines to drag.
+        app.zoom = true;
+        screen(&mut app, 160, 40);
+        assert!(app
+            .tiles
+            .divider_at(app.panes_area, &app.docked, (line, 20))
+            .is_none());
     }
     #[test]
     fn the_active_pane_carries_the_raido_mark() {

@@ -213,8 +213,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     app.minimaps.clear();
     if app.zoom || bare {
         app.rectangles.push((app.focused, content));
+        app.panes_area = Rect::default();
     } else {
         app.tiles.layout(content, &app.docked, &mut app.rectangles);
+        app.panes_area = content;
     }
     let rectangles = app.rectangles.clone();
     let selection = app.selection();

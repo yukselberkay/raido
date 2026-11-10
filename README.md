@@ -416,7 +416,7 @@ Shift on many keyboard layouts. On macOS, **Ctrl means Control, not Command**.
 | `Ctrl-q` | Quit, refusing unsaved buffers |
 | `Ctrl-b %` / `Ctrl-b "` | Side-by-side / stacked editor split |
 | `Ctrl-b arrows` or `Ctrl-b h/j/k/l` | Move between panes; the one taking your keys has Raido's `◉` before its title |
-| `Ctrl-b Ctrl-arrows` | Resize the closest split on that axis |
+| `Ctrl-b Ctrl-arrows` | Resize the closest split on that axis (or drag the border between panes with the mouse) |
 | `Ctrl-b r` | Resize mode: arrows or `h j k l` resize the focused pane, as often as you like, Enter or Escape when done (macOS keeps Ctrl+arrows for switching desktops, so use this there) |
 | `Ctrl-b Shift-arrows` or `Ctrl-b H/J/K/L` | Move the pane: it trades places with the pane on that side, or, at the edge already, takes that whole side of the window (`:move right`) |
 | `Ctrl-b Space` | Flip the pane's split between side by side and stacked (`:flip`) |
@@ -991,6 +991,12 @@ Claude Code's full-screen mode, htop; other full-screen programs like `less` get
 arrow keys, as in a normal terminal. A click focuses a pane, puts the editor cursor
 on the character you clicked, or opens an explorer entry. A click on the
 [minimap](#minimap) jumps there; dragging its band scrolls.
+
+**Drag a border to resize.** Pick up the line between two panes and drag it: the
+panes on both sides follow, every one along the line, as in tmux. With panes stacked
+on the left and one on the right, dragging the line between them makes the right one
+wider or narrower and all the stacked ones with it. Focus stays where it was; a click
+on a border without dragging (a stacked pane's title) focuses that pane.
 
 **Drag to select and copy.** The selection stays inside the pane you started in, so
 running past its edge never picks up the explorer, borders or the pane next to it.
