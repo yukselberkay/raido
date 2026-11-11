@@ -1,0 +1,95 @@
+# Nmap 7.95 scan initiated Mon Nov  9 21:14:07 2026 as: nmap -v -sC -sV -O -oA lab 10.10.20.0/29
+Nmap scan report for 10.10.20.0 [host down]
+Nmap scan report for gateway.lab (10.10.20.1)
+Host is up (0.00052s latency).
+Not shown: 996 closed tcp ports (reset)
+PORT    STATE    SERVICE VERSION
+22/tcp  open     ssh     OpenSSH 9.6 (protocol 2.0)
+| ssh-hostkey:
+|   256 3a:91:5c:0e:7d:22:b4:61:f8:9e:12:4c:aa:07:31:d5 (ECDSA)
+|_  256 c4:18:e2:9b:50:6f:31:a7:0d:88:5e:f2:43:19:bb:72 (ED25519)
+53/tcp  open     domain  dnsmasq 2.90
+| dns-nsid:
+|_  bind.version: dnsmasq-2.90
+80/tcp  open     http    lighttpd 1.4.76
+|_http-title: Router Login
+|_http-server-header: lighttpd/1.4.76
+443/tcp filtered https
+MAC Address: 52:54:00:1A:2B:3C (QEMU virtual NIC)
+Device type: general purpose|router
+Running: Linux 5.X|6.X, MikroTik RouterOS 7.X
+OS CPE: cpe:/o:linux:linux_kernel:5 cpe:/o:linux:linux_kernel:6 cpe:/o:mikrotik:routeros:7
+OS details: Linux 5.0 - 6.2, MikroTik RouterOS 7.2 - 7.5 (Linux 5.6.3)
+Network Distance: 1 hop
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+Nmap scan report for 10.10.20.2 [host down]
+Nmap scan report for 10.10.20.3 [host down]
+Nmap scan report for files.lab (10.10.20.4)
+Host is up (0.00061s latency).
+Not shown: 995 closed tcp ports (reset)
+PORT     STATE SERVICE     VERSION
+22/tcp   open  ssh         OpenSSH 9.2p1 Debian 2+deb12u3 (protocol 2.0)
+| ssh-hostkey:
+|   256 7b:20:9d:c1:4e:3f:a8:55:e0:16:b2:9c:47:d8:0a:61 (ECDSA)
+|_  256 e9:41:6a:0f:d3:b8:72:15:9e:c6:24:af:58:30:7d:b4 (ED25519)
+111/tcp  open  rpcbind     2-4 (RPC #100000)
+| rpcinfo:
+|   program version    port/proto  service
+|   100000  2,3,4        111/tcp   rpcbind
+|   100003  3,4         2049/tcp   nfs
+|_  100005  1,2,3      42067/tcp   mountd
+139/tcp  open  netbios-ssn Samba smbd 4.6.2
+445/tcp  open  netbios-ssn Samba smbd 4.6.2
+2049/tcp open  nfs_acl     3 (RPC #100227)
+MAC Address: 52:54:00:4D:5E:6F (QEMU virtual NIC)
+Device type: general purpose
+Running: Linux 5.X|6.X
+OS CPE: cpe:/o:linux:linux_kernel:5 cpe:/o:linux:linux_kernel:6
+OS details: Linux 5.0 - 6.2
+Network Distance: 1 hop
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+Host script results:
+| smb2-security-mode:
+|   3:1:1:
+|_    Message signing enabled but not required
+| smb2-time:
+|   date: 2026-11-09T21:15:02
+|_  start_date: N/A
+|_nbstat: NetBIOS name: FILES, NetBIOS user: <unknown>, NetBIOS MAC: <unknown> (unknown)
+
+Nmap scan report for 10.10.20.5 [host down]
+Nmap scan report for web.lab (10.10.20.6)
+Host is up (0.00048s latency).
+Not shown: 997 closed tcp ports (reset)
+PORT    STATE SERVICE  VERSION
+22/tcp  open  ssh      OpenSSH 9.6p1 Ubuntu 3ubuntu13.5 (Ubuntu Linux; protocol 2.0)
+| ssh-hostkey:
+|   256 0d:5a:e3:91:28:bf:66:c4:7a:13:f0:e8:52:9d:41:3c (ECDSA)
+|_  256 a6:7f:22:18:c9:3d:50:e1:b4:0f:6e:95:d7:2a:88:13 (ED25519)
+80/tcp  open  http     nginx 1.24.0 (Ubuntu)
+|_http-server-header: nginx/1.24.0 (Ubuntu)
+|_http-title: Did not follow redirect to https://web.lab/
+443/tcp open  ssl/http nginx 1.24.0 (Ubuntu)
+| ssl-cert: Subject: commonName=web.lab
+| Subject Alternative Name: DNS:web.lab, DNS:www.web.lab
+| Not valid before: 2026-09-01T00:00:00
+|_Not valid after:  2026-11-30T23:59:59
+|_http-title: Lab Status
+| tls-alpn:
+|   h2
+|_  http/1.1
+|_ssl-date: TLS randomness does not represent time
+MAC Address: 52:54:00:7A:8B:9C (QEMU virtual NIC)
+Device type: general purpose
+Running: Linux 5.X|6.X
+OS CPE: cpe:/o:linux:linux_kernel:5 cpe:/o:linux:linux_kernel:6
+OS details: Linux 5.0 - 6.2
+Network Distance: 1 hop
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+Nmap scan report for 10.10.20.7 [host down]
+Read data files from: /usr/bin/../share/nmap
+OS and Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+# Nmap done at Mon Nov  9 21:15:31 2026 -- 8 IP addresses (3 hosts up) scanned in 84.12 seconds

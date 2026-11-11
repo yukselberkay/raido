@@ -537,7 +537,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 let height = (inner.height - u16::from(footer)) as usize;
                 // One column for the scrollbar, at least two of margin per side.
                 let room = (inner.width as usize).saturating_sub(5);
-                let width = room.clamp(1, markdown::MAX_WIDTH);
+                let width = room.clamp(1, markdown::max_width(buffer));
                 let left = inner.x + 2 + ((room - width) / 2) as u16;
                 let doc = app
                     .previews
@@ -587,8 +587,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 if footer {
                     let percent = (preview.scroll * 100).checked_div(max).unwrap_or(100);
                     let detail = format!(
-                        " Markdown preview  ·  {} lines  ·  e edit  ·  [ ] headings     {percent}%",
-                        buffer.lines()
+                        " {}  ·  {} lines  ·  e edit  ·  [ ] {}     {percent}%",
+                        doc.title,
+                        buffer.lines(),
+                        doc.marks
                     );
                     text(
                         frame,
@@ -3265,7 +3267,10 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
             "Find bar / find & replace (^W whole word, ^A all)",
         ),
         ("Tab / Shift-Tab", "Cycle open buffers"),
-        ("MARKDOWN", ".md files open rendered; edits re-render live"),
+        (
+            "MARKDOWN · NMAP",
+            ".md files and Nmap scans open rendered, live",
+        ),
         (
             ":preview / Ctrl-b m",
             "Toggle rendered view / source, keeping place",
@@ -3276,7 +3281,7 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         ),
         (
             "j k / space ^D ^U / [ ]",
-            "Scroll / page / previous-next heading",
+            "Scroll / page / previous-next heading or host",
         ),
         ("COMMANDS", "Ctrl-b : also works inside terminals"),
         (":w [path] / :wa / :wq", "Save / save all / save and close"),

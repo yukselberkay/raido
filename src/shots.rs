@@ -448,6 +448,29 @@ fn shots_markdown() {
 
 #[test]
 #[ignore = "renders the README screenshots; run scripts/screenshots.sh"]
+fn shots_nmap() {
+    let (_dir, root) = setup();
+    let (w, h) = (170, 44);
+    let mut app = app(&root, "visual-studio-dark");
+    app.sidebar_visible = false;
+    app.command("e examples/lab-scan.nmap").unwrap();
+    keys(&mut app, "e");
+    prefix(&mut app, 'M');
+    share(&mut app, 42);
+    let source = app
+        .panes
+        .iter()
+        .find(|(_, p)| matches!(p, Pane::Editor(_)))
+        .map(|(id, _)| *id)
+        .unwrap();
+    app.focused = source;
+    ready(&mut app, w, h, "");
+    app.message = "Nmap report · e shows the raw output · [ ] jump between hosts".into();
+    shot("raido-nmap", &mut app, w, h);
+}
+
+#[test]
+#[ignore = "renders the README screenshots; run scripts/screenshots.sh"]
 fn shots_theme_picker() {
     let (_dir, root) = setup();
     let (w, h) = (130, 36);

@@ -42,7 +42,7 @@ pub enum Pane {
     Changes(Box<ChangesView>),
 }
 
-/// Rendered, read-only Markdown view of a buffer.
+/// Rendered, read-only view of a buffer: Markdown, or an Nmap scan report.
 pub struct Preview {
     pub buffer: usize,
     pub scroll: usize,
@@ -997,8 +997,10 @@ impl App {
         } else if self.peek.is_some_and(|(p, _)| p == id) {
             self.peek = None;
         }
-        // Existing Markdown files open rendered; new or empty ones open for writing.
-        let rendered = markdown::is_markdown(&canonical) && self.buffers[id].text.len_chars() > 0;
+        // Existing Markdown files and Nmap scans open rendered; new or empty ones open
+        // for writing.
+        let rendered =
+            markdown::kind(&self.buffers[id]).is_some() && self.buffers[id].text.len_chars() > 0;
         let pane = || {
             if rendered {
                 Pane::Preview(Preview::new(id))
@@ -4157,28 +4159,29 @@ impl App {
         }
         Ok(())
     }
-    fn markdown_buffer(&self, id: usize) -> Result<()> {
-        if self.buffers[id]
-            .path
-            .as_deref()
-            .is_some_and(markdown::is_markdown)
-        {
-            Ok(())
-        } else {
-            bail!("Preview renders Markdown files (.md, .markdown)")
-        }
+    fn preview_kind(&self, id: usize) -> Result<markdown::Kind> {
+        markdown::kind(&self.buffers[id]).context(
+            "Preview renders Markdown files (.md, .markdown) and Nmap scans (.nmap, .gnmap, -oX XML)",
+        )
     }
-    /// Switch the focused pane between rendered Markdown and its source, keeping place.
+    /// Switch the focused pane between the rendered view and its source, keeping place.
     fn toggle_preview(&mut self) -> Result<()> {
         match self.panes.get(&self.focused) {
             Some(Pane::Editor(id)) => {
                 let id = *id;
-                self.markdown_buffer(id)?;
+                let kind = self.preview_kind(id)?;
                 self.buffers[id].end_group();
                 self.panes
                     .insert(self.focused, Pane::Preview(Preview::new(id)));
                 self.mode = Mode::Normal;
-                self.notice("Markdown preview · e edits the source · [ ] jump between headings");
+                self.notice(match kind {
+                    markdown::Kind::Markdown => {
+                        "Markdown preview · e edits the source · [ ] jump between headings"
+                    }
+                    markdown::Kind::Nmap => {
+                        "Nmap report · e shows the raw output · [ ] jump between hosts"
+                    }
+                });
             }
             Some(Pane::Preview(p)) => {
                 let id = p.buffer;
@@ -4189,9 +4192,14 @@ impl App {
                     b.scroll = b.row.saturating_sub(2);
                 }
                 self.panes.insert(self.focused, Pane::Editor(id));
-                self.notice("Editing Markdown source · Ctrl-b m or :preview renders it");
+                self.notice(match markdown::kind(&self.buffers[id]) {
+                    Some(markdown::Kind::Nmap) => {
+                        "Raw Nmap output · Ctrl-b m or :preview shows the report"
+                    }
+                    _ => "Editing Markdown source · Ctrl-b m or :preview renders it",
+                });
             }
-            _ => bail!("Focus a Markdown file to preview it"),
+            _ => bail!("Focus a Markdown file or Nmap scan to preview it"),
         }
         Ok(())
     }
@@ -4204,9 +4212,9 @@ impl App {
                 self.panes.insert(self.focused, Pane::Editor(id));
                 id
             }
-            _ => bail!("Focus a Markdown file to preview it"),
+            _ => bail!("Focus a Markdown file or Nmap scan to preview it"),
         };
-        self.markdown_buffer(id)?;
+        self.preview_kind(id)?;
         if self.panes.len() >= 12 {
             bail!("Maximum of 12 panes");
         }
@@ -5769,6 +5777,45 @@ mod tests {
         assert!(app.text_size.is_none());
     }
     #[test]
+    fn nmap_scans_open_as_reports_and_e_shows_the_raw_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scan.nmap");
+        std::fs::write(
+            &path,
+            "# Nmap 7.94 scan initiated Mon Nov 10 12:00:00 2025 as: nmap -sV 10.0.0.1\n\
+             Nmap scan report for 10.0.0.1\nHost is up (0.0012s latency).\n\
+             PORT   STATE SERVICE VERSION\n22/tcp open  ssh     OpenSSH 9.6\n\
+             # Nmap done at Mon Nov 10 12:00:10 2025 -- 1 IP address (1 host up) scanned in 10.00 seconds\n",
+        )
+        .unwrap();
+        let mut app = App::new(dir.path().into(), Some(path), false).unwrap();
+        let preview = |app: &App| matches!(app.panes.get(&app.focused), Some(Pane::Preview(_)));
+        assert!(preview(&app), "opens as a report");
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        for needle in [
+            "NMAP 7.94",
+            "OpenSSH 9.6",
+            "Nmap report  ·  1 host up  ·  1 open port",
+            "[ ] hosts",
+        ] {
+            assert!(screen.contains(needle), "Missing {needle}");
+        }
+        press(&mut app, KeyCode::Char('e'), KeyModifiers::NONE);
+        assert!(!preview(&app));
+        assert!(app.message.contains("Raw Nmap output"), "{}", app.message);
+        app.command("preview").unwrap();
+        assert!(preview(&app));
+    }
+    #[test]
     fn a_count_before_dd_and_yy_takes_that_many_lines() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.txt");
@@ -7275,7 +7322,10 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         let all = app.buffers[id].text.len_chars();
         app.buffers[id].replace(0, all, "[1,2]\n");
         app.command("w!").unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[\n    1,\n    2\n]\n");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[\n    1,\n    2\n]\n"
+        );
         assert!(app.message.contains("formatted as JSON"), "{}", app.message);
     }
     #[test]

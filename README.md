@@ -38,6 +38,7 @@ That is what this workspace is for:
 - [Horizontal and vertical tiles](#horizontal-and-vertical-tiles)
 - [Keyboard reference](#keyboard)
 - [Markdown preview](#markdown-preview)
+- [Nmap scan reports](#nmap-scan-reports)
 - [Copy and paste](#copy-and-paste)
 - [Language servers](#language-servers-lsp)
 - [Sessions: pick up where you left off](#sessions)
@@ -368,6 +369,9 @@ the history graph appears after you make commits.
 - **Markdown preview:** `.md` files open rendered — headings, lists, task
   lists, tables, highlighted code blocks, quotes and GitHub alerts — with a live
   side-by-side preview that follows your cursor while you edit.
+- **Nmap scan reports:** `.nmap`, `.gnmap` and Nmap XML open as a readable report —
+  hosts at a glance, ports colored by state, script output under its port, noise
+  folded away.
 - **Source highlighting:** bundled Rust, C, C++, Python, Go grammars, plus the
   other bundled Syntect languages (JSON and YAML among them) and Raido's own TOML
   grammar (`pyproject.toml`, `Cargo.toml`, `config.toml`, and ```` ```toml ```` blocks
@@ -1181,6 +1185,32 @@ YAML front matter. HTML is reduced to its text. Prose wraps to the pane and is
 centered at a 100-column reading width; wide tables shrink and truncate cells.
 Colors come from the active theme.
 
+### Nmap scan reports
+
+Nmap output opens as a **report** in the preview pane, like Markdown. That covers all
+three files `nmap -oA` writes: normal (`.nmap`), grepable (`.gnmap`) and XML. It also
+covers any other file that starts like one, such as `nmap -oN scan.txt`.
+
+![Raw Nmap output on the left, the same scan rendered as a report on the right](docs/raido-nmap.png)
+
+- **Summary first:** the command, when it ran, the open port count, and a line per
+  host listing its open ports. Hosts that were down (listed with `-v`) share one line.
+- **A section per host:** `]` / `[` jump between hosts. Ports sit in columns colored
+  by state: open is green, closed red, filtered yellow. Closed and filtered rows are
+  dimmed so open ports stand out, and long versions wrap in their own column.
+- **Script output under its port:** each script's name in color, its output indented
+  behind a gutter, columns (like `rpcinfo`'s) kept aligned. Host script results get
+  a block of their own; MAC address, OS details and service info line up in a list.
+- **Noise folded:** scripts that failed to run (`ERROR: Script execution failed`)
+  share one line, and the fingerprints Nmap asks you to submit fold to one line.
+- **Live:** a file Nmap is still writing re-renders as hosts finish. Until Nmap
+  writes its closing line, the report says the scan is still running.
+
+The keys are the Markdown preview's: `e` shows the raw output at the host you were
+reading, `:preview` or `Ctrl-b m` switches back, and `Ctrl-b M` puts the report
+beside the raw file. Reports use up to 140 columns, for version strings and script
+output. Try it with [examples/lab-scan.nmap](examples/lab-scan.nmap).
+
 ### Prompt and buffer behavior
 
 Command/search/path prompts support typing, Backspace, Enter and Escape. In the
@@ -1288,7 +1318,7 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 :ai <name> [model]        A launcher you defined as [ai.<name>]
 :themes                   Theme picker with live preview (also Ctrl-b t)
 :theme name               Switch theme directly (e.g. dracula or visual-studio-dark)
-:preview [split]          Rendered Markdown in place / beside the source
+:preview [split]          Rendered Markdown or Nmap report in place / beside the source
 :format                   Format the file with its language server (JSON: by Raido)
 :lsp / :lsp restart       Language server status / restart all servers
 :font [size N|family X|list]  Terminal font: show, save size or family, list fonts

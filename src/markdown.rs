@@ -28,16 +28,58 @@ pub fn is_markdown(path: &Path) -> bool {
     })
 }
 
+/// What a preview pane renders a buffer as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Markdown,
+    /// An Nmap scan report (`.nmap`, `.gnmap`, or Nmap's XML).
+    Nmap,
+}
+
+/// How the preview pane renders `buffer`, if it renders it at all.
+pub fn kind(buffer: &Buffer) -> Option<Kind> {
+    if buffer.path.as_deref().is_some_and(is_markdown) {
+        Some(Kind::Markdown)
+    } else if crate::nmap::is_report(buffer) {
+        Some(Kind::Nmap)
+    } else {
+        None
+    }
+}
+
+/// Widest the rendered view gets: prose stays readable, scan reports get room for
+/// their version strings and script output.
+pub fn max_width(buffer: &Buffer) -> usize {
+    match kind(buffer) {
+        Some(Kind::Nmap) => crate::nmap::MAX_WIDTH,
+        _ => MAX_WIDTH,
+    }
+}
+
 #[derive(Default)]
 pub struct Document {
     pub lines: Vec<Line<'static>>,
     /// Rendered line of every heading, for `[` / `]` navigation.
     pub headings: Vec<usize>,
+    /// The pane footer's name for the view, and what `[` / `]` jump between.
+    pub title: String,
+    pub marks: &'static str,
     /// (source line, rendered line) at each block start, both ascending.
     anchors: Vec<(usize, usize)>,
 }
 
 impl Document {
+    /// Tie `source_line` to the next rendered line; out-of-order anchors are dropped.
+    pub(crate) fn anchor(&mut self, source_line: usize) {
+        let at = self.lines.len();
+        if self
+            .anchors
+            .last()
+            .is_none_or(|&(s, o)| source_line > s && at >= o)
+        {
+            self.anchors.push((source_line, at));
+        }
+    }
     /// First rendered line of the block containing `source_line`.
     pub fn line_for_source(&self, source_line: usize) -> usize {
         match self.anchors.partition_point(|(s, _)| *s <= source_line) {
@@ -94,6 +136,8 @@ impl Previews {
                     theme,
                     syntax,
                 )
+            } else if kind(buffer) == Some(Kind::Nmap) {
+                crate::nmap::render(&buffer.text.to_string(), width, theme)
             } else {
                 render(&buffer.text.to_string(), width, theme, syntax)
             };
@@ -110,24 +154,24 @@ impl Previews {
     }
 }
 
-struct Palette {
-    fg: Color,
-    muted: Color,
-    accent: Color,
-    secondary: Color,
-    warning: Color,
-    border: Color,
-    background: Color,
-    string: Color,
-    function: Color,
-    constant: Color,
-    danger: Color,
-    code_bg: Color,
-    inline_bg: Color,
+pub(crate) struct Palette {
+    pub(crate) fg: Color,
+    pub(crate) muted: Color,
+    pub(crate) accent: Color,
+    pub(crate) secondary: Color,
+    pub(crate) warning: Color,
+    pub(crate) border: Color,
+    pub(crate) background: Color,
+    pub(crate) string: Color,
+    pub(crate) function: Color,
+    pub(crate) constant: Color,
+    pub(crate) danger: Color,
+    pub(crate) code_bg: Color,
+    pub(crate) inline_bg: Color,
 }
 
 impl Palette {
-    fn new(theme: &Theme) -> Self {
+    pub(crate) fn new(theme: &Theme) -> Self {
         let syntax = theme.syntax_colors.as_ref();
         let pick = |f: fn(&crate::config::SyntaxColors) -> &String, fallback: &String| {
             color(syntax.map(f).unwrap_or(fallback))
@@ -244,18 +288,12 @@ pub fn render(source: &str, width: usize, theme: &Theme, syntax: &Syntax) -> Doc
         );
         r.event(event);
         if block {
-            let line = newlines.partition_point(|&n| n < range.start);
-            let at = r.doc.lines.len();
-            if r.doc
-                .anchors
-                .last()
-                .is_none_or(|&(s, o)| line > s && at >= o)
-            {
-                r.doc.anchors.push((line, at));
-            }
+            r.doc.anchor(newlines.partition_point(|&n| n < range.start));
         }
     }
     r.flush();
+    r.doc.title = "Markdown preview".into();
+    r.doc.marks = "headings";
     while r
         .doc
         .lines
@@ -756,11 +794,11 @@ impl Renderer<'_> {
     }
 }
 
-fn spans_width(spans: &[Span]) -> usize {
+pub(crate) fn spans_width(spans: &[Span]) -> usize {
     spans.iter().map(|s| s.content.width()).sum()
 }
 
-fn pad(mut spans: Vec<Span<'static>>, width: usize, style: Style) -> Vec<Span<'static>> {
+pub(crate) fn pad(mut spans: Vec<Span<'static>>, width: usize, style: Style) -> Vec<Span<'static>> {
     let used = spans_width(&spans);
     if used < width {
         spans.push(Span::styled(" ".repeat(width - used), style));
@@ -769,7 +807,7 @@ fn pad(mut spans: Vec<Span<'static>>, width: usize, style: Style) -> Vec<Span<'s
 }
 
 /// Cut spans to `width` columns, marking the cut with an ellipsis.
-fn truncate(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+pub(crate) fn truncate(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
     if spans_width(&spans) <= width {
         return spans;
     }
@@ -797,7 +835,7 @@ fn truncate(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
 
 /// Greedy word wrap across styled spans. Spaces and tabs separate words; `\n`
 /// forces a break; words wider than the line are split by character.
-fn wrap(spans: Vec<Span<'static>>, width: usize) -> Vec<Vec<Span<'static>>> {
+pub(crate) fn wrap(spans: Vec<Span<'static>>, width: usize) -> Vec<Vec<Span<'static>>> {
     struct Word {
         parts: Vec<(String, Style)>,
         width: usize,

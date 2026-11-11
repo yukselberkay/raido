@@ -20,6 +20,7 @@ mod markdown;
 mod merge;
 mod minimap;
 mod model_server;
+mod nmap;
 mod omarchy;
 mod outline;
 mod platform;
