@@ -7808,6 +7808,90 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
     }
     #[cfg(unix)]
     #[test]
+    fn docked_panes_come_back_docked_when_the_project_reopens() {
+        // Two editors on top (a, b), a shell below across the whole width (c),
+        // and the shell docked when Raido quits.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        let mut app = App::new(dir.path().into(), None, false).unwrap();
+        let a = app.focused;
+        app.open_terminal(
+            Some((
+                "/bin/sh",
+                vec!["-c".into(), "echo docked-marker; exec sh".into()],
+            )),
+            Some(Axis::Vertical),
+        )
+        .unwrap();
+        let c = app.focused;
+        for _ in 0..200 {
+            app.tick();
+            let Some(Pane::Terminal(t)) = app.panes.get(&c) else {
+                unreachable!()
+            };
+            if t.transcript().contains("docked-marker") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        app.focused = a;
+        app.split_editor(Axis::Horizontal).unwrap();
+        let b = app.focused;
+        let rect = |app: &App, id| app.rectangles.iter().find(|(i, _)| *i == id).map(|r| r.1);
+        screen(&mut app, 120, 30);
+        let shell_room = rect(&app, c).unwrap();
+        app.focused = c;
+        app.command("dock").unwrap();
+        assert_eq!(app.docked, vec![c]);
+        let focused = app.focused;
+        app.save_session(false).unwrap();
+        drop(app);
+
+        let mut app = App::new(dir.path().into(), None, false).unwrap();
+        app.restore_session();
+        assert!(
+            app.message.starts_with("Session restored"),
+            "{}",
+            app.message
+        );
+        // Still docked: off the screen with a tab in the top bar, focus where it was.
+        assert_eq!(app.docked, vec![c]);
+        assert_eq!(app.visible(), vec![a, b]);
+        assert_eq!(app.focused, focused);
+        screen(&mut app, 120, 30);
+        assert_eq!(rect(&app, c), None);
+        let tabs: Vec<usize> = app.dock_tabs.iter().map(|(id, _)| *id).collect();
+        assert_eq!(tabs, vec![c]);
+        let Some(Pane::Terminal(t)) = app.panes.get(&c) else {
+            panic!("the docked shell came back as a terminal")
+        };
+        assert!(t.transcript().contains("docked-marker"));
+        // Brought back, it takes the place and size it had before it was docked.
+        app.undock(0);
+        screen(&mut app, 120, 30);
+        assert_eq!(app.focused, c);
+        assert_eq!(rect(&app, c), Some(shell_room));
+        assert!(app.docked.is_empty());
+        drop(app);
+
+        // A session with every pane docked (hand-edited, say) shows them all rather
+        // than an empty screen, and a docked pane missing from the layout is dropped.
+        let mut saved = session::load(dir.path()).unwrap().unwrap();
+        saved.tiles.leaves(&mut saved.docked);
+        saved.docked.push(99);
+        session::save(dir.path(), &serde_json::to_string(&saved).unwrap()).unwrap();
+        let mut app = App::new(dir.path().into(), None, false).unwrap();
+        app.restore_session();
+        assert!(
+            app.message.starts_with("Session restored"),
+            "{}",
+            app.message
+        );
+        assert!(app.docked.is_empty());
+        assert_eq!(app.visible(), vec![a, b, c]);
+    }
+    #[cfg(unix)]
+    #[test]
     fn claude_panes_follow_the_conversation_they_switched_to() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("claude-home");
