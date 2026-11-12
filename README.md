@@ -1711,6 +1711,7 @@ theme immediately. The configuration supports:
 | `theme` | `"visual-studio-dark"` | Any bundled dark or light theme above, `phosphor`/`amber`, or a user theme name |
 | `sidebar_width` | `29` | Columns, clamped to 18–60 |
 | `tab_width` | `4` | Indentation width when a file and its language don't decide it, clamped to 1–16 |
+| `line_endings` | `"lf"` | How lines end in saved files: `"lf"` (`\n`; a file with Windows `\r\n` endings opens with `\n` and is saved so, the status bar showing `CRLF→LF` until then), `"crlf"` (`\r\n`) or `"auto"` (each file's own, what most of its lines use). `.bat` / `.cmd` files keep theirs |
 | `smart_indent` | `true` | [Language-aware](#language-aware-typing) Enter, `o`, Tab/Shift-Tab and closers |
 | `auto_pairs` | `true` | Brackets and quotes close themselves; typing the closer steps over it |
 | `autocomplete` | `true` | Suggestions pop up after two letters of a word (language server, else keywords and words from your files) |

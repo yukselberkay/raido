@@ -458,7 +458,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                         }
                         let detail = format!(
                             " {language}{server}  ·  UTF-8 / {}     {}:{}  {}%",
-                            if buffer.crlf { "CRLF" } else { "LF" },
+                            match (buffer.crlf, buffer.eol_changed) {
+                                (false, false) => "LF",
+                                (false, true) => "CRLF→LF",
+                                (true, false) => "CRLF",
+                                (true, true) => "LF→CRLF",
+                            },
                             buffer.row + 1,
                             buffer.col + 1,
                             (buffer.row + 1) * 100 / buffer.lines()

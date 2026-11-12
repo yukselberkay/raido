@@ -213,6 +213,10 @@ pub struct Config {
     /// language server on save, as VS Code does for Go (keys: go, rust, python, c),
     /// and `json`, which Raido lays out itself.
     pub format_on_save: Vec<String>,
+    /// How lines end in saved files: "lf" (`\n`, the default: a file with Windows
+    /// endings gets `\n` when saved), "crlf" (`\r\n`) or "auto" (each file's own).
+    /// Windows batch files keep theirs.
+    pub line_endings: crate::editor::LineEndings,
     /// Per-language server overrides: `[lsp.python] program = "pylsp"`.
     /// Keys: rust, go, python, c (C and C++).
     pub lsp: BTreeMap<String, CommandPlugin>,
@@ -251,6 +255,7 @@ impl Default for Config {
             plugins: BTreeMap::new(),
             lsp_enabled: true,
             format_on_save: vec!["go".into()],
+            line_endings: crate::editor::LineEndings::Lf,
             lsp: BTreeMap::new(),
         }
     }

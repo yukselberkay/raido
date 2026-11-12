@@ -57,6 +57,13 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Fixed
 
+- **Lines end with `\n`** (`line_endings = "lf"`, the default): a file with
+  Windows `\r\n` endings opens with `\n` and is saved that way (the status bar
+  shows `CRLF→LF` until it is), so lines you type never end in `\r\n`. Before, one
+  `\r\n` anywhere in a file made every new line `\r\n`. `"auto"` keeps each file's
+  own (what most of its lines use), `"crlf"` writes `\r\n`; `.bat` and `.cmd` files
+  keep theirs.
+
 - **Programs in panes hear when they gain and lose the focus** (focus reports, as
   in tmux with `focus-events on`): switching panes or windows tells them. Claude
   Code then shows its `Image in clipboard · ctrl+v to paste` hint inside Raido.

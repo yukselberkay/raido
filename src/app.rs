@@ -758,7 +758,7 @@ impl App {
     /// Show PATH in a pane of its own beside the terminal (or focus the pane already
     /// showing it). A file that doesn't exist yet opens as a new buffer.
     fn open_from_terminal(&mut self, path: &Path) -> Result<String> {
-        let fresh = Buffer::open(path)?;
+        let fresh = Buffer::open_with(path, self.config.line_endings)?;
         let key = fresh.path.clone().context("Missing file name")?;
         let id = match self
             .buffers
@@ -996,13 +996,13 @@ impl App {
             id
         } else if let Some(slot) = self.peek_slot().filter(|_| peek) {
             // Replace the previous preview instead of piling up buffers.
-            let mut fresh = Buffer::open(&path)?;
+            let mut fresh = Buffer::open_with(&path, self.config.line_endings)?;
             fresh.revision = self.buffers[slot].revision + 1;
             self.buffers[slot] = fresh;
             self.lsp.diagnostics.remove(&slot);
             slot
         } else {
-            let b = Buffer::open(&path)?;
+            let b = Buffer::open_with(&path, self.config.line_endings)?;
             self.buffers.push(b);
             self.buffers.len() - 1
         };
@@ -1013,6 +1013,18 @@ impl App {
         } else if self.peek.is_some_and(|(p, _)| p == id) {
             self.peek = None;
         }
+        // A file whose line endings `line_endings` changed says so as it opens.
+        let eol = match &self.buffers[id] {
+            b if existing.is_none() && b.eol_changed => {
+                let (was, now) = if b.crlf {
+                    ("\\n", "\\r\\n")
+                } else {
+                    ("\\r\\n", "\\n")
+                };
+                format!(" · its {was} line endings become {now} when saved (line_endings)")
+            }
+            _ => String::new(),
+        };
         // Existing Markdown files and Nmap scans open rendered; new or empty ones open
         // for writing.
         let rendered =
@@ -1040,7 +1052,7 @@ impl App {
         if peek {
             self.sidebar_focus = true;
             self.notice(format!(
-                "Previewing {} · Enter to edit",
+                "Previewing {} · Enter to edit{eol}",
                 self.buffers[id].name()
             ));
             return Ok(());
@@ -1048,7 +1060,7 @@ impl App {
         self.tree.reveal(&canonical);
         self.sidebar_focus = false;
         self.mode = Mode::Normal;
-        self.notice(format!("Opened {}", self.buffers[id].name()));
+        self.notice(format!("Opened {}{eol}", self.buffers[id].name()));
         Ok(())
     }
     /// The preview buffer, if it may be replaced: untouched since browsing opened it
@@ -1278,7 +1290,8 @@ impl App {
         for b in saved.buffers {
             let path = b.path.map(|p| self.root.join(p));
             let mut buffer = match &path {
-                Some(p) if p.is_file() => Buffer::open(p).unwrap_or_else(|_| Buffer::empty()),
+                Some(p) if p.is_file() => Buffer::open_with(p, self.config.line_endings)
+                    .unwrap_or_else(|_| Buffer::empty()),
                 Some(p) => {
                     let mut buffer = Buffer::empty();
                     buffer.path = Some(p.clone());
@@ -1787,7 +1800,7 @@ impl App {
                     continue;
                 }
                 if b.dirty {
-                    let Ok(fresh) = Buffer::open(&path) else {
+                    let Ok(fresh) = Buffer::open_with(&path, self.config.line_endings) else {
                         continue;
                     };
                     let name = b.name();
@@ -1808,7 +1821,7 @@ impl App {
                     }
                     continue;
                 }
-                if let Ok(mut fresh) = Buffer::open(&path) {
+                if let Ok(mut fresh) = Buffer::open_with(&path, self.config.line_endings) {
                     if fresh.text != b.text {
                         fresh.row = b.row;
                         fresh.col = b.col;
@@ -5438,7 +5451,7 @@ impl App {
             "e!" | "edit!" | "reload!" if arg.is_empty() => {
                 let id = self.buffer_id().context("Focus an editor")?;
                 let path = self.buffers[id].path.clone().context("Unnamed buffer")?;
-                let fresh = Buffer::open(&path)?;
+                let fresh = Buffer::open_with(&path, self.config.line_endings)?;
                 let unsaved = self.buffers[id].dirty;
                 self.buffers[id].load_disk(fresh);
                 self.notice(if unsaved {
@@ -5456,7 +5469,7 @@ impl App {
                     bail!("Unsaved changes · :e! loads the file anyway (u brings yours back)");
                 }
                 let path = self.buffers[id].path.clone().context("Unnamed buffer")?;
-                let mut fresh = Buffer::open(&path)?;
+                let mut fresh = Buffer::open_with(&path, self.config.line_endings)?;
                 fresh.revision = self.buffers[id].revision + 1;
                 self.buffers[id] = fresh;
             }

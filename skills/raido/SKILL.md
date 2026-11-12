@@ -82,7 +82,7 @@ in the order the user presses them. Prefer showing over explaining.
 
 `theme` ("visual-studio-dark"), `sidebar_width` (29), `tab_width` (4), `shell`, `relative_numbers` (false), `minimap` (true),
 `icons` (true), `show_hidden` (true), `ai_split` ("right"/"below"), `ai_skill`
-(true — installs this skill), `review_changes` (true — Ctrl-b v review of AI changes), `review_summary` (true — outline of each change), `review_ai` ("auto" — who explains the review's changes; a list tries in order; `name:model`), `review_ai_auto` (true — explain them by themselves once the agents stop; false: only on `s`), `review_ignored` (["*.md", "*.txt"] — gitignored files the review tracks anyway; `[]` none), `claude_ide` (true — Claude Code sees your file and selection), `lsp_enabled` (true), `[lsp.<rust|go|python|c>]`
+(true — installs this skill), `review_changes` (true — Ctrl-b v review of AI changes), `review_summary` (true — outline of each change), `review_ai` ("auto" — who explains the review's changes; a list tries in order; `name:model`), `review_ai_auto` (true — explain them by themselves once the agents stop; false: only on `s`), `review_ignored` (["*.md", "*.txt"] — gitignored files the review tracks anyway; `[]` none), `line_endings` ("lf" — saved files end lines with \n; a CRLF file opens with \n, status `CRLF→LF`, and is saved so; "auto" keeps each file's own, by majority; "crlf"; .bat/.cmd keep theirs), `claude_ide` (true — Claude Code sees your file and selection), `lsp_enabled` (true), `[lsp.<rust|go|python|c>]`
 `program`/`args`, `[plugins.<name>]` `program`/`args`, `[ai.<name>]`
 `program`/`args`/`model`/`env`. Unknown keys are rejected, so check spelling.
 

@@ -29,6 +29,9 @@ pub struct Buffer {
     pub revision: u64,
     pub dirty: bool,
     pub crlf: bool,
+    /// The file's line endings were changed to `line_endings`'s when it opened; it's
+    /// saved that way.
+    pub eol_changed: bool,
     pub search: String,
     /// Search options: `/` matches case exactly; the find bar ignores case unless the
     /// query has a capital letter, and can match whole words only.
@@ -78,6 +81,7 @@ impl Buffer {
             revision: 0,
             dirty: false,
             crlf: false,
+            eol_changed: false,
             search: String::new(),
             search_case: true,
             search_word: false,
@@ -112,7 +116,7 @@ impl Buffer {
             }
             let source =
                 std::str::from_utf8(&bytes).context("Raido currently edits UTF-8 files only")?;
-            buffer.crlf = source.contains("\r\n");
+            buffer.crlf = mostly_crlf(source);
             buffer.text = Rope::from_str(source);
             buffer.saved = buffer.text.clone();
             buffer.disk_hash = Some(hash(&bytes));
@@ -125,6 +129,32 @@ impl Buffer {
                 .context("Parent directory must exist")?;
             let name = path.file_name().context("Missing file name")?;
             buffer.path = Some(canonical_parent.join(name));
+        }
+        Ok(buffer)
+    }
+
+    /// [`open`](Self::open), its lines ending as `endings` says. Windows batch files
+    /// (`.bat`, `.cmd`) keep their own: cmd misreads some of them otherwise.
+    pub fn open_with(path: &Path, endings: LineEndings) -> Result<Self> {
+        let mut buffer = Self::open(path)?;
+        let batch = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("bat") || e.eq_ignore_ascii_case("cmd"));
+        let crlf = match endings {
+            LineEndings::Auto => return Ok(buffer),
+            _ if batch => return Ok(buffer),
+            LineEndings::Lf => false,
+            LineEndings::Crlf => true,
+        };
+        buffer.crlf = crlf;
+        let text = buffer.text.to_string();
+        let lf = text.replace("\r\n", "\n");
+        let wanted = if crlf { lf.replace('\n', "\r\n") } else { lf };
+        if wanted != text {
+            buffer.text = Rope::from_str(&wanted);
+            buffer.saved = buffer.text.clone();
+            buffer.eol_changed = true;
         }
         Ok(buffer)
     }
@@ -696,6 +726,7 @@ impl Buffer {
             .and_then(|p| fs::metadata(p).ok())
             .and_then(|m| m.modified().ok().map(|time| (time, m.len())));
         self.dirty = false;
+        self.eol_changed = false;
         self.conflict = None;
         self.end_group();
         Ok(())
@@ -764,6 +795,27 @@ pub fn find_all(
     found
 }
 
+/// How lines end in the files Raido saves (config `line_endings`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LineEndings {
+    /// `\n`, as on Linux and macOS: a file with Windows endings gets `\n` when saved.
+    #[default]
+    Lf,
+    /// `\r\n`, as on Windows.
+    Crlf,
+    /// Each file's own, what most of its lines end with; `\n` in new files.
+    Auto,
+}
+
+/// Whether most of `text`'s lines end with `\r\n`: one stray line doesn't make
+/// a file Windows-style.
+fn mostly_crlf(text: &str) -> bool {
+    let crlf = text.matches("\r\n").count();
+    let all = text.matches('\n').count();
+    crlf > all - crlf
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -814,6 +866,61 @@ mod tests {
         b.undo(true);
         assert_eq!(b.text.to_string(), "λ你好\nRust ");
     }
+    #[test]
+    fn lines_end_as_line_endings_says() {
+        let dir = tempfile::tempdir().unwrap();
+        let windows = dir.path().join("main.rs");
+        fs::write(&windows, "fn main() {\r\n    one();\r\n}\r\n").unwrap();
+        // "lf", the default: opened with \n, unchanged until saved, saved with \n.
+        let mut b = Buffer::open_with(&windows, LineEndings::Lf).unwrap();
+        assert_eq!(b.text.to_string(), "fn main() {\n    one();\n}\n");
+        assert!(!b.crlf && b.eol_changed && !b.dirty);
+        b.row = 1;
+        b.col = 10;
+        b.newline();
+        b.save(None).unwrap();
+        assert_eq!(
+            fs::read_to_string(&windows).unwrap(),
+            "fn main() {\n    one();\n    \n}\n"
+        );
+        assert!(!b.eol_changed);
+        // "auto" keeps a file's own; "crlf" makes them \r\n.
+        fs::write(&windows, "a\r\nb\r\n").unwrap();
+        let b = Buffer::open_with(&windows, LineEndings::Auto).unwrap();
+        assert_eq!(b.text.to_string(), "a\r\nb\r\n");
+        assert!(b.crlf && !b.eol_changed);
+        let unix = dir.path().join("lib.rs");
+        fs::write(&unix, "a\nb\n").unwrap();
+        let b = Buffer::open_with(&unix, LineEndings::Crlf).unwrap();
+        assert_eq!(b.text.to_string(), "a\r\nb\r\n");
+        assert!(b.crlf && b.eol_changed);
+        // Windows batch files keep theirs.
+        let batch = dir.path().join("build.CMD");
+        fs::write(&batch, "@echo off\r\necho hi\r\n").unwrap();
+        let b = Buffer::open_with(&batch, LineEndings::Lf).unwrap();
+        assert_eq!(b.text.to_string(), "@echo off\r\necho hi\r\n");
+        assert!(b.crlf && !b.eol_changed);
+        // A new file: as the setting says.
+        let new = dir.path().join("new.rs");
+        assert!(!Buffer::open_with(&new, LineEndings::Lf).unwrap().crlf);
+        assert!(Buffer::open_with(&new, LineEndings::Crlf).unwrap().crlf);
+    }
+
+    #[test]
+    fn one_stray_windows_line_doesnt_make_a_file_windows_style() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mixed.py");
+        fs::write(&path, "a\nb\r\nc\nd\n").unwrap();
+        let mut b = Buffer::open(&path).unwrap();
+        assert!(!b.crlf, "three of four lines end with \\n");
+        b.row = 3;
+        b.col = 1;
+        b.newline();
+        assert_eq!(b.text.to_string(), "a\nb\r\nc\nd\n\n");
+        fs::write(&path, "a\r\nb\r\nc\n").unwrap();
+        assert!(Buffer::open(&path).unwrap().crlf, "most end with \\r\\n");
+    }
+
     #[test]
     fn save_preserves_crlf_and_rejects_external_changes() {
         let dir = tempfile::tempdir().unwrap();

@@ -69,6 +69,10 @@ lsp_enabled = true
 # for Go (gopls: goimports + gofmt). Keys: go, rust, python, c, and json (laid out
 # by Raido itself, no server needed). [] turns it off.
 format_on_save = ["go"]
+# How lines end in the files Raido saves: "lf" (\n, as on Linux and macOS; a file
+# with Windows line endings gets \n when saved), "crlf" (\r\n) or "auto" (each
+# file's own, what most of its lines use). Windows .bat/.cmd files keep theirs.
+line_endings = "lf"
 # Optional: choose a different server per language (keys: rust, go, python, c).
 # [lsp.python]
 # program = "pylsp"
