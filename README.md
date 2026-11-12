@@ -800,6 +800,19 @@ Three ways to hand an AI pane a screenshot:
   week, so the conversation can still read it. So `⌘⇧4`, then `Ctrl-b I` works
   without the clipboard at all.
 
+**Local models** take screenshots too, when the model reads images:
+
+- **OpenCode** attaches the pasted path like Claude Code. On your
+  [model server](#your-own-model-server-ollama-vllm), Raido tells OpenCode which
+  models take images: vLLM doesn't say, so it goes by the name (Qwen2.5-VL,
+  Qwen3-VL, InternVL, Pixtral, Gemma 3, Llama 4, llava…); text models are left
+  text only, so OpenCode never sends them an image they'd refuse.
+- **The Local LLM** (`ollama run`): `Ctrl-b I` types the path and a space; ask your
+  question and Ollama attaches the image.
+- When the model the pane started on can't read images (Ollama says so: a model
+  without the `vision` capability), the status line tells you, with vision models
+  to try instead: `gemma3`, `qwen2.5vl`, `llama3.2-vision`.
+
 Reading the clipboard's image uses `osascript` on a Mac, `wl-paste` or `xclip` on
 Linux and PowerShell on Windows.
 

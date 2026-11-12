@@ -192,13 +192,39 @@ pub fn clipboard_image(to: &Path) -> bool {
 }
 
 /// How an agent takes an image file typed into its prompt: Gemini CLI reads `@path`
-/// references; Claude Code and Codex attach a pasted path to an image as it is.
+/// references; `ollama run` (the Local LLM) finds an image path among the words
+/// of the prompt; Claude Code, Codex and OpenCode attach a pasted path as it is.
 pub fn reference(agent: Option<&str>, path: &Path) -> String {
     let path = path.to_string_lossy();
     match agent {
         Some("gemini") => format!("@{path} "),
+        Some("local") => format!("{path} "),
         _ => path.into_owned(),
     }
+}
+
+/// Where this machine's Ollama answers: `OLLAMA_HOST` (`host:port`, a URL, or
+/// `0.0.0.0` for all addresses), else `http://127.0.0.1:11434`.
+pub fn local_ollama(host: Option<&str>) -> String {
+    let host = host
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .unwrap_or("127.0.0.1");
+    let (scheme, rest) = match host.split_once("://") {
+        Some((scheme, rest)) => (scheme, rest),
+        None => ("http", host),
+    };
+    let rest = rest.trim_end_matches('/');
+    let rest = rest.replace("0.0.0.0", "127.0.0.1");
+    let with_port = if rest
+        .rsplit_once(':')
+        .is_some_and(|(_, port)| port.parse::<u16>().is_ok())
+    {
+        rest
+    } else {
+        format!("{rest}:11434")
+    };
+    format!("{scheme}://{with_port}")
 }
 
 #[cfg(test)]
@@ -288,6 +314,23 @@ mod tests {
             reference(Some("gemini"), path),
             "@/cache/raido/images/clipboard-1.png "
         );
+        assert_eq!(
+            reference(Some("local"), path),
+            "/cache/raido/images/clipboard-1.png "
+        );
+        assert_eq!(
+            reference(Some("opencode"), path),
+            "/cache/raido/images/clipboard-1.png"
+        );
         assert_eq!(reference(None, path), "/cache/raido/images/clipboard-1.png");
+    }
+
+    #[test]
+    fn ollama_is_found_where_ollama_host_says() {
+        assert_eq!(local_ollama(None), "http://127.0.0.1:11434");
+        assert_eq!(local_ollama(Some("0.0.0.0")), "http://127.0.0.1:11434");
+        assert_eq!(local_ollama(Some("0.0.0.0:8080")), "http://127.0.0.1:8080");
+        assert_eq!(local_ollama(Some("https://box:443/")), "https://box:443");
+        assert_eq!(local_ollama(Some("gpu-box")), "http://gpu-box:11434");
     }
 }

@@ -637,6 +637,70 @@ pub fn opencode(
     )
 }
 
+/// Whether a model reads images, from its name: vLLM doesn't say, and a model
+/// told it can gets images it would refuse. Vision families (`Qwen2.5-VL`,
+/// `llava`, `llama3.2-vision`, `gemma3`, `pixtral`, `InternVL`…); Gemma 3's 1B and
+/// 270M are text only. Ollama answers for itself: [`ollama_sees_images`].
+pub fn sees_images(id: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    let name = id.rsplit('/').next().unwrap_or(&id);
+    const FAMILIES: [&str; 22] = [
+        "vision",
+        "llava",
+        "pixtral",
+        "idefics",
+        "molmo",
+        "minicpm-v",
+        "moondream",
+        "paligemma",
+        "smolvlm",
+        "internvl",
+        "mllama",
+        "multimodal",
+        "llama4",
+        "llama-4",
+        "mistral-small3.1",
+        "mistral-small-3.1",
+        "mistral-small3.2",
+        "mistral-small-3.2",
+        "glm-4.1v",
+        "glm-4.5v",
+        "glm-4.6v",
+        "ovis",
+    ];
+    let gemma3 = (name.contains("gemma3") || name.contains("gemma-3"))
+        && !name.contains("gemma3n")
+        && !name.contains("gemma-3n")
+        && !["1b", "270m"].iter().any(|size| {
+            name.split(|c: char| !c.is_ascii_alphanumeric())
+                .any(|part| part == *size)
+        });
+    // "-VL" as a word or a suffix: Qwen2.5-VL, qwen2.5vl, Kimi-VL, DeepSeek-VL2.
+    let vl = name
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '.')
+        .any(|part| part.trim_end_matches(char::is_numeric).ends_with("vl"));
+    gemma3 || vl || FAMILIES.iter().any(|family| name.contains(family))
+}
+
+/// Whether Ollama at `root` says `model` reads images (its `vision` capability);
+/// none when it can't be asked.
+pub fn ollama_sees_images(root: &str, key: Option<&str>, model: &str) -> Option<bool> {
+    let body = serde_json::json!({ "model": model }).to_string();
+    let reply = http(
+        &format!("{root}/api/show"),
+        Some(&body),
+        key,
+        Duration::from_secs(3),
+    )
+    .ok()?;
+    if reply.status != 200 {
+        return None;
+    }
+    let json: serde_json::Value = serde_json::from_str(&reply.body).ok()?;
+    let capabilities = json.get("capabilities")?.as_array()?;
+    Some(capabilities.iter().any(|c| c == "vision"))
+}
+
 /// A model's key in OpenCode's config: its id without `/` or `#`, which OpenCode
 /// reads as provider and variant separators.
 fn opencode_key(id: &str) -> String {
@@ -662,7 +726,15 @@ fn opencode_config(
         }
         let listed: serde_json::Map<String, serde_json::Value> = models
             .iter()
-            .map(|m| (m.id.clone(), json!({ "name": m.id })))
+            .map(|m| {
+                let mut entry = json!({ "name": m.id });
+                // Images (screenshots, `Ctrl-b I`) go only to models that see them.
+                if sees_images(&m.id) {
+                    entry["attachment"] = json!(true);
+                    entry["modalities"] = json!({ "input": ["text", "image"], "output": ["text"] });
+                }
+                (m.id.clone(), entry)
+            })
             .collect();
         config["provider"] = json!({ "server": {
             "npm": "@ai-sdk/openai-compatible",
@@ -694,9 +766,15 @@ fn opencode_config(
             let listed: serde_json::Map<String, serde_json::Value> = models
                 .iter()
                 .map(|m| {
+                    // Images (screenshots, `Ctrl-b I`) go only to models that see them.
+                    let input = if sees_images(&m.id) {
+                        json!(["text", "image"])
+                    } else {
+                        json!(["text"])
+                    };
                     let mut entry = json!({
                         "modelID": m.id,
-                        "capabilities": { "tools": true, "input": ["text"], "output": ["text"] },
+                        "capabilities": { "tools": true, "input": input, "output": ["text"] },
                     });
                     if let Some(context) = m.context {
                         entry["limit"] = json!({ "context": context, "output": (context / 4).clamp(1024, 16384) });
@@ -906,6 +984,81 @@ mod tests {
     }
 
     #[test]
+    fn vision_models_are_told_apart_by_name() {
+        for id in [
+            "Qwen/Qwen2.5-VL-7B-Instruct",
+            "qwen2.5vl:7b",
+            "qwen3-vl:8b",
+            "OpenGVLab/InternVL3-8B",
+            "deepseek-ai/deepseek-vl2-small",
+            "moonshotai/Kimi-VL-A3B-Instruct",
+            "llava:13b",
+            "llama3.2-vision:11b",
+            "meta-llama/Llama-4-Scout-17B-16E-Instruct",
+            "gemma3:4b",
+            "google/gemma-3-27b-it",
+            "mistralai/Pixtral-12B-2409",
+            "mistral-small3.1:24b",
+            "minicpm-v:8b",
+            "moondream",
+            "zai-org/GLM-4.5V",
+        ] {
+            assert!(sees_images(id), "{id}");
+        }
+        for id in [
+            "Qwen/Qwen3-Coder-30B",
+            "qwen3:8b",
+            "gpt-oss:20b",
+            "gemma3:1b",
+            "google/gemma-3-1b-it",
+            "gemma3:270m",
+            "gemma3n:e4b",
+            "deepseek-r1:14b",
+            "meta-llama/Llama-3.1-8B-Instruct",
+            "kimi-k2.6",
+        ] {
+            assert!(!sees_images(id), "{id}");
+        }
+    }
+
+    #[test]
+    fn opencode_is_told_which_models_take_images() {
+        let models = [
+            Model {
+                id: "Qwen/Qwen2.5-VL-7B-Instruct".into(),
+                context: None,
+            },
+            Model {
+                id: "Qwen/Qwen3-Coder-30B".into(),
+                context: None,
+            },
+        ];
+        // OpenCode 2 on vLLM: image input for the vision model only.
+        let (_, env) = opencode(&endpoint(Kind::Vllm, None), None, &models, true);
+        let config: serde_json::Value = serde_json::from_str(&env[0].1).unwrap();
+        let listed = &config["providers"]["server"]["models"];
+        assert_eq!(
+            listed["Qwen-Qwen2.5-VL-7B-Instruct"]["capabilities"]["input"],
+            serde_json::json!(["text", "image"])
+        );
+        assert_eq!(
+            listed["Qwen-Qwen3-Coder-30B"]["capabilities"]["input"],
+            serde_json::json!(["text"])
+        );
+        // OpenCode 1: attachments and image input, the same way.
+        let (_, env) = opencode(&endpoint(Kind::Vllm, None), None, &models, false);
+        let config: serde_json::Value = serde_json::from_str(&env[0].1).unwrap();
+        let listed = &config["provider"]["server"]["models"];
+        let vision = &listed["Qwen/Qwen2.5-VL-7B-Instruct"];
+        assert_eq!(vision["attachment"], true);
+        assert_eq!(
+            vision["modalities"]["input"],
+            serde_json::json!(["text", "image"])
+        );
+        assert!(listed["Qwen/Qwen3-Coder-30B"].get("attachment").is_none());
+    }
+
+    #[test]
     fn opencode_1_gets_its_older_config() {
         let models = [Model {
             id: "qwen3:8b".into(),
@@ -1011,6 +1164,30 @@ mod tests {
             }
         });
         (root, seen)
+    }
+
+    #[test]
+    fn ollama_says_which_models_read_images() {
+        if crate::platform::which("curl").is_none() {
+            return;
+        }
+        // As Ollama answers /api/show (abridged).
+        let show = |capabilities: &str| {
+            format!(
+                r#"{{"modelfile":"FROM x","details":{{"family":"gemma3"}},"model_info":{{}},"capabilities":{capabilities},"modified_at":"2026-11-01T10:00:00Z"}}"#
+            )
+        };
+        let (root, seen) =
+            fake_server(vec![("/api/show", 200, show(r#"["completion","vision"]"#))]);
+        assert_eq!(ollama_sees_images(&root, None, "gemma3"), Some(true));
+        let (method, _, body) = seen.lock().unwrap()[0].clone();
+        assert_eq!(method, "POST /api/show");
+        assert_eq!(body, r#"{"model":"gemma3"}"#);
+        let (root, _) = fake_server(vec![("/api/show", 200, show(r#"["completion","tools"]"#))]);
+        assert_eq!(ollama_sees_images(&root, None, "qwen3-coder"), Some(false));
+        // An unknown model, or a server that isn't Ollama: can't say.
+        let (root, _) = fake_server(Vec::new());
+        assert_eq!(ollama_sees_images(&root, None, "nope"), None);
     }
 
     #[test]

@@ -3077,15 +3077,18 @@ impl App {
         };
         terminal.paste(&crate::screenshot::reference(agent, &path))?;
         let title = terminal.title.clone();
+        let blind = blind_local_model(&terminal.launch);
         self.focused = target;
         self.sidebar_focus = false;
-        self.notice(match source {
-            crate::screenshot::Source::Clipboard => {
-                format!("Image from the clipboard → {title}: type your question")
-            }
-            crate::screenshot::Source::File(name) => {
-                format!("{name} → {title}: type your question")
-            }
+        let what = match source {
+            crate::screenshot::Source::Clipboard => "Image from the clipboard".to_string(),
+            crate::screenshot::Source::File(name) => name,
+        };
+        self.notice(match blind {
+            Some(model) => format!(
+                "{what} → {title} · {model} can't read images: start it on a vision model (gemma3, qwen2.5vl, llama3.2-vision)"
+            ),
+            None => format!("{what} → {title}: type your question"),
         });
         Ok(())
     }
@@ -5767,6 +5770,30 @@ fn is_json(buffer: &Buffer) -> bool {
 }
 /// How often files on screen are compared with the disk, for an AI's edits.
 const DISK_CHECK: Duration = Duration::from_millis(250);
+/// The local model an AI pane started on, when it's known not to read images: the
+/// Local LLM and OpenCode on Ollama (which says, here or on your model server) or
+/// on a vLLM server (judged by the model's name, as OpenCode is told).
+fn blind_local_model(launch: &Launch) -> Option<String> {
+    let Launch::Agent { name, model, .. } = launch else {
+        return None;
+    };
+    let model = model.as_deref().filter(|m| !m.is_empty())?;
+    if !matches!(name.as_str(), "local" | "opencode") {
+        return None;
+    }
+    let sees = match crate::model_server::endpoint().ok().flatten() {
+        Some(server) if server.kind == crate::model_server::Kind::Ollama => {
+            crate::model_server::ollama_sees_images(&server.root, server.key.as_deref(), model)
+        }
+        Some(_) => Some(crate::model_server::sees_images(model)),
+        None => {
+            let host = std::env::var("OLLAMA_HOST").ok();
+            let root = crate::screenshot::local_ollama(host.as_deref());
+            crate::model_server::ollama_sees_images(&root, None, model)
+        }
+    };
+    (sees == Some(false)).then(|| model.to_string())
+}
 /// How often AI panes' conversations are checked for the model and effort in use.
 const MODEL_CHECK: Duration = Duration::from_secs(1);
 

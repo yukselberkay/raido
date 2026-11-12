@@ -17,6 +17,11 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
   outside Raido, and ⌘V's empty paste in Ghostty, iTerm2 and others now reaches
   Codex as Ctrl-V too.
 
+- **Local vision models take screenshots:** OpenCode on your model server is told
+  which models read images (Qwen2.5-VL, InternVL, Pixtral, Gemma 3, llava… by name
+  on vLLM), so it sends them; the Local LLM (`ollama run`) gets the path to ask
+  about. `Ctrl-b I` says when the pane's Ollama model has no `vision` capability.
+
 - **AI panes show their model and effort** at the bottom right of the pane, such as
   `Opus 5.5 · xhigh` for Claude Code or `gpt-5.6-sol · medium` for Codex, read from
   the conversation the agent writes, so they're what the last answer used. A
