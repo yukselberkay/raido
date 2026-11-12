@@ -187,6 +187,12 @@ pub struct Config {
     /// Have that AI explain new changes by itself once the agents stop, so the
     /// explanation is waiting when you open the review (`s` still asks at once).
     pub review_ai_auto: bool,
+    /// Gitignored files the review tracks anyway, by name: `*` stands for any
+    /// characters (`"*.md"`, `"NOTES*"`), a pattern with `/` matches the path from
+    /// the project folder. Files over 2 MB and dependency, build and cache folders
+    /// are left out. `[]` reviews no gitignored file.
+    #[serde(deserialize_with = "one_or_more")]
+    pub review_ignored: Vec<String>,
     /// Connect Claude Code to Raido as to VS Code: it sees your file and selection.
     pub claude_ide: bool,
     /// Mouse wheel scrolls what's under the pointer, a click focuses it and a drag
@@ -237,6 +243,7 @@ impl Default for Config {
             review_summary: true,
             review_ai: vec!["auto".into()],
             review_ai_auto: true,
+            review_ignored: vec!["*.md".into(), "*.txt".into()],
             claude_ide: true,
             mouse: true,
             ai: BTreeMap::new(),

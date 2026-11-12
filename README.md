@@ -760,7 +760,20 @@ review. Edits you make in another editor *while* an agent works can't be told ap
 and show up too (keep them with `y`). It works with every CLI, needs no setup, and
 never writes to your repository: the snapshots go into Raido's own Git index and
 object store in your cache folder, deleted when Raido quits. `.gitignore`d files
-(build output, `node_modules`) are left out.
+(build output, `node_modules`) are left out, except notes: gitignored `.md` and
+`.txt` files are reviewed too, as named by `review_ignored`.
+
+**Gitignored notes** (`review_ignored = ["*.md", "*.txt"]`, the default): a
+`TODO.txt` or a `plans/` folder you keep out of Git is still reviewed when an agent
+edits, adds or deletes in it, and keeping or undoing works as for any file. They
+stay ignored in your repository; only Raido's own snapshot takes them in. A pattern
+matches file names (`"*.md"`, `"NOTES*"`; `*` is any characters, letters match in
+either case), or the path from the project folder when it has a `/`
+(`"plans/*.md"`). Left out whatever the patterns say: files over 2 MB, and anything
+under dependency, build and cache folders (`node_modules`, `target`, `build`,
+`dist`, `.venv`, `__pycache__`…), nested repositories and Python environments. A
+large ignored folder is looked through 5,000 entries at a time. `[]` reviews no
+gitignored file.
 
 The review needs a Git repository (`git init` makes one) and lasts while Raido runs.
 Set `review_changes = false` to turn it off.
@@ -1665,6 +1678,7 @@ theme immediately. The configuration supports:
 | `review_changes` | `true` | Track the files AI panes change, to [review, keep or undo](#review-ai-changes) them (`Ctrl-b v`) |
 | `review_summary` | `true` | In the review, list what each file's change added, changed and removed, and sum it up at the end, read from the code without AI |
 | `review_ai_auto` | `true` | Explain new agent changes in the review by themselves once the agents stop (`false`: only on `s`) |
+| `review_ignored` | `["*.md", "*.txt"]` | [Gitignored files](#review-ai-changes) the review tracks anyway, by name (`"*.md"`) or path (`"plans/*.md"`); not over 2 MB or in dependency and build folders; `[]` for none |
 | `review_ai` | `"auto"` | Which AI explains the changes in the review, or a list to try in order: `"auto"`, `"claude"`, `"codex"`, `"gemini"`, `"local"`, each with an optional `:model`, a command, or `"off"` |
 | `claude_ide` | `true` | Let Claude Code [see your editor](#ai-panes-see-your-editor) (the file and selection) as in VS Code |
 | `format_on_save` | `["go"]` | Languages whose files get imports organized and formatting from their server on save ([Go: tidy on save](#go-tidy-on-save)) |

@@ -1565,6 +1565,7 @@ impl App {
                 .panes
                 .iter()
                 .any(|(id, p)| matches!(p, Pane::Changes(_)) && !self.docked.contains(id));
+            self.changes.ignored.clone_from(&self.config.review_ignored);
             self.redraw |= self.changes.tick(&busy, agents, watching);
             self.changes.auto = self.config.review_ai_auto;
             if self.changes.auto {

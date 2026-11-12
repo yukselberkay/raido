@@ -10,6 +10,13 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **Gitignored notes are reviewed** (`review_ignored`): when an agent edits, adds or
+  deletes a gitignored `.md` or `.txt` file (a `TODO.txt`, a private `plans/`
+  folder), the review shows it and can keep or undo it like any other file. Your
+  repository still ignores them; only Raido's own snapshot takes them in. Other
+  patterns can be named (`"*.org"`, `"plans/*.md"`), `[]` turns it off. Files over
+  2 MB and dependency, build and cache folders stay out.
+
 - **JSON formatting:** `:format` lays out a `.json` file one value per line,
   indented as the file is (else `tab_width`), with no language server. Key order and
   the exact text of strings and numbers are kept; invalid JSON is left alone and

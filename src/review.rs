@@ -38,6 +38,34 @@ const CONTEXT: usize = 3;
 const TIMEOUT: Duration = Duration::from_secs(30);
 /// Stores left behind by a Raido that didn't quit cleanly are cleared after this.
 const STALE: Duration = Duration::from_secs(7 * 24 * 3600);
+/// Gitignored files (`review_ignored`) larger than this aren't taken in: logs, mostly.
+const MAX_IGNORED: u64 = MAX_TEXT as u64;
+/// Entries looked at inside gitignored folders per snapshot, at most, so a big one
+/// isn't walked through every couple of seconds.
+const MAX_LOOK: usize = 5000;
+/// Gitignored folders never looked into for `review_ignored`: dependencies, builds
+/// and caches. Nested repositories and Python environments are skipped too.
+const SKIP: [&str; 17] = [
+    ".raido",
+    ".git",
+    "node_modules",
+    "target",
+    "build",
+    "dist",
+    "__pycache__",
+    "site-packages",
+    ".venv",
+    "venv",
+    ".tox",
+    ".cache",
+    ".next",
+    ".gradle",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+];
+/// Filesystems that keep times to two seconds (FAT) blur what's older than that.
+const COARSE: Duration = Duration::from_secs(2);
 
 /// Git, pointed at the project but with Raido's own index and object store. Objects
 /// the repository already has are read from it (an alternate), never written to it.
@@ -116,8 +144,15 @@ impl Store {
         )
     }
 
-    /// Every file of the project as it is now (`.gitignore` applies), as a tree.
-    fn snapshot(&self) -> Result<String, String> {
+    /// Every file of the project as it is now as a tree: `.gitignore` applies, except
+    /// to gitignored files whose names match `ignored` (`review_ignored`). Also the
+    /// ones of those taken in only now that were already there, unchanged, before
+    /// `since` (paths from `top`): they aren't news.
+    fn snapshot(
+        &self,
+        ignored: &[String],
+        since: Option<SystemTime>,
+    ) -> Result<(String, BTreeSet<String>), String> {
         let take = || {
             // Only Raido uses this index, one snapshot at a time: a lock is left over
             // from a git that took too long and was stopped.
@@ -135,15 +170,129 @@ impl Store {
                 ],
                 None,
             );
-            self.git(&self.top, &["write-tree"], None)
+            // Gitignored files once in this index stay in it, and `add -A` keeps them
+            // current: only the ones not taken in yet are looked for.
+            let found = if ignored.is_empty() {
+                Vec::new()
+            } else {
+                self.ignored_files(ignored)
+            };
+            if !found.is_empty() {
+                let list: Vec<u8> = found
+                    .iter()
+                    .flat_map(|path| path.bytes().chain([0]))
+                    .collect();
+                let _ = self.git(
+                    &self.root,
+                    &[
+                        "--literal-pathspecs",
+                        "add",
+                        "-f",
+                        "--ignore-errors",
+                        "--pathspec-from-file=-",
+                        "--pathspec-file-nul",
+                    ],
+                    Some(&list),
+                );
+            }
+            let tree = self.git(&self.top, &["write-tree"], None)?;
+            Ok::<_, String>((tree, found))
         };
-        let tree = take().or_else(|_| {
+        let (tree, found) = take().or_else(|_| {
             // The repository dropped objects our index still names (gc): start over.
             let _ = fs::remove_file(self.dir.join("index"));
             self.seed();
             take()
         })?;
-        Ok(String::from_utf8_lossy(&tree).trim().to_string())
+        let mut settled = BTreeSet::new();
+        if let Some(since) = since.and_then(|since| since.checked_sub(COARSE)) {
+            let prefix = self
+                .root
+                .strip_prefix(&self.top)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            for path in found {
+                let modified = fs::metadata(self.root.join(&path)).and_then(|m| m.modified());
+                if modified.is_ok_and(|m| m < since) {
+                    settled.insert(if prefix.is_empty() {
+                        path
+                    } else {
+                        format!("{prefix}/{path}")
+                    });
+                }
+            }
+        }
+        Ok((String::from_utf8_lossy(&tree).trim().to_string(), settled))
+    }
+
+    /// The gitignored files not in this index yet whose names match `patterns`, at
+    /// most `MAX_IGNORED` bytes, outside dependency and build folders: paths from
+    /// `root`, the shallowest first.
+    fn ignored_files(&self, patterns: &[String]) -> Vec<String> {
+        let Ok(out) = self.git(
+            &self.root,
+            &[
+                "ls-files",
+                "-z",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+                "--directory",
+            ],
+            None,
+        ) else {
+            return Vec::new();
+        };
+        let skipped = |path: &str| path.split('/').any(|part| SKIP.contains(&part));
+        let wanted = |path: &str| {
+            patterns.iter().any(|p| matches(p, path))
+                && fs::symlink_metadata(self.root.join(path))
+                    .is_ok_and(|m| m.is_file() && m.len() <= MAX_IGNORED)
+        };
+        let mut found = Vec::new();
+        let mut folders = std::collections::VecDeque::new();
+        for entry in out.split(|b| *b == 0) {
+            let Ok(entry) = std::str::from_utf8(entry) else {
+                continue;
+            };
+            match entry.strip_suffix('/') {
+                Some(folder) if !skipped(folder) => folders.push_back(folder.to_string()),
+                None if !entry.is_empty() && !skipped(entry) && wanted(entry) => {
+                    found.push(entry.to_string())
+                }
+                _ => {}
+            }
+        }
+        // Whole folders Git ignores: walked here, as far as MAX_LOOK goes.
+        let mut budget = MAX_LOOK;
+        while let Some(folder) = folders.pop_front() {
+            let path = self.root.join(&folder);
+            if path.join(".git").exists() || path.join("pyvenv.cfg").exists() {
+                continue;
+            }
+            let Ok(entries) = fs::read_dir(&path) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                if budget == 0 {
+                    return found;
+                }
+                budget -= 1;
+                let (Ok(kind), Some(name)) = (
+                    entry.file_type(),
+                    entry.file_name().to_str().map(String::from),
+                ) else {
+                    continue;
+                };
+                let relative = format!("{folder}/{name}");
+                if kind.is_dir() && !SKIP.contains(&name.as_str()) {
+                    folders.push_back(relative);
+                } else if kind.is_file() && wanted(&relative) {
+                    found.push(relative);
+                }
+            }
+        }
+        found
     }
 
     /// Files that differ between two snapshots: (path, blob before, executable).
@@ -303,6 +452,42 @@ pub(crate) fn run_for(
             .unwrap_or("failed");
         Err(format!("{what}: {}", line.trim()))
     }
+}
+
+/// Whether a `review_ignored` pattern names the file at `path` (from the project
+/// folder): `*` stands for any characters, `?` for one, letters match in either
+/// case. A pattern with `/` is matched against the path, any other against the name.
+fn matches(pattern: &str, path: &str) -> bool {
+    let subject = if pattern.contains('/') {
+        path
+    } else {
+        path.rsplit('/').next().unwrap_or(path)
+    };
+    let lower = |text: &str| -> Vec<char> { text.chars().flat_map(char::to_lowercase).collect() };
+    let (pattern, name) = (lower(pattern), lower(subject));
+    // Where the last `*` was, and how much of the name it has taken.
+    let (mut p, mut n, mut star) = (0, 0, None);
+    while n < name.len() {
+        match pattern.get(p) {
+            Some('*') => {
+                star = Some((p, n));
+                p += 1;
+            }
+            Some(c) if *c == '?' || *c == name[n] => {
+                p += 1;
+                n += 1;
+            }
+            _ => match star {
+                Some((at, taken)) => {
+                    star = Some((at, taken + 1));
+                    p = at + 1;
+                    n = taken + 1;
+                }
+                None => return false,
+            },
+        }
+    }
+    pattern[p..].iter().all(|c| *c == '*')
 }
 
 /// Remove stores of other Raidos that are long gone.
@@ -564,6 +749,8 @@ struct Outcome {
     changed: Vec<(String, Base)>,
     /// The diff of every file under review, the ones above included.
     diffs: Vec<FileDiff>,
+    /// When it began.
+    taken: SystemTime,
 }
 
 struct Job {
@@ -574,18 +761,28 @@ struct Job {
     pending: BTreeMap<String, Base>,
     /// Files Raido wrote itself (saved, undone), by their fingerprint.
     written: HashMap<String, Option<u64>>,
+    /// The gitignored files to review too (`review_ignored`).
+    ignored: Vec<String>,
+    /// When the snapshot `from` began.
+    since: Option<SystemTime>,
 }
 
 impl Job {
     fn run(self) -> Result<Outcome, String> {
+        let taken = SystemTime::now();
         let store = match self.store {
             Some(store) => store,
             None => Arc::new(Store::open(&self.root, &self.dir)?),
         };
-        let tree = store.snapshot()?;
+        let (tree, settled) = store.snapshot(&self.ignored, self.since)?;
         let mut changed = Vec::new();
         if let Some(from) = self.from.filter(|f| *f != tree) {
             for (path, blob, executable) in store.changes(&from, &tree)? {
+                // A gitignored file taken in only now (`review_ignored` just
+                // changed) that was there unchanged before: not an agent's new file.
+                if blob.is_none() && settled.contains(&path) {
+                    continue;
+                }
                 if let Some(written) = self.written.get(&path) {
                     let now = read(&store.top.join(&path))?.map(|b| fingerprint(&b));
                     if *written == now {
@@ -610,6 +807,7 @@ impl Job {
             tree,
             changed,
             diffs,
+            taken,
         })
     }
 }
@@ -674,6 +872,10 @@ pub struct Changes {
     /// The last answer left files out and explained more than before: ask for
     /// the rest.
     more: bool,
+    /// Gitignored files to review too, by name (`review_ignored`).
+    pub ignored: Vec<String>,
+    /// When the snapshot `tree` began.
+    taken: Option<SystemTime>,
 }
 
 impl Changes {
@@ -714,6 +916,8 @@ impl Changes {
             auto: false,
             agent_news: false,
             more: false,
+            ignored: Vec::new(),
+            taken: None,
         }
     }
 
@@ -762,6 +966,8 @@ impl Changes {
             from: self.tree.clone(),
             pending: self.pending.clone(),
             written: std::mem::take(&mut self.written),
+            ignored: self.ignored.clone(),
+            since: self.taken,
         };
         let (sender, receiver) = mpsc::channel();
         thread::spawn(move || {
@@ -790,6 +996,7 @@ impl Changes {
         self.error = None;
         self.store = Some(outcome.store);
         self.tree = Some(outcome.tree);
+        self.taken = Some(outcome.taken);
         // The agents that worked before this snapshot began or while it ran (one that
         // starts mid-snapshot may already be writing) own what changed; with none,
         // the changes are yours.
@@ -2101,6 +2308,134 @@ pub(crate) mod tests {
         turn(&mut changes, "Claude", |_| {});
         assert_eq!(changes.files.len(), 3);
         assert!(changes.files.iter().all(|f| f.name != "mine.txt"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gitignored_notes_named_in_review_ignored_are_reviewed_too() {
+        let (_dir, root, mut changes) = project();
+        changes.ignored = vec!["*.md".into(), "*.txt".into()];
+        let write = |path: &str, text: &str| {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        };
+        // Ignored by name, a whole ignored folder, and the ones left out: another
+        // kind of file, dependencies, builds, a nested repository, a big file.
+        fs::write(
+            root.join(".gitignore"),
+            "target/\nnotes.md\nprivate/\n*.log\n",
+        )
+        .unwrap();
+        write("notes.md", "one\ntwo\n");
+        write("private/plan.txt", "a\nb\n");
+        write("private/deep/idea.md", "idea\n");
+        write("private/node_modules/pkg/README.md", "pkg\n");
+        write("private/clone/.git/HEAD", "ref: refs/heads/main\n");
+        write("private/clone/README.md", "clone\n");
+        write("private/big.txt", &"x".repeat(MAX_IGNORED as usize + 1));
+        write("target/out.txt", "built\n");
+        write("app.log", "started\n");
+        let index = fs::read(root.join(".git/index")).unwrap();
+        turn(&mut changes, "Claude", |_| {
+            write("notes.md", "one\nTWO\n");
+            write("private/plan.txt", "a\nb\nc\n");
+            write("private/new.md", "new\n");
+            fs::remove_file(root.join("private/deep/idea.md")).unwrap();
+            write("private/node_modules/pkg/README.md", "pkg 2\n");
+            write("private/clone/README.md", "clone 2\n");
+            write("private/big.txt", &"y".repeat(MAX_IGNORED as usize + 1));
+            write("target/out.txt", "built again\n");
+            write("app.log", "started\nstopped\n");
+        });
+        let names: Vec<(&str, Status)> = changes
+            .files
+            .iter()
+            .map(|f| (f.name.as_str(), f.status))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("notes.md", Status::Modified),
+                ("private/deep/idea.md", Status::Deleted),
+                ("private/new.md", Status::Added),
+                ("private/plan.txt", Status::Modified),
+            ]
+        );
+        assert_eq!(changes.by("Claude"), 4);
+        // Kept and undone like any other file.
+        changes.undo(&Target::File("notes.md".into())).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("notes.md")).unwrap(),
+            "one\ntwo\n"
+        );
+        changes
+            .undo(&Target::File("private/deep/idea.md".into()))
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("private/deep/idea.md")).unwrap(),
+            "idea\n"
+        );
+        // Your repository's index is untouched: the files stay ignored there.
+        assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
+
+        // With the setting emptied, a new ignored note goes unnoticed.
+        changes.ignored.clear();
+        turn(&mut changes, "Claude", |_| write("private/later.md", "x\n"));
+        assert!(changes.files.iter().all(|f| f.path != "private/later.md"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn notes_already_there_when_review_ignored_names_them_arent_an_agents() {
+        let (_dir, root, mut changes) = project();
+        fs::write(root.join(".gitignore"), "target/\nnotes.md\n").unwrap();
+        let notes = root.join("notes.md");
+        fs::write(&notes, "mine\n").unwrap();
+        let file = fs::File::options().write(true).open(&notes).unwrap();
+        file.set_modified(SystemTime::now() - Duration::from_secs(60))
+            .unwrap();
+        turn(&mut changes, "Claude", |_| {});
+        // The setting comes on while an agent works on something else.
+        turn(&mut changes, "Claude", |changes| {
+            changes.ignored = vec!["*.md".into()];
+            fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        });
+        let names: Vec<&str> = changes.files.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["src/main.rs"]);
+        // From then on the note's changes are reviewed.
+        turn(&mut changes, "Claude", |_| {
+            fs::write(&notes, "theirs\n").unwrap()
+        });
+        let names: Vec<(&str, Status)> = changes
+            .files
+            .iter()
+            .map(|f| (f.name.as_str(), f.status))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("notes.md", Status::Modified),
+                ("src/main.rs", Status::Modified)
+            ]
+        );
+    }
+
+    #[test]
+    fn review_ignored_patterns_match_names_or_paths() {
+        assert!(matches("*.md", "README.md"));
+        assert!(matches("*.md", "docs/Guide.MD"), "either case");
+        assert!(matches("*.txt", "a/b/c.txt"));
+        assert!(!matches("*.md", "page.mdx"));
+        assert!(!matches("*.md", "md"));
+        assert!(matches("NOTES*", "notes-2026.txt"));
+        assert!(matches("todo.???", "TODO.txt"));
+        assert!(!matches("todo.???", "todo.md"));
+        assert!(matches("*a*b*", "xxaxxbxx"));
+        assert!(!matches("*a*b", "xxbxxa"));
+        assert!(matches("private/*.md", "private/deep/idea.md"));
+        assert!(!matches("private/*.md", "public/idea.md"));
+        assert!(matches("*", "anything"));
     }
 
     /// Every file under `dir`, for comparing a repository's objects.

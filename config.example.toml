@@ -51,6 +51,10 @@ ai_sound = "default"
 # each change. Raido snapshots the project with Git into its own store while agents
 # run (never your repository). false turns it off.
 review_changes = true
+# Gitignored files the review tracks anyway, by name ("*" is any characters; a
+# pattern with / matches the path from the project folder). Files over 2 MB and
+# dependency, build and cache folders are left out. [] tracks none.
+review_ignored = ["*.md", "*.txt"]
 # Mouse wheel scrolls the pane (or explorer, guide) under the pointer; a click
 # focuses a pane, puts the editor cursor there, or opens an explorer entry. While
 # Raido has the mouse, Ctrl-b y hands it to the terminal for selecting and copying
