@@ -331,13 +331,18 @@ fn conversation_id() -> String {
 /// `<config>/projects/<project>/<id>.jsonl`, config being `$CLAUDE_CONFIG_DIR` or
 /// `~/.claude`.
 fn claude_conversation_exists(id: &str) -> bool {
-    let Some(Ok(projects)) = claude_home().map(|b| std::fs::read_dir(b.join("projects"))) else {
-        return false;
-    };
+    claude_home().is_some_and(|home| claude_conversation_file(&home, id).is_some())
+}
+
+/// Where Claude Code keeps conversation `id`: in the folder of the project it began
+/// in, which needn't be this one.
+fn claude_conversation_file(home: &Path, id: &str) -> Option<PathBuf> {
     let file = format!("{id}.jsonl");
-    projects
+    std::fs::read_dir(home.join("projects"))
+        .ok()?
         .flatten()
-        .any(|project| project.path().join(&file).is_file())
+        .map(|project| project.path().join(&file))
+        .find(|path| path.is_file())
 }
 
 /// Claude Code's own directory: `$CLAUDE_CONFIG_DIR`, else `~/.claude`.
@@ -434,6 +439,9 @@ pub struct App {
     git_receiver: Option<Receiver<GitInfo>>,
     last_git: Instant,
     last_reload: Instant,
+    /// What each AI pane's agent works with (model, effort), from its conversation.
+    pub agent_models: HashMap<usize, crate::agent_model::Watch>,
+    last_model_check: Instant,
     /// When the open files were last compared with the disk.
     last_disk_check: Instant,
     /// When the explorer last looked for files made or removed outside it.
@@ -573,6 +581,8 @@ impl App {
             git_receiver: Some(workspace::refresh_git(root.clone())),
             last_git: Instant::now(),
             last_reload: Instant::now(),
+            agent_models: HashMap::new(),
+            last_model_check: Instant::now() - MODEL_CHECK,
             last_disk_check: Instant::now(),
             last_tree_check: Instant::now(),
             theme_stamp,
@@ -1684,6 +1694,67 @@ impl App {
         if self.last_disk_check.elapsed() >= DISK_CHECK {
             self.last_disk_check = Instant::now();
             self.follow_open_files();
+        }
+        if self.last_model_check.elapsed() >= MODEL_CHECK {
+            self.last_model_check = Instant::now();
+            self.follow_models(claude_home().as_deref());
+        }
+    }
+    /// Read what each AI pane's agent works with from the conversation it writes,
+    /// for the model and effort at the bottom right of the pane. Claude Code's
+    /// conversations are under `claude` (its home); Codex's are found by id.
+    fn follow_models(&mut self, claude: Option<&Path>) {
+        use crate::agent_model::{Agent, InUse};
+        if self.panes.values().any(|p| {
+            matches!(p, Pane::Terminal(t) if t.exited.is_none()
+                && matches!(&t.launch, Launch::Agent { name, session: None, .. } if name == "codex"))
+        }) {
+            self.follow_codex();
+        }
+        let panes = &self.panes;
+        self.agent_models
+            .retain(|id, _| matches!(panes.get(id), Some(Pane::Terminal(t)) if t.is_agent()));
+        for (id, pane) in &self.panes {
+            let Pane::Terminal(t) = pane else {
+                continue;
+            };
+            let Launch::Agent {
+                name,
+                model,
+                session,
+            } = &t.launch
+            else {
+                continue;
+            };
+            let watch = self.agent_models.entry(*id).or_default();
+            // Until the agent says, the model it was started with, if any.
+            if watch.in_use.is_none() {
+                if let Some(model) = model.as_deref().filter(|m| !m.is_empty()) {
+                    watch.in_use = Some(InUse {
+                        model: model.to_string(),
+                        effort: None,
+                    });
+                    self.redraw = true;
+                }
+            }
+            let (agent, conversation) = match name.as_str() {
+                "claude" => {
+                    // The conversation it's in now: /resume and /clear move it.
+                    let live = claude
+                        .zip(t.pid())
+                        .and_then(|(home, pid)| claude_live_conversation(home, pid));
+                    (Agent::Claude, live.or_else(|| session.clone()))
+                }
+                "codex" => (Agent::Codex, session.clone()),
+                _ => continue,
+            };
+            let Some(conversation) = conversation else {
+                continue;
+            };
+            self.redraw |= watch.follow(agent, &conversation, |id| match agent {
+                Agent::Claude => claude.and_then(|home| claude_conversation_file(home, id)),
+                Agent::Codex => crate::conversations::codex_conversation_file(id),
+            });
         }
     }
     /// Show what changed on disk in the files on screen, keeping the cursor and
@@ -5622,6 +5693,8 @@ fn is_json(buffer: &Buffer) -> bool {
 }
 /// How often files on screen are compared with the disk, for an AI's edits.
 const DISK_CHECK: Duration = Duration::from_millis(250);
+/// How often AI panes' conversations are checked for the model and effort in use.
+const MODEL_CHECK: Duration = Duration::from_secs(1);
 
 /// The word (letters, digits, `_`) under or just before the cursor, and where it
 /// starts (a char index).
@@ -7890,6 +7963,80 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         );
         assert!(app.docked.is_empty());
         assert_eq!(app.visible(), vec![a, b, c]);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn ai_panes_show_their_model_and_effort_at_the_bottom_right() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("claude-home");
+        std::fs::create_dir_all(home.join("sessions")).unwrap();
+        // Conversations live in the folder of the project they began in.
+        let project = home.join("projects/-elsewhere");
+        std::fs::create_dir_all(&project).unwrap();
+        let mut app = App::new(dir.path().into(), None, false).unwrap();
+        let editor = app.focused;
+        app.open_terminal(
+            Some(("/bin/sh", vec!["-c".into(), "exec sleep 30".into()])),
+            Some(Axis::Horizontal),
+        )
+        .unwrap();
+        let pane = app.focused;
+        let first = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+        let second = "6e0449c2-4ca3-4fde-a7c1-23fda501b633";
+        let Some(Pane::Terminal(t)) = app.panes.get_mut(&pane) else {
+            unreachable!()
+        };
+        t.launch = Launch::Agent {
+            name: "claude".into(),
+            model: None,
+            session: Some(first.into()),
+        };
+        let pid = t.pid().unwrap();
+        let reply = |model: &str, effort: &str| {
+            format!(
+                "{{\"type\":\"assistant\",\"isSidechain\":false,\"effort\":\"{effort}\",\"message\":{{\"model\":\"{model}\",\"content\":[]}}}}\n"
+            )
+        };
+        // The bottom line of a pane's frame.
+        let bottom = |app: &mut App, id: usize| {
+            let lines = screen(app, 120, 30);
+            let rect = app.rectangles.iter().find(|(i, _)| *i == id).unwrap().1;
+            let row: String = lines[usize::from(rect.bottom() - 1)]
+                .chars()
+                .skip(usize::from(rect.x))
+                .take(usize::from(rect.width))
+                .collect();
+            row
+        };
+        // Nothing answered yet: nothing shown.
+        app.follow_models(Some(&home));
+        assert!(!bottom(&mut app, pane).contains("Opus"));
+        std::fs::write(
+            project.join(format!("{first}.jsonl")),
+            reply("claude-opus-5-5", "xhigh"),
+        )
+        .unwrap();
+        app.follow_models(Some(&home));
+        // At the right end, short of the corner.
+        let line = bottom(&mut app, pane);
+        let label = " Opus 5.5 · xhigh ";
+        let at = line.find(label).map(|at| line[..at].chars().count());
+        let width = line.chars().count();
+        assert_eq!(at, Some(width - 1 - label.chars().count()), "{line:?}");
+        assert!(!bottom(&mut app, editor).contains("Opus"), "AI panes only");
+        // /resume'd into a conversation on another model: Claude's registry says so.
+        std::fs::write(
+            project.join(format!("{second}.jsonl")),
+            reply("claude-sonnet-4-5-20250929", "medium"),
+        )
+        .unwrap();
+        std::fs::write(
+            home.join("sessions").join(format!("{pid}.json")),
+            format!(r#"{{"pid": {pid}, "sessionId": "{second}"}}"#),
+        )
+        .unwrap();
+        app.follow_models(Some(&home));
+        assert!(bottom(&mut app, pane).contains(" Sonnet 4.5 · medium "));
     }
     #[cfg(unix)]
     #[test]

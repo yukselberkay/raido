@@ -294,7 +294,22 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let inner = if bare {
             rect
         } else {
-            let block = pane_panel(&title, &theme, active);
+            let mut block = pane_panel(&title, &theme, active);
+            // An AI pane's model and effort, at the bottom right of its frame.
+            let in_use = app
+                .agent_models
+                .get(&id)
+                .and_then(|w| w.in_use.as_ref())
+                .filter(
+                    |_| matches!(app.panes.get(&id), Some(Pane::Terminal(t)) if t.exited.is_none()),
+                )
+                .and_then(|m| m.label(usize::from(rect.width.saturating_sub(4))));
+            if let Some(label) = in_use {
+                let shade = if active { &theme.accent } else { &theme.muted };
+                block = block.title_bottom(
+                    Line::styled(label, Style::default().fg(color(shade))).right_aligned(),
+                );
+            }
             let inner = block.inner(rect);
             frame.render_widget(block, rect);
             // Maximized (Ctrl-b z): say so, and that other panes are still running.

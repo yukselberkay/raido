@@ -778,6 +778,16 @@ gitignored file.
 The review needs a Git repository (`git init` makes one) and lasts while Raido runs.
 Set `review_changes = false` to turn it off.
 
+### Model and effort in AI panes
+
+The bottom right of a Claude Code or Codex pane shows the model and effort it works
+with, such as `Opus 5.5 · xhigh` or `gpt-5.6-sol · medium` (only the model when the
+pane is narrow). Raido reads them from the conversation the agent writes, so they're
+what the last answer actually used. A model or effort you switch to (`/model`,
+`/effort`) shows once the next answer starts; a brand-new conversation shows it
+after its first answer, or the model you started it with (`:ai claude:sonnet`).
+Other CLIs show the model they were started with, if any.
+
 ### AI panes see your editor
 
 As with Claude Code's VS Code extension, Claude Code in an AI pane knows where you

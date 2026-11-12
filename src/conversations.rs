@@ -114,14 +114,18 @@ fn codex_home() -> Option<PathBuf> {
 /// Whether Codex still has conversation `id`:
 /// `<home>/sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl`.
 pub fn codex_conversation_exists(id: &str) -> bool {
-    let Some(home) = codex_home() else {
-        return false;
-    };
+    codex_conversation_file(id).is_some()
+}
+
+/// Where Codex keeps conversation `id`, the newest days looked through first.
+pub fn codex_conversation_file(id: &str) -> Option<PathBuf> {
+    let home = codex_home()?;
     let file = format!("-{id}.jsonl");
     day_folders(&home.join("sessions"), usize::MAX)
         .iter()
         .flat_map(|day| std::fs::read_dir(day).into_iter().flatten().flatten())
-        .any(|f| f.file_name().to_string_lossy().ends_with(&file))
+        .find(|f| f.file_name().to_string_lossy().ends_with(&file))
+        .map(|f| f.path())
 }
 
 /// `sessions/YYYY/MM/DD` folders, newest first, at most `limit`.

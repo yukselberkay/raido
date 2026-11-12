@@ -1,3 +1,4 @@
+mod agent_model;
 mod app;
 mod clipboard;
 mod config;
