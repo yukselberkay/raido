@@ -441,6 +441,10 @@ pub struct App {
     last_reload: Instant,
     /// What each AI pane's agent works with (model, effort), from its conversation.
     pub agent_models: HashMap<usize, crate::agent_model::Watch>,
+    /// Raido's window has the focus (the terminal reports it).
+    window_focused: bool,
+    /// The pane last told it has the focus, for programs that ask (`CSI ? 1004 h`).
+    focus_told: Option<usize>,
     last_model_check: Instant,
     /// When the open files were last compared with the disk.
     last_disk_check: Instant,
@@ -582,6 +586,8 @@ impl App {
             last_git: Instant::now(),
             last_reload: Instant::now(),
             agent_models: HashMap::new(),
+            window_focused: true,
+            focus_told: None,
             last_model_check: Instant::now() - MODEL_CHECK,
             last_disk_check: Instant::now(),
             last_tree_check: Instant::now(),
@@ -1695,6 +1701,7 @@ impl App {
             self.last_disk_check = Instant::now();
             self.follow_open_files();
         }
+        self.tell_focus();
         if self.last_model_check.elapsed() >= MODEL_CHECK {
             self.last_model_check = Instant::now();
             self.follow_models(claude_home().as_deref());
@@ -1829,6 +1836,14 @@ impl App {
         let result = match event {
             Event::Key(key) if key.kind != KeyEventKind::Release => self.key(key),
             Event::Mouse(mouse) => self.mouse(mouse),
+            Event::FocusGained => {
+                self.window_focused = true;
+                Ok(())
+            }
+            Event::FocusLost => {
+                self.window_focused = false;
+                Ok(())
+            }
             Event::Paste(text) => {
                 if self.explorer_search.is_some() && self.sidebar_focus && !self.git_focus {
                     self.explorer_search_type(&text);
@@ -1868,6 +1883,24 @@ impl App {
         if self.mode != Mode::Insert {
             self.menu = None;
         }
+        self.tell_focus();
+    }
+    /// Tell terminal panes that asked when they gain and lose the focus, as a
+    /// terminal would: the focused pane has it while Raido's window does. Claude Code
+    /// then offers to paste an image you put on the clipboard meanwhile.
+    fn tell_focus(&mut self) {
+        let focused = (self.window_focused && !self.sidebar_focus)
+            .then_some(self.focused)
+            .filter(|id| matches!(self.panes.get(id), Some(Pane::Terminal(_))));
+        if focused == self.focus_told {
+            return;
+        }
+        for (id, gained) in [(self.focus_told, false), (focused, true)] {
+            if let Some(Pane::Terminal(t)) = id.and_then(|id| self.panes.get_mut(&id)) {
+                let _ = t.focus(gained);
+            }
+        }
+        self.focus_told = focused;
     }
     /// Raido takes the mouse (config `mouse`), except in copy view, which is for
     /// selecting text with it.
@@ -3017,6 +3050,45 @@ impl App {
         self.notice(format!("{reference} → {title}: type your question"));
         Ok(())
     }
+    /// Ctrl-b I (`:image`): the image on the clipboard, else the screenshot you just
+    /// took, into the AI pane's prompt, which Claude Code and Codex attach. Works in
+    /// any terminal, also where ⌘V can't paste an image (Terminal.app).
+    fn attach_image(&mut self) -> Result<()> {
+        let keep =
+            crate::screenshot::keep_folder().context("No cache folder to keep the image in")?;
+        let folders = crate::screenshot::screenshot_folders();
+        self.attach_image_from(&keep, &folders, crate::screenshot::clipboard_image)
+    }
+    fn attach_image_from(
+        &mut self,
+        keep: &Path,
+        screenshots: &[PathBuf],
+        clipboard: impl FnOnce(&Path) -> bool,
+    ) -> Result<()> {
+        let target = self.ai_pane()?;
+        let (path, source) =
+            crate::screenshot::take(keep, screenshots, clipboard).map_err(anyhow::Error::msg)?;
+        let Some(Pane::Terminal(terminal)) = self.panes.get_mut(&target) else {
+            unreachable!("an agent pane");
+        };
+        let agent = match &terminal.launch {
+            Launch::Agent { name, .. } => Some(name.as_str()),
+            _ => None,
+        };
+        terminal.paste(&crate::screenshot::reference(agent, &path))?;
+        let title = terminal.title.clone();
+        self.focused = target;
+        self.sidebar_focus = false;
+        self.notice(match source {
+            crate::screenshot::Source::Clipboard => {
+                format!("Image from the clipboard → {title}: type your question")
+            }
+            crate::screenshot::Source::File(name) => {
+                format!("{name} → {title}: type your question")
+            }
+        });
+        Ok(())
+    }
     /// The AI pane a request goes to: the focused one, else the one used last, else
     /// the first on screen.
     fn ai_pane(&self) -> Result<usize> {
@@ -3124,6 +3196,7 @@ impl App {
             KeyCode::Char('G') => self.git_pane()?,
             KeyCode::Char('v') => self.changes_pane()?,
             KeyCode::Char('i') => self.mention()?,
+            KeyCode::Char('I') => self.attach_image()?,
             KeyCode::Char('z') => {
                 self.zoom = !self.zoom;
                 self.sidebar_focus = false;
@@ -5612,6 +5685,7 @@ impl App {
             }
             "theme" | "themes" => self.open_picker(),
             "mention" => self.mention()?,
+            "image" | "screenshot" => self.attach_image()?,
             "explain" => self.explain_commit(arg)?,
             // :ide, Claude Code's connection to Raido.
             "ide" => {
@@ -7963,6 +8037,110 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         );
         assert!(app.docked.is_empty());
         assert_eq!(app.visible(), vec![a, b, c]);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn ai_panes_hear_the_focus_and_take_screenshots() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().into(), None, false).unwrap();
+        let editor = app.focused;
+        // A program that turns on bracketed paste and focus reports, as Claude Code
+        // and Codex do, and prints every byte it gets in hex.
+        let script = "printf '\\033[?2004h\\033[?1004h'; stty raw -echo; \
+                      while true; do dd bs=1 count=1 2>/dev/null | od -An -tx1; done";
+        app.open_terminal(
+            Some(("/bin/sh", vec!["-c".into(), script.into()])),
+            Some(Axis::Horizontal),
+        )
+        .unwrap();
+        let pane = app.focused;
+        let launch = |app: &mut App, name: &str| {
+            let Some(Pane::Terminal(t)) = app.panes.get_mut(&pane) else {
+                unreachable!()
+            };
+            t.launch = Launch::Agent {
+                name: name.into(),
+                model: None,
+                session: None,
+            };
+        };
+        launch(&mut app, "codex");
+        let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        // Waits until the program has printed `bytes` (and everything before).
+        let heard = |app: &mut App, bytes: &[u8]| {
+            let want = hex(bytes);
+            for _ in 0..300 {
+                app.tick();
+                let Some(Pane::Terminal(t)) = app.panes.get(&pane) else {
+                    unreachable!()
+                };
+                // The hex digits it printed, without the transcript's color resets.
+                let got: String = t
+                    .transcript()
+                    .replace("\x1b[0m", "")
+                    .split_whitespace()
+                    .collect();
+                if t.wants_focus() && got.ends_with(&want) {
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            false
+        };
+        assert!(heard(&mut app, b""), "focus reports on");
+        // Raido's window loses the focus, gets it back; then another pane takes it.
+        app.event(Event::FocusLost);
+        assert!(heard(&mut app, b"\x1b[O"));
+        app.event(Event::FocusGained);
+        assert!(heard(&mut app, b"\x1b[I"));
+        app.focused = editor;
+        app.tick();
+        assert!(heard(&mut app, b"\x1b[O"));
+        app.focused = pane;
+        app.tick();
+        assert!(heard(&mut app, b"\x1b[I"));
+        // ⌘V with only an image on the clipboard pastes nothing: Codex reads the
+        // clipboard on Ctrl-V, Claude Code on the empty paste itself.
+        app.event(Event::Paste(String::new()));
+        assert!(heard(&mut app, b"\x16"));
+        launch(&mut app, "claude");
+        app.event(Event::Paste(String::new()));
+        assert!(heard(&mut app, b"\x1b[200~\x1b[201~"));
+        // Ctrl-b I from an editor: the clipboard's image, kept in Raido's folder,
+        // goes to the AI pane as a path, which then has the focus.
+        app.focused = editor;
+        let keep = dir.path().join("images");
+        let shots = dir.path().join("Desktop");
+        std::fs::create_dir_all(&shots).unwrap();
+        app.attach_image_from(&keep, std::slice::from_ref(&shots), |to| {
+            std::fs::write(to, b"\x89PNG").is_ok()
+        })
+        .unwrap();
+        assert_eq!(app.focused, pane);
+        let image = std::fs::read_dir(&keep)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let mut pasted = b"\x1b[200~".to_vec();
+        pasted.extend_from_slice(image.to_string_lossy().as_bytes());
+        pasted.extend_from_slice(b"\x1b[201~");
+        assert!(heard(&mut app, &pasted));
+        assert!(
+            app.message.contains("Image from the clipboard"),
+            "{}",
+            app.message
+        );
+        // No image anywhere: said, and nothing typed.
+        let error = app
+            .attach_image_from(&keep, &[shots], |_| false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("no screenshot in the last 30 minutes"),
+            "{error}"
+        );
     }
     #[cfg(unix)]
     #[test]

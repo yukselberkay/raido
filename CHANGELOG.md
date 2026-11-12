@@ -10,6 +10,13 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **Screenshots for AI panes:** `Ctrl-b I` (`:image`) attaches the image on the
+  clipboard, else the screenshot you took in the last 30 minutes, to the AI pane's
+  prompt, in any terminal (also Terminal.app, where ⌘V can't paste an image).
+  Claude Code and Codex attach it as an image. Ctrl-V in an AI pane keeps working as
+  outside Raido, and ⌘V's empty paste in Ghostty, iTerm2 and others now reaches
+  Codex as Ctrl-V too.
+
 - **AI panes show their model and effort** at the bottom right of the pane, such as
   `Opus 5.5 · xhigh` for Claude Code or `gpt-5.6-sol · medium` for Codex, read from
   the conversation the agent writes, so they're what the last answer used. A
@@ -44,6 +51,10 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
   `key_env` names the variable with its API key.
 
 ### Fixed
+
+- **Programs in panes hear when they gain and lose the focus** (focus reports, as
+  in tmux with `focus-events on`): switching panes or windows tells them. Claude
+  Code then shows its `Image in clipboard · ctrl+v to paste` hint inside Raido.
 
 - **Security:** opening a project whose `.raido/session.json` came with it (a
   repository you cloned) could start a program or script it named, as if it were an

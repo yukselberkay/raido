@@ -29,6 +29,7 @@ mod pyenv;
 mod quickdiff;
 mod remote;
 mod review;
+mod screenshot;
 mod search;
 mod session;
 #[cfg(test)]
@@ -46,7 +47,9 @@ mod workspace;
 use anyhow::{bail, Context, Result};
 use crossterm::{
     cursor::{Hide, Show},
-    event::{self, DisableBracketedPaste, EnableBracketedPaste},
+    event::{
+        self, DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange,
+    },
     execute,
     terminal::{
         disable_raw_mode, enable_raw_mode, BeginSynchronizedUpdate, EndSynchronizedUpdate,
@@ -117,6 +120,7 @@ impl Drop for TerminalGuard {
         let _ = execute!(
             io::stdout(),
             DisableBracketedPaste,
+            DisableFocusChange,
             LeaveAlternateScreen,
             Show
         );
@@ -255,6 +259,7 @@ fn main() -> Result<()> {
         let _ = execute!(
             io::stdout(),
             DisableBracketedPaste,
+            DisableFocusChange,
             LeaveAlternateScreen,
             Show
         );
@@ -268,6 +273,7 @@ fn main() -> Result<()> {
         io::stdout(),
         EnterAlternateScreen,
         EnableBracketedPaste,
+        EnableFocusChange,
         Hide
     )?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;

@@ -59,6 +59,8 @@ pub struct TerminalPane {
     /// When the AI pane last finished; taken by [`finished`](Self::finished).
     done: Option<Instant>,
     finished: bool,
+    /// The program asked to hear when it gains and loses the focus (`CSI ? 1004 h`).
+    focus_reports: Arc<AtomicBool>,
 }
 
 /// A prompt sent to an AI pane.
@@ -143,6 +145,8 @@ impl TerminalPane {
         let reply_writer = Arc::clone(&writer);
         let colors = Arc::new(Mutex::new(terminal_colors(theme)));
         let query_colors = Arc::clone(&colors);
+        let focus_reports = Arc::new(AtomicBool::new(false));
+        let focus_clone = Arc::clone(&focus_reports);
         thread::spawn(move || {
             let mut bytes = [0u8; 8192];
             let mut queries = QueryResponder::default();
@@ -170,6 +174,7 @@ impl TerminalPane {
                         } else {
                             break;
                         };
+                        focus_clone.store(queries.focus_reports, Ordering::Relaxed);
                         if !replies.is_empty() {
                             if let Ok(mut writer) = reply_writer.lock() {
                                 let _ = writer.write_all(&replies);
@@ -201,6 +206,7 @@ impl TerminalPane {
             bells,
             done: None,
             finished: false,
+            focus_reports,
         })
     }
     /// The program's process id while it runs.
@@ -383,7 +389,30 @@ impl TerminalPane {
         parser.set_scrollback(to);
         true
     }
+    /// Tell the program it gained or lost the focus, if it asked to know: Claude
+    /// Code, for one, then offers to paste an image you put on the clipboard.
+    pub fn focus(&mut self, gained: bool) -> Result<()> {
+        if self.exited.is_some() || !self.focus_reports.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        self.send(if gained { b"\x1b[I" } else { b"\x1b[O" })
+    }
+    /// Whether the program asked for focus reports.
+    #[cfg(test)]
+    pub fn wants_focus(&self) -> bool {
+        self.focus_reports.load(Ordering::Relaxed)
+    }
     pub fn paste(&mut self, text: &str) -> Result<()> {
+        // Nothing pasted is an image paste: with only an image on the clipboard, ⌘V
+        // in many terminals sends an empty paste. Claude Code reads the clipboard
+        // then; other agents (Codex) read it on Ctrl-V and ignore an empty paste.
+        if text.is_empty() {
+            if let Launch::Agent { name, .. } = &self.launch {
+                if name != "claude" {
+                    return self.send(b"\x16");
+                }
+            }
+        }
         let bracketed = self
             .parser
             .lock()
@@ -672,6 +701,8 @@ fn color_reply(code: u8, value: u32) -> String {
 #[derive(Default)]
 struct QueryResponder {
     sequence: Vec<u8>,
+    /// The program turned focus reports on (`CSI ? 1004 h`) and not off again.
+    focus_reports: bool,
 }
 impl QueryResponder {
     fn feed(&mut self, byte: u8, cursor: (u16, u16), colors: (u32, u32)) -> Option<String> {
@@ -707,6 +738,9 @@ impl QueryResponder {
         if !complete {
             return None;
         }
+        if let Some(on) = focus_mode(&self.sequence) {
+            self.focus_reports = on;
+        }
         let reply = match self.sequence.as_slice() {
             b"\x1b[6n" => Some(format!("\x1b[{};{}R", cursor.0 + 1, cursor.1 + 1)),
             b"\x1b[5n" => Some("\x1b[0n".into()),
@@ -720,6 +754,21 @@ impl QueryResponder {
         self.sequence.clear();
         reply
     }
+}
+
+/// `CSI ? … 1004 … h` turns focus reports on, `… l` off; other sequences say nothing.
+fn focus_mode(sequence: &[u8]) -> Option<bool> {
+    let body = sequence.strip_prefix(b"\x1b[?")?;
+    let (last, params) = body.split_last()?;
+    let on = match last {
+        b'h' => true,
+        b'l' => false,
+        _ => return None,
+    };
+    params
+        .split(|b| *b == b';')
+        .any(|param| param == b"1004")
+        .then_some(on)
 }
 
 impl Drop for TerminalPane {
@@ -856,6 +905,23 @@ mod tests {
         assert_eq!(key(KeyCode::F(12), ctrl), b"\x1b[24;5~");
         assert!(key(KeyCode::F(13), KeyModifiers::NONE).is_empty());
     }
+    #[test]
+    fn programs_turn_focus_reports_on_and_off() {
+        let mut responder = QueryResponder::default();
+        let mut feed = |bytes: &[u8]| {
+            for byte in bytes {
+                responder.feed(*byte, (0, 0), (0, 0));
+            }
+            responder.focus_reports
+        };
+        assert!(!feed(b"\x1b[?2004h"), "bracketed paste alone");
+        assert!(feed(b"\x1b[?1004h"));
+        assert!(feed(b"text \x1b[?25l"), "other modes leave it on");
+        assert!(!feed(b"\x1b[?2004;1004l"), "off in a list");
+        assert!(feed(b"\x1b[?1049;1004h"), "on in a list");
+        assert!(feed(b"\x1b[1004l"), "not a private mode");
+    }
+
     #[test]
     fn pasted_text_cant_end_the_paste_early() {
         let sneaky = "echo hi\x1b[201~rm -rf ~\r";

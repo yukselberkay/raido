@@ -438,6 +438,7 @@ Shift on many keyboard layouts. On macOS, **Ctrl means Control, not Command**.
 | `Ctrl-b G` | Open the [Git pane](#git-pane); again focuses it, and when focused maximizes / restores it |
 | `Ctrl-b v` | [Review what AI agents changed](#review-ai-changes): keep or undo each change; again focuses the review, and when focused maximizes / restores it |
 | `Ctrl-b i` | [Hand the AI pane where you are](#ai-panes-see-your-editor): the file and the lines you selected, typed into its prompt as `@file#L10-20`, and on to that pane |
+| `Ctrl-b I` | [Give the AI pane a screenshot](#screenshots-and-images-in-ai-panes): the image on the clipboard, else the one you just took, attached to its prompt |
 | `PageUp` / `PageDown` (Fn-↑/↓ on a Mac) | Scroll a terminal or AI pane's history half a page; then ↑/↓ one line, Home/End top/bottom, Esc or typing returns. Full-screen programs (vim, less) get the keys instead |
 | `Ctrl-b [` | [Copy mode](#copying-from-terminal-and-ai-panes) in a terminal or AI pane |
 | `Ctrl-b Z` | [Copy view](#copying-from-terminal-and-ai-panes): only the focused pane's text; again to return |
@@ -777,6 +778,30 @@ gitignored file.
 
 The review needs a Git repository (`git init` makes one) and lasts while Raido runs.
 Set `review_changes = false` to turn it off.
+
+### Screenshots and images in AI panes
+
+Three ways to hand an AI pane a screenshot:
+
+- **`Ctrl-V` in the AI pane**, as outside Raido: Claude Code and Codex read the image
+  on the clipboard themselves and attach it (`[Image #1]`). On a Mac it's Ctrl-V,
+  not ⌘V: Terminal.app passes nothing on when the clipboard holds only an image.
+  Claude Code reminds you: switch back to Raido with an image on the clipboard and
+  it shows `Image in clipboard · ctrl+v to paste`.
+- **⌘V** in terminals that pass an image paste on as an empty paste (Ghostty,
+  iTerm2, kitty, WezTerm and others): Claude Code takes it as is, and Raido turns
+  it into Ctrl-V for Codex and other agents, which read the clipboard on that.
+- **`Ctrl-b I`** (or `:image`) from any pane, in any terminal: Raido takes the
+  image on the clipboard, else the screenshot you took in the last 30 minutes (the
+  newest image in your screenshot folder, the Desktop on a Mac unless you changed
+  it, `~/Pictures/Screenshots` on Linux), and types its path into the AI pane's
+  prompt, which then has the focus. Claude Code and Codex attach a pasted image
+  path; Gemini gets it as `@path`. The image is kept in Raido's cache folder for a
+  week, so the conversation can still read it. So `⌘⇧4`, then `Ctrl-b I` works
+  without the clipboard at all.
+
+Reading the clipboard's image uses `osascript` on a Mac, `wl-paste` or `xclip` on
+Linux and PowerShell on Windows.
 
 ### Model and effort in AI panes
 
@@ -1353,6 +1378,7 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 :git / :git all           Git pane: open, focus, or maximize / show all branches
 :changes [keep|undo]      Review AI agents' changes / keep all / undo all (asks)
 :mention                  Type a reference to your file and selection into the AI pane (Ctrl-b i)
+:image                    Attach the clipboard's image, else your latest screenshot, in the AI pane (Ctrl-b I)
 :explain [commit]         Have the AI pane's agent explain and review a commit (e in the Git pane)
 :ide                      Whether Claude Code is connected to Raido
 :files / :git side        Focus sidebar section

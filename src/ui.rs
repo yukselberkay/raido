@@ -3197,6 +3197,10 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
             "Type your file and selected lines into the AI pane (@file#L10-20)",
         ),
         (
+            ":image  or  Ctrl-b I",
+            "The clipboard's image, else your latest screenshot, into the AI pane",
+        ),
+        (
             ":explain [commit]  or  e in Git",
             "The AI pane's agent explains and reviews a commit",
         ),
