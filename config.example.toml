@@ -51,6 +51,11 @@ ai_sound = "default"
 # each change. Raido snapshots the project with Git into its own store while agents
 # run (never your repository). false turns it off.
 review_changes = true
+# macOS: ⌘V pastes a screenshot into an AI pane. While one is open, a screenshot put
+# on the clipboard is saved and its path added beside the image, since the
+# terminal's ⌘V pastes only text; the agent attaches it. Apps that take images still
+# get the image; text you copy is never touched. false turns it off.
+paste_screenshots = true
 # Gitignored files the review tracks anyway, by name ("*" is any characters; a
 # pattern with / matches the path from the project folder). Files over 2 MB and
 # dependency, build and cache folders are left out. [] tracks none.

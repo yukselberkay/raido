@@ -193,6 +193,11 @@ pub struct Config {
     /// are left out. `[]` reviews no gitignored file.
     #[serde(deserialize_with = "one_or_more")]
     pub review_ignored: Vec<String>,
+    /// macOS: ⌘V pastes a screenshot into an AI pane. While one is open, a screenshot
+    /// put on the clipboard is saved and its path added beside the image (the
+    /// terminal's ⌘V pastes only text); the agent attaches it. Apps that take images
+    /// still get the image.
+    pub paste_screenshots: bool,
     /// Connect Claude Code to Raido as to VS Code: it sees your file and selection.
     pub claude_ide: bool,
     /// Mouse wheel scrolls what's under the pointer, a click focuses it and a drag
@@ -248,6 +253,7 @@ impl Default for Config {
             review_ai: vec!["auto".into()],
             review_ai_auto: true,
             review_ignored: vec!["*.md".into(), "*.txt".into()],
+            paste_screenshots: true,
             claude_ide: true,
             mouse: true,
             ai: BTreeMap::new(),

@@ -445,6 +445,10 @@ pub struct App {
     pub agent_models: HashMap<usize, crate::agent_model::Watch>,
     /// Raido's window has the focus (the terminal reports it).
     window_focused: bool,
+    /// macOS: readies screenshots on the clipboard for ⌘V (`paste_screenshots`).
+    clipboard_watch: Option<crate::screenshot::Watcher>,
+    /// Where screenshots handed to agents are kept.
+    pub image_folder: Option<PathBuf>,
     /// The pane last told it has the focus, for programs that ask (`CSI ? 1004 h`).
     focus_told: Option<usize>,
     last_model_check: Instant,
@@ -590,6 +594,8 @@ impl App {
             last_reload: Instant::now(),
             agent_models: HashMap::new(),
             window_focused: true,
+            clipboard_watch: None,
+            image_folder: crate::screenshot::keep_folder(),
             focus_told: None,
             last_model_check: Instant::now() - MODEL_CHECK,
             last_disk_check: Instant::now(),
@@ -1718,6 +1724,7 @@ impl App {
             self.follow_open_files();
         }
         self.tell_focus();
+        self.watch_clipboard();
         if self.last_model_check.elapsed() >= MODEL_CHECK {
             self.last_model_check = Instant::now();
             self.follow_models(claude_home().as_deref());
@@ -1870,6 +1877,8 @@ impl App {
                 } else if let Some(input) = &mut self.input {
                     input.text.extend(text.chars().filter(|c| !c.is_control()));
                     Ok(())
+                } else if let Some(image) = self.pasted_image(&text) {
+                    self.paste_image(&image)
                 } else if let Some(Pane::Terminal(terminal)) = self.panes.get_mut(&self.focused) {
                     terminal.paste(&text)
                 } else if let Some((start, end)) = self.selection() {
@@ -3117,6 +3126,62 @@ impl App {
             None => format!("{what} → {title}: type your question"),
         });
         Ok(())
+    }
+    /// A paste into an AI pane that is the path of a screenshot Raido kept: ⌘V
+    /// with a screenshot on the clipboard (`paste_screenshots`).
+    fn pasted_image(&self, text: &str) -> Option<PathBuf> {
+        let Some(Pane::Terminal(t)) = self.panes.get(&self.focused) else {
+            return None;
+        };
+        if !t.is_agent() {
+            return None;
+        }
+        crate::screenshot::kept_image(self.image_folder.as_deref()?, text)
+    }
+    /// Hand the focused AI pane the screenshot at `path`, the way its agent takes one.
+    fn paste_image(&mut self, path: &Path) -> Result<()> {
+        let Some(Pane::Terminal(terminal)) = self.panes.get_mut(&self.focused) else {
+            return Ok(());
+        };
+        let agent = match &terminal.launch {
+            Launch::Agent { name, .. } => Some(name.as_str()),
+            _ => None,
+        };
+        terminal.paste(&crate::screenshot::reference(agent, path))?;
+        let title = terminal.title.clone();
+        self.notice(format!("Screenshot → {title}: type your question"));
+        Ok(())
+    }
+    /// Run the clipboard watcher (macOS, `paste_screenshots`) while an AI pane is
+    /// open and Raido's window has the focus, and say when a screenshot is ready.
+    fn watch_clipboard(&mut self) {
+        let wanted = cfg!(target_os = "macos")
+            && !cfg!(test)
+            && self.config.paste_screenshots
+            && self.window_focused
+            && self
+                .panes
+                .values()
+                .any(|p| matches!(p, Pane::Terminal(t) if t.is_agent() && t.exited.is_none()));
+        match (&self.clipboard_watch, wanted) {
+            (None, true) => {
+                self.clipboard_watch = self
+                    .image_folder
+                    .as_deref()
+                    .and_then(|keep| crate::screenshot::Watcher::start(keep, None));
+            }
+            (Some(_), false) => self.clipboard_watch = None,
+            _ => {}
+        }
+        if self
+            .clipboard_watch
+            .as_ref()
+            .and_then(|w| w.ready())
+            .is_some()
+        {
+            self.notice("Screenshot on the clipboard · ⌘V pastes it into the AI pane");
+            self.redraw = true;
+        }
     }
     /// The AI pane a request goes to: the focused one, else the one used last, else
     /// the first on screen.
@@ -8196,6 +8261,19 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
             error.contains("no screenshot in the last 30 minutes"),
             "{error}"
         );
+        // ⌘V with a screenshot on the clipboard pastes the path Raido put beside it
+        // (paste_screenshots): handed over the way the agent takes an image.
+        app.image_folder = Some(keep.clone());
+        launch(&mut app, "local");
+        app.event(Event::Paste(image.to_string_lossy().into_owned()));
+        let mut pasted = b"\x1b[200~".to_vec();
+        pasted.extend_from_slice(image.to_string_lossy().as_bytes());
+        pasted.extend_from_slice(b" \x1b[201~");
+        assert!(heard(&mut app, &pasted), "ollama run gets a space after it");
+        assert!(app.message.starts_with("Screenshot → "), "{}", app.message);
+        // Any other paste is just text.
+        app.event(Event::Paste("ab".into()));
+        assert!(heard(&mut app, b"\x1b[200~ab\x1b[201~"));
     }
     #[cfg(unix)]
     #[test]

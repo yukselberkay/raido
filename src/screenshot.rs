@@ -17,6 +17,68 @@ const WAIT: Duration = Duration::from_secs(5);
 /// What counts as an image file.
 const IMAGES: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
 
+/// macOS's ⌘V for screenshots (`paste_screenshots`): a helper watching the
+/// clipboard, which saves a screenshot put there and adds its path as text beside
+/// the image, so the terminal's ⌘V pastes the path and the agent attaches the image.
+/// Stopped when dropped (and by itself when Raido is gone).
+pub struct Watcher {
+    child: std::process::Child,
+    found: std::sync::mpsc::Receiver<PathBuf>,
+}
+
+impl Watcher {
+    /// Watch the clipboard (or the private pasteboard `pasteboard`, in tests),
+    /// keeping screenshots in `keep`. None where it can't run (not macOS).
+    pub fn start(keep: &Path, pasteboard: Option<&str>) -> Option<Self> {
+        use std::io::BufRead;
+        if !cfg!(target_os = "macos") {
+            return None;
+        }
+        fs::create_dir_all(keep).ok()?;
+        clear_old(keep);
+        let mut child = Command::new("osascript")
+            .args(["-l", "JavaScript", "-e", include_str!("clipboard_watch.js")])
+            .arg(keep)
+            .arg(pasteboard.unwrap_or_default())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .ok()?;
+        let lines = child.stderr.take()?;
+        let (send, found) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(lines).lines().map_while(Result::ok) {
+                if let Some(path) = line.strip_prefix("image ") {
+                    if send.send(PathBuf::from(path)).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        Some(Self { child, found })
+    }
+
+    /// The screenshot made ready for ⌘V since asked last, if any.
+    pub fn ready(&self) -> Option<PathBuf> {
+        self.found.try_iter().last()
+    }
+}
+
+impl Drop for Watcher {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Whether pasted `text` is a screenshot Raido kept in `keep`: the path the
+/// clipboard watcher (or Ctrl-b I) put there.
+pub fn kept_image(keep: &Path, text: &str) -> Option<PathBuf> {
+    let path = Path::new(text.trim());
+    (path.parent() == Some(keep) && is_image(path) && path.is_file()).then(|| path.to_path_buf())
+}
+
 /// Where the image came from.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Source {
@@ -280,6 +342,83 @@ mod tests {
         // An empty clipboard file isn't an image.
         let (_, source) = take(&keep, &[shots], |to| fs::write(to, b"").is_ok()).unwrap();
         assert_ne!(source, Source::Clipboard);
+    }
+
+    /// A private pasteboard's types and text, or puts an image file on it.
+    #[cfg(target_os = "macos")]
+    fn pasteboard(name: &str, put: Option<&Path>) -> String {
+        let script = r#"ObjC.import('AppKit');
+function run(argv) {
+  var pb = $.NSPasteboard.pasteboardWithName(argv[0]);
+  if (argv[1] === 'release') { pb.releaseGlobally; return ''; }
+  if (argv[1].indexOf('text:') === 0) {
+    pb.clearContents;
+    pb.setStringForType(argv[1].slice(5), 'public.utf8-plain-text');
+  } else if (argv[1]) {
+    pb.clearContents;
+    pb.setDataForType($.NSData.dataWithContentsOfFile(argv[1]), 'public.tiff');
+  }
+  var text = pb.stringForType('public.utf8-plain-text');
+  return ObjC.deepUnwrap(pb.types).join(',') + ' | ' + (text.isNil() ? '' : ObjC.unwrap(text));
+}"#;
+        let out = Command::new("osascript")
+            .args(["-l", "JavaScript", "-e", script, name])
+            .arg(put.map_or("".into(), |p| p.to_string_lossy().into_owned()))
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_screenshot_on_the_clipboard_gets_its_path_beside_it_for_cmd_v() {
+        let dir = tempfile::tempdir().unwrap();
+        let keep = dir.path().join("images");
+        // A private pasteboard: the system clipboard is left alone.
+        let name = format!("raido-test-{}", std::process::id());
+        // A TIFF, as some apps copy images: saved as PNG all the same.
+        let tiff = dir.path().join("shot.tiff");
+        let made = Command::new("sips")
+            .args(["-s", "format", "tiff"])
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/docs/raido-c-tiles.png"
+            ))
+            .arg("--out")
+            .arg(&tiff)
+            .output()
+            .unwrap();
+        assert!(made.status.success());
+        let watcher = Watcher::start(&keep, Some(&name)).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(pasteboard(&name, Some(&tiff)).contains("public.tiff"));
+        let mut ready = None;
+        for _ in 0..100 {
+            ready = watcher.ready();
+            if ready.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let path = ready.expect("the watcher readied the screenshot");
+        assert_eq!(fs::read(&path).unwrap()[..4], *b"\x89PNG");
+        assert_eq!(
+            kept_image(&keep, &path.to_string_lossy()),
+            Some(path.clone())
+        );
+        // The image stays; its path is there as text for the terminal's ⌘V.
+        let now = pasteboard(&name, None);
+        assert!(now.contains("public.png"), "{now}");
+        assert!(now.ends_with(&format!(" | {}", path.display())), "{now}");
+        // Text on the clipboard is left alone.
+        assert!(pasteboard(&name, Some(Path::new("text:a password"))).ends_with(" | a password"));
+        std::thread::sleep(Duration::from_millis(700));
+        assert_eq!(watcher.ready(), None);
+        assert!(pasteboard(&name, None).ends_with(" | a password"));
+        drop(watcher);
+        pasteboard(&name, Some(Path::new("release")));
+        assert_eq!(kept_image(&keep, "notes"), None);
+        assert_eq!(kept_image(dir.path(), &path.to_string_lossy()), None);
     }
 
     #[test]
