@@ -783,14 +783,16 @@ Set `review_changes = false` to turn it off.
 
 Three ways to hand an AI pane a screenshot:
 
-- **`Ctrl-V` in the AI pane**, as outside Raido: Claude Code and Codex read the image
-  on the clipboard themselves and attach it (`[Image #1]`). On a Mac it's Ctrl-V,
-  not ⌘V: Terminal.app passes nothing on when the clipboard holds only an image.
-  Claude Code reminds you: switch back to Raido with an image on the clipboard and
-  it shows `Image in clipboard · ctrl+v to paste`.
-- **⌘V** in terminals that pass an image paste on as an empty paste (Ghostty,
-  iTerm2, kitty, WezTerm and others): Claude Code takes it as is, and Raido turns
-  it into Ctrl-V for Codex and other agents, which read the clipboard on that.
+- **`Ctrl-V` in the AI pane** (Control, also on a Mac), as outside Raido: Claude
+  Code and Codex read the image on the clipboard themselves and attach it
+  (`[Image #1]`). Claude Code reminds you: switch back to Raido with an image on
+  the clipboard and it shows `Image in clipboard · ctrl+v to paste`.
+- **⌘V** only where your terminal passes an image paste on, as an empty paste:
+  Claude Code takes that as is, and Raido turns it into Ctrl-V for Codex and other
+  agents. Many terminals send nothing at all for an image (Claude Code's own tip
+  says "control+v (not cmd+v!)"). To see what yours does, run `raido --keys` with
+  a screenshot on the clipboard and press ⌘V: `Pasted nothing (an image paste)`
+  means ⌘V works; no line means it can't, so use Ctrl-V or `Ctrl-b I`.
 - **`Ctrl-b I`** (or `:image`) from any pane, in any terminal: Raido takes the
   image on the clipboard, else the screenshot you took in the last 30 minutes (the
   newest image in your screenshot folder, the Desktop on a Mac unless you changed

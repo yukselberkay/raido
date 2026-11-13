@@ -344,7 +344,7 @@ fn wait(redraw: bool, since_frame: Duration, since_lively: Duration) -> Duration
 /// that prints nothing is kept by the terminal (or the OS) and never reaches Raido.
 fn show_keys() -> Result<()> {
     use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
-    println!("Press keys or click to see what reaches Raido; Ctrl-c twice to stop.");
+    println!("Press keys, paste or click to see what reaches Raido; Ctrl-c twice to stop.");
     enable_raw_mode()?;
     let held = |modifiers: KeyModifiers| {
         let mut name = String::new();
@@ -364,10 +364,13 @@ fn show_keys() -> Result<()> {
     let mut out = io::stdout();
     write!(out, "{MOUSE_ON}")?;
     out.flush()?;
+    // Pastes and focus too: what ⌘V sends with a screenshot on the clipboard.
+    execute!(out, EnableBracketedPaste, EnableFocusChange)?;
     let mut last_ctrl_c = false;
     let result = (|| -> Result<()> {
         loop {
-            let key = match event::read()? {
+            let event = event::read()?;
+            let key = match event {
                 Event::Key(key) => key,
                 Event::Mouse(mouse) => {
                     if let MouseEventKind::Down(button) = mouse.kind {
@@ -379,6 +382,28 @@ fn show_keys() -> Result<()> {
                         );
                         io::Write::flush(&mut io::stdout())?;
                     }
+                    continue;
+                }
+                Event::Paste(text) => {
+                    let what = match text.chars().count() {
+                        // Terminals that do this for an image on the clipboard let
+                        // AI panes take it on ⌘V.
+                        0 => "Pasted nothing (an image paste)".to_string(),
+                        1 => "Pasted 1 character".to_string(),
+                        n => format!("Pasted {n} characters"),
+                    };
+                    print!("{what}\r\n");
+                    io::Write::flush(&mut io::stdout())?;
+                    continue;
+                }
+                Event::FocusGained | Event::FocusLost => {
+                    let what = if matches!(event, Event::FocusGained) {
+                        "Window focused"
+                    } else {
+                        "Window left"
+                    };
+                    print!("{what}\r\n");
+                    io::Write::flush(&mut io::stdout())?;
                     continue;
                 }
                 _ => continue,
@@ -404,6 +429,7 @@ fn show_keys() -> Result<()> {
         }
     })();
     write!(out, "{MOUSE_OFF}")?;
+    execute!(out, DisableBracketedPaste, DisableFocusChange)?;
     disable_raw_mode()?;
     result
 }

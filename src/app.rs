@@ -408,6 +408,8 @@ pub struct App {
     /// The left button went down in this pane (drawn at this rect, at this cell);
     /// a drag from there selects text in it.
     press: Option<(usize, Rect, (u16, u16))>,
+    /// When the left button went down: a quick slip isn't a drag.
+    pressed: Instant,
     /// The last click's time and cell, to tell a double click.
     last_click: Option<(Instant, (u16, u16))>,
     /// Text selected with the mouse in a pane other than an editor.
@@ -565,6 +567,7 @@ impl App {
             panes_area: Rect::default(),
             divider: None,
             press: None,
+            pressed: Instant::now(),
             last_click: None,
             grab: None,
             link_click: None,
@@ -2042,6 +2045,7 @@ impl App {
                         return Ok(());
                     }
                     self.press = Some((id, rect, at));
+                    self.pressed = Instant::now();
                     self.click_editor(id, rect, at);
                     if double {
                         self.press = None;
@@ -2247,6 +2251,14 @@ impl App {
     /// A drag from a click selects: in an editor, its text as a Visual selection
     /// (past the top or bottom it scrolls); elsewhere, the cells drawn in that pane
     /// only, whatever the drag runs over.
+    /// Whether the pointer moved from `from` to `at` on purpose, to select: two
+    /// cells, or one held a moment. A click whose pointer slips a cell is still a
+    /// click; selecting would copy a character or two over the clipboard, and with
+    /// it the screenshot you were about to paste.
+    fn dragged(&self, from: (u16, u16), at: (u16, u16)) -> bool {
+        let distance = from.0.abs_diff(at.0).max(from.1.abs_diff(at.1));
+        distance >= 2 || (distance == 1 && self.pressed.elapsed() >= SLIP)
+    }
     fn drag_select(&mut self, at: (u16, u16)) {
         let Some((id, rect, from)) = self.press else {
             return;
@@ -2254,7 +2266,7 @@ impl App {
         if let Some(Pane::Editor(buffer)) = self.panes.get(&id) {
             let buffer = *buffer;
             if self.mode != Mode::Visual {
-                if at == from {
+                if !self.dragged(from, at) {
                     return;
                 }
                 self.start_visual(Mode::Visual);
@@ -2270,9 +2282,10 @@ impl App {
             }
             return;
         }
+        let dragged = self.dragged(from, at);
         match self.grab.as_mut() {
             Some(grab) => grab.drag(at),
-            None if at != from => {
+            None if dragged => {
                 let mut grab = crate::grab::Grab::new(id, self.text_area(rect), from);
                 grab.drag(at);
                 self.grab = Some(grab);
@@ -5807,6 +5820,8 @@ fn blind_local_model(launch: &Launch) -> Option<String> {
     };
     (sees == Some(false)).then(|| model.to_string())
 }
+/// A press that moved one cell this quickly is a click whose pointer slipped.
+const SLIP: Duration = Duration::from_millis(300);
 /// How often AI panes' conversations are checked for the model and effort in use.
 const MODEL_CHECK: Duration = Duration::from_secs(1);
 
@@ -9405,6 +9420,31 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         mouse(&mut app, MouseEventKind::Up(MouseButton::Left), (x, y));
         assert_eq!(app.mode, Mode::Normal);
         assert!(app.grab.is_none());
+        // A click whose pointer slips a cell copies nothing, in a terminal pane or
+        // the editor: the clipboard keeps what's on it (a screenshot to paste).
+        app.clipboard.copy("screenshot".into(), false);
+        std::thread::sleep(DOUBLE_CLICK);
+        let (x, y) = find("alpha");
+        drag(&mut app, (x, y), (x + 1, y));
+        screen(&mut app, 120, 30);
+        assert!(app.grab.is_none());
+        std::thread::sleep(DOUBLE_CLICK);
+        let (x, y) = find("third");
+        drag(&mut app, (x, y), (x, y + 1));
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.clipboard.paste().0, "screenshot");
+        // Held a moment, one cell is a selection.
+        let (x, y) = find("alpha");
+        mouse(&mut app, MouseEventKind::Down(MouseButton::Left), (x, y));
+        std::thread::sleep(SLIP);
+        mouse(
+            &mut app,
+            MouseEventKind::Drag(MouseButton::Left),
+            (x + 1, y),
+        );
+        mouse(&mut app, MouseEventKind::Up(MouseButton::Left), (x + 1, y));
+        screen(&mut app, 120, 30);
+        assert_eq!(app.clipboard.paste().0, "al");
     }
     // Reads the wheel reports a program asked for back from `cat`'s echo, which
     // Windows' console turns into input events instead.

@@ -14,8 +14,9 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
   clipboard, else the screenshot you took in the last 30 minutes, to the AI pane's
   prompt, in any terminal (also Terminal.app, where ⌘V can't paste an image).
   Claude Code and Codex attach it as an image. Ctrl-V in an AI pane keeps working as
-  outside Raido, and ⌘V's empty paste in Ghostty, iTerm2 and others now reaches
-  Codex as Ctrl-V too.
+  outside Raido, and ⌘V's empty paste, in terminals that send one for an image, now
+  reaches Codex as Ctrl-V too. `raido --keys` shows pastes and focus changes, so you
+  can see what your terminal sends for ⌘V.
 
 - **Local vision models take screenshots:** OpenCode on your model server is told
   which models read images (Qwen2.5-VL, InternVL, Pixtral, Gemma 3, llava… by name
@@ -56,6 +57,11 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
   `key_env` names the variable with its API key.
 
 ### Fixed
+
+- **A click no longer copies over your clipboard:** a click whose pointer slipped
+  a cell selected and copied a character or two, replacing a screenshot you were
+  about to paste into an AI pane. Selecting now takes two cells of movement, or one
+  held a moment.
 
 - **Lines end with `\n`** (`line_endings = "lf"`, the default): a file with
   Windows `\r\n` endings opens with `\n` and is saved that way (the status bar
