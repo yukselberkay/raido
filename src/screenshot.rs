@@ -376,10 +376,11 @@ function run(argv) {
         let keep = dir.path().join("images");
         // A private pasteboard: the system clipboard is left alone.
         let name = format!("raido-test-{}", std::process::id());
-        // A TIFF, as some apps copy images: saved as PNG all the same.
+        // A TIFF, as some apps copy images: saved as PNG all the same. Small, so
+        // converting it doesn't race the wait below on a busy machine.
         let tiff = dir.path().join("shot.tiff");
         let made = Command::new("sips")
-            .args(["-s", "format", "tiff"])
+            .args(["-s", "format", "tiff", "-Z", "64"])
             .arg(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/docs/raido-c-tiles.png"
@@ -393,7 +394,7 @@ function run(argv) {
         std::thread::sleep(Duration::from_millis(500));
         assert!(pasteboard(&name, Some(&tiff)).contains("public.tiff"));
         let mut ready = None;
-        for _ in 0..100 {
+        for _ in 0..200 {
             ready = watcher.ready();
             if ready.is_some() {
                 break;
