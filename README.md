@@ -871,11 +871,13 @@ Linux and PowerShell on Windows.
 
 The bottom right of a Claude Code or Codex pane shows the model and effort it works
 with, such as `Opus 5.5 · xhigh` or `gpt-5.6-sol · medium` (only the model when the
-pane is narrow). Raido reads them from the conversation the agent writes, so they're
-what the last answer actually used. A model or effort you switch to (`/model`,
-`/effort`) shows once the next answer starts; a brand-new conversation shows it
-after its first answer, or the model you started it with (`:ai claude:sonnet`).
-Other CLIs show the model they were started with, if any.
+pane is narrow). Raido reads them from the conversation the agent writes: what the
+last answer used, and what you switched to since. Switching in the pane (Claude
+Code's `/model` or `/effort`, or the effort in its `/model` picker; Codex's
+`/model`) updates it within a moment, without waiting for an answer. Before the
+agent has said anything it shows the model you started it with
+(`:ai claude:sonnet`), if any. Other CLIs show the model they were started with,
+if any.
 
 ### AI panes see your editor
 

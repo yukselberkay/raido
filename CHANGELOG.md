@@ -31,8 +31,8 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 - **AI panes show their model and effort** at the bottom right of the pane, such as
   `Opus 5.5 · xhigh` for Claude Code or `gpt-5.6-sol · medium` for Codex, read from
-  the conversation the agent writes, so they're what the last answer used. A
-  `/model` or `/effort` change shows with the next answer.
+  the conversation the agent writes. Switching in the pane (`/model`, `/effort`)
+  updates it within a moment, without waiting for the next answer.
 
 - **Gitignored notes are reviewed** (`review_ignored`): when an agent edits, adds or
   deletes a gitignored `.md` or `.txt` file (a `TODO.txt`, a private `plans/`

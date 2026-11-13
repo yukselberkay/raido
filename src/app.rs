@@ -455,6 +455,8 @@ pub struct App {
     /// The pane last told it has the focus, for programs that ask (`CSI ? 1004 h`).
     focus_told: Option<usize>,
     last_model_check: Instant,
+    /// When Codex panes' new conversations were last looked for.
+    last_codex_find: Instant,
     /// When the open files were last compared with the disk.
     last_disk_check: Instant,
     /// When the explorer last looked for files made or removed outside it.
@@ -614,6 +616,7 @@ impl App {
             image_folder: crate::screenshot::keep_folder(),
             focus_told: None,
             last_model_check: Instant::now() - MODEL_CHECK,
+            last_codex_find: Instant::now() - CODEX_FIND,
             last_disk_check: Instant::now(),
             last_tree_check: Instant::now(),
             theme_stamp,
@@ -1857,10 +1860,14 @@ impl App {
     /// conversations are under `claude` (its home); Codex's are found by id.
     fn follow_models(&mut self, claude: Option<&Path>) {
         use crate::agent_model::{Agent, InUse};
-        if self.panes.values().any(|p| {
-            matches!(p, Pane::Terminal(t) if t.exited.is_none()
+        // Looking for a new Codex conversation lists its sessions: less often.
+        if self.last_codex_find.elapsed() >= CODEX_FIND
+            && self.panes.values().any(|p| {
+                matches!(p, Pane::Terminal(t) if t.exited.is_none()
                 && matches!(&t.launch, Launch::Agent { name, session: None, .. } if name == "codex"))
-        }) {
+            })
+        {
+            self.last_codex_find = Instant::now();
             self.follow_codex();
         }
         let panes = &self.panes;
@@ -6047,8 +6054,11 @@ fn blind_local_model(launch: &Launch) -> Option<String> {
 }
 /// A press that moved one cell this quickly is a click whose pointer slipped.
 const SLIP: Duration = Duration::from_millis(300);
-/// How often AI panes' conversations are checked for the model and effort in use.
-const MODEL_CHECK: Duration = Duration::from_secs(1);
+/// How often AI panes' conversations are checked for the model and effort in use:
+/// a look at each one's size, so a switch shows within a quarter of a second.
+const MODEL_CHECK: Duration = Duration::from_millis(250);
+/// How often a Codex pane's new conversation is looked for.
+const CODEX_FIND: Duration = Duration::from_secs(1);
 
 /// The word (letters, digits, `_`) under or just before the cursor, and where it
 /// starts (a char index).
