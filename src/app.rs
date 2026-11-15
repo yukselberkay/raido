@@ -414,6 +414,9 @@ pub struct App {
     last_click: Option<(Instant, (u16, u16))>,
     /// Text selected with the mouse in a pane other than an editor.
     pub grab: Option<crate::grab::Grab>,
+    /// The editor selection the mouse made and copied, as (buffer, anchor):
+    /// pasting over it puts in what was copied before it.
+    mouse_copy: Option<(usize, usize)>,
     /// A click on a link outside an editor (the pane, its text area, the cell):
     /// the link is read off the screen and opened when next drawn.
     pub link_click: Option<(usize, Rect, (u16, u16))>,
@@ -574,6 +577,7 @@ impl App {
             pressed: Instant::now(),
             last_click: None,
             grab: None,
+            mouse_copy: None,
             link_click: None,
             redraw: true,
             count: String::new(),
@@ -1884,6 +1888,7 @@ impl App {
                 } else if let Some((start, end)) = self.selection() {
                     // The terminal's paste (⌘V, Ctrl-Shift-V, Windows Terminal's Ctrl-V)
                     // replaces a selection, like Ctrl-v does.
+                    let text = self.paste_over(text, start, end);
                     if let Some(b) = self.active_buffer() {
                         let text = b.own_line_breaks(&text);
                         b.replace(start, end, &text);
@@ -2353,10 +2358,20 @@ impl App {
             return;
         }
         if let Some((start, end)) = self.selection() {
-            let text = self.buffers[self.buffer_id().expect("editor")].slice(start, end);
+            let id = self.buffer_id().expect("editor");
+            let text = self.buffers[id].slice(start, end);
             let what = crate::grab::describe(&text);
-            self.clipboard.copy(text, false);
-            self.notice(format!("Copied {what} · Ctrl-v or p pastes · Esc clears"));
+            let this = self.buffers[id].anchor.map(|anchor| (id, anchor));
+            let again = this.is_some() && this == self.mouse_copy;
+            let before = self.clipboard.copy_selected(text, again);
+            self.mouse_copy = this;
+            self.notice(if before {
+                format!(
+                    "Copied {what} · Ctrl-v or p pastes your previous copy over it · Esc clears"
+                )
+            } else {
+                format!("Copied {what} · Ctrl-v or p pastes · Esc clears")
+            });
         }
     }
     /// Open the link at `at` in pane `id`: an editor's at once, false when there is
@@ -2803,6 +2818,7 @@ impl App {
         } else {
             Mode::Normal
         };
+        self.mouse_copy = None;
         if let Some(b) = self.active_buffer() {
             b.end_group();
             b.anchor = Some(b.index());
@@ -2903,6 +2919,28 @@ impl App {
         }
         Ok(())
     }
+    /// What goes over the selection `[start, end)` for a paste of `text`: `text`,
+    /// unless it's the selection itself, copied as the mouse made it. Then it's the
+    /// copy from before, which goes back on the clipboard, so you can select in one
+    /// pane, then select in another and paste over it, as often as you like.
+    fn paste_over(&mut self, text: String, start: usize, end: usize) -> String {
+        let Some(id) = self.buffer_id() else {
+            return text;
+        };
+        let b = &self.buffers[id];
+        let made = b
+            .anchor
+            .is_some_and(|anchor| self.mouse_copy == Some((id, anchor)));
+        let lf = |text: &str| text.replace("\r\n", "\n").replace('\r', "\n");
+        if !made || lf(&text) != lf(&b.slice(start, end)) {
+            return text;
+        }
+        self.mouse_copy = None;
+        match self.clipboard.restore_before() {
+            Some((before, _)) => before,
+            None => text,
+        }
+    }
     fn visual_key(&mut self, key: KeyEvent) -> Result<()> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
@@ -2997,8 +3035,9 @@ impl App {
         self.end_visual();
     }
     fn replace_selection_with_clipboard(&mut self) -> Result<()> {
-        let (text, _) = self.clipboard.paste();
         if let Some((start, end)) = self.selection() {
+            let (text, _) = self.clipboard.paste();
+            let text = self.paste_over(text, start, end);
             let b = self.active_buffer().context("Focus an editor")?;
             let text = b.own_line_breaks(&text);
             b.replace(start, end, &text);
@@ -6633,6 +6672,81 @@ mod tests {
         assert_eq!(app.buffers[id].text.to_string(), code);
         app.command("w").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), code);
+    }
+    #[test]
+    fn pasting_over_a_mouse_selection_puts_in_what_was_copied_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.c");
+        let b = dir.path().join("b.c");
+        std::fs::write(&a, "int f(void)\n{\n\tif (x) {\n\t\treturn 1;\n\t}\n}\n").unwrap();
+        std::fs::write(&b, "one\nFIRST two\nSECOND three\nTHIRD four\n").unwrap();
+        let mut app = App::new(dir.path().into(), Some(a), false).unwrap();
+        app.command("vsplit").unwrap();
+        app.open(&b).unwrap();
+        let other = app.buffer_id().unwrap();
+        let mouse = |app: &mut App, kind, (column, row): (u16, u16)| {
+            app.event(Event::Mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            }));
+        };
+        let drag = |app: &mut App, from, to| {
+            mouse(app, MouseEventKind::Down(MouseButton::Left), from);
+            mouse(app, MouseEventKind::Drag(MouseButton::Left), to);
+            mouse(app, MouseEventKind::Up(MouseButton::Left), to);
+        };
+        // Where `text` is drawn now.
+        let find = |app: &mut App, text: &str| {
+            let lines = screen(app, 120, 30);
+            let y = lines.iter().position(|l| l.contains(text)).unwrap();
+            let x = lines[y][..lines[y].find(text).unwrap()].chars().count();
+            (x as u16, y as u16)
+        };
+        // In a.c, from the tab before "if" to the one before "}": tabs drawn 4 wide.
+        let (x, y) = find(&mut app, "if (x)");
+        drag(&mut app, (x - 4, y), (x - 3, y + 2));
+        let copied = "\tif (x) {\n\t\treturn 1;\n\t";
+        assert_eq!(app.clipboard.paste().0, copied);
+        // In b.c, selecting "FIRST" copies it, but Ctrl-v pastes a.c's lines over it.
+        let (x, y) = find(&mut app, "FIRST");
+        drag(&mut app, (x, y), (x + 4, y));
+        assert_eq!(app.clipboard.paste().0, "FIRST");
+        assert!(app.message.contains("pastes your previous copy over it"));
+        press(&mut app, KeyCode::Char('v'), KeyModifiers::CONTROL);
+        let text = app.buffers[other].text.to_string();
+        assert!(
+            text.starts_with(&format!("one\n{copied} two\n")),
+            "{text:?}"
+        );
+        // They stay on the clipboard: p over the next selection, then the
+        // terminal's own paste (Ctrl-Shift-V, ⌘V) over another, which pastes the
+        // system clipboard, the selection itself.
+        assert_eq!(app.clipboard.paste().0, copied);
+        let (x, y) = find(&mut app, "SECOND");
+        drag(&mut app, (x, y), (x + 5, y));
+        press(&mut app, KeyCode::Char('p'), KeyModifiers::NONE);
+        let (x, y) = find(&mut app, "THIRD");
+        drag(&mut app, (x, y), (x + 4, y));
+        app.event(Event::Paste("THIRD".into()));
+        let text = app.buffers[other].text.to_string();
+        assert_eq!(text.matches(copied).count(), 3, "{text:?}");
+        assert!(
+            !text.contains("SECOND") && !text.contains("THIRD"),
+            "{text:?}"
+        );
+        // A selection made with the keyboard copies nothing: it takes the clipboard.
+        app.buffers[other].row = 0;
+        app.buffers[other].col = 0;
+        press(&mut app, KeyCode::Char('v'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('l'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('l'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('p'), KeyModifiers::NONE);
+        assert!(app.buffers[other]
+            .text
+            .to_string()
+            .starts_with(&format!("{copied}\n")));
     }
     #[test]
     fn copy_cut_paste_with_selection_lines_and_shift_arrows() {

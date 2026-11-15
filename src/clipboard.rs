@@ -14,6 +14,9 @@ pub struct Clipboard {
     text: String,
     /// Whole lines (from `yy`, `dd`, `V`, or Ctrl-c without a selection).
     linewise: bool,
+    /// What the clipboard held before an editor selection made with the mouse
+    /// copied itself over it: pasting over that selection puts this in instead.
+    before: Option<(String, bool)>,
 }
 
 impl Clipboard {
@@ -23,6 +26,28 @@ impl Clipboard {
         }
         self.text = text;
         self.linewise = linewise;
+        self.before = None;
+    }
+    /// Copy what the mouse just selected in an editor, keeping what the clipboard
+    /// held before for pasting over that selection; `again` for the same selection
+    /// copied once more keeps what it held before the first time. True when there
+    /// is such an earlier copy.
+    pub fn copy_selected(&mut self, text: String, again: bool) -> bool {
+        let before = if again {
+            self.before.take()
+        } else {
+            Some(self.paste())
+        };
+        self.copy(text, false);
+        self.before = before.filter(|(text, _)| !text.is_empty());
+        self.before.is_some()
+    }
+    /// The copy from before the mouse selection now on the clipboard, put back
+    /// on it.
+    pub fn restore_before(&mut self) -> Option<(String, bool)> {
+        let (text, linewise) = self.before.take()?;
+        self.copy(text.clone(), linewise);
+        Some((text, linewise))
     }
     /// The newest clipboard text: the system's if it changed since our last copy.
     pub fn paste(&self) -> (String, bool) {
@@ -191,5 +216,24 @@ mod tests {
         let mut clipboard = Clipboard::default();
         clipboard.copy("line\n".into(), true);
         assert_eq!(clipboard.paste(), ("line\n".into(), true));
+    }
+    #[test]
+    fn a_mouse_selection_keeps_the_copy_before_it_for_pasting_over_it() {
+        let mut clipboard = Clipboard::default();
+        // Nothing copied before: nothing to put back.
+        assert!(!clipboard.copy_selected("first".into(), false));
+        assert_eq!(clipboard.restore_before(), None);
+        clipboard.copy("\tkept\n".into(), true);
+        assert!(clipboard.copy_selected("selected".into(), false));
+        assert_eq!(clipboard.paste().0, "selected");
+        // The same selection copied again still remembers the copy before it.
+        assert!(clipboard.copy_selected("selected more".into(), true));
+        assert_eq!(clipboard.restore_before(), Some(("\tkept\n".into(), true)));
+        assert_eq!(clipboard.paste(), ("\tkept\n".into(), true));
+        assert_eq!(clipboard.restore_before(), None);
+        // Any other copy forgets it.
+        clipboard.copy_selected("again".into(), false);
+        clipboard.copy("newer".into(), false);
+        assert_eq!(clipboard.restore_before(), None);
     }
 }

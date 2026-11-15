@@ -1086,9 +1086,16 @@ Let go and the text is on the clipboard; paste it anywhere.
   selects what's on screen there, highlighted until your next key or click. Lines
   the terminal wrapped are copied as one line, and the padding at line ends is
   dropped.
-- In an **editor** the drag is a normal selection of the file's text: line numbers
-  and change marks are never copied, dragging past the top or bottom scrolls, and the
-  selection stays so you can type over it, delete it (`d`), or clear it with Escape.
+- In an **editor** the drag is a normal selection of the file's text, tabs and
+  spaces exactly as they are: line numbers and change marks are never copied,
+  dragging past the top or bottom scrolls, and the selection stays so you can type
+  over it, delete it (`d`), or clear it with Escape.
+- **Paste over a selection elsewhere.** Selecting with the mouse copies, but pasting
+  straight over that selection (`Ctrl-v`, `p`, or the terminal's `Ctrl-Shift-V` /
+  ⌘V) puts in what you copied *before* it, which stays on the clipboard. So: drag
+  over code in one pane, then in another pane drag over what it replaces and press
+  `Ctrl-v`, as often as you like. The status line says so: `Copied 10 characters ·
+  Ctrl-v or p pastes your previous copy over it`.
 - **Double-click** copies a word: in an editor the word under the pointer, in other
   panes the whole name, path or URL.
 
