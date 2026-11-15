@@ -1884,8 +1884,8 @@ impl App {
                 } else if let Some((start, end)) = self.selection() {
                     // The terminal's paste (⌘V, Ctrl-Shift-V, Windows Terminal's Ctrl-V)
                     // replaces a selection, like Ctrl-v does.
-                    let text = text.replace("\r\n", "\n");
                     if let Some(b) = self.active_buffer() {
+                        let text = b.own_line_breaks(&text);
                         b.replace(start, end, &text);
                         b.end_group();
                     }
@@ -1893,7 +1893,8 @@ impl App {
                     Ok(())
                 } else if let Some(b) = self.active_buffer() {
                     // Terminal paste inserts at the cursor in any mode.
-                    b.insert(&text.replace("\r\n", "\n"));
+                    let text = b.own_line_breaks(&text);
+                    b.insert(&text);
                     b.end_group();
                     Ok(())
                 } else {
@@ -2897,6 +2898,7 @@ impl App {
                 b.move_by(1, 0);
             }
             let index = b.index();
+            let text = b.own_line_breaks(&text);
             b.replace(index, index, &text);
         }
         Ok(())
@@ -2998,6 +3000,7 @@ impl App {
         let (text, _) = self.clipboard.paste();
         if let Some((start, end)) = self.selection() {
             let b = self.active_buffer().context("Focus an editor")?;
+            let text = b.own_line_breaks(&text);
             b.replace(start, end, &text);
         }
         self.end_visual();
@@ -6608,6 +6611,28 @@ mod tests {
         assert_eq!(app.buffers[id].text.to_string(), "save new text\n");
         app.event(Event::Paste("!".into()));
         assert!(app.buffers[id].text.to_string().contains('!'));
+    }
+    #[test]
+    fn pasted_code_keeps_its_tabs_and_spaces_and_takes_the_files_line_breaks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.c");
+        std::fs::write(&path, "").unwrap();
+        let mut app = App::new(dir.path().into(), Some(path.clone()), false).unwrap();
+        let id = app.buffer_id().unwrap();
+        let code =
+            "int f(void)\n{\n\tif (x) {\n\t\treturn 1;\n\t}\n    y();  \n\t    mixed();\n}\n";
+        // As the terminal pastes it in Insert mode: nothing indents it again, and no
+        // bracket is closed for it.
+        press(&mut app, KeyCode::Char('i'), KeyModifiers::NONE);
+        app.event(Event::Paste(code.into()));
+        assert_eq!(app.buffers[id].text.to_string(), code);
+        // tmux and xterm paste a lone \r for each line break; Windows text has \r\n.
+        let len = app.buffers[id].text.len_chars();
+        app.buffers[id].replace(0, len, "");
+        app.event(Event::Paste(code.replace('\n', "\r")));
+        assert_eq!(app.buffers[id].text.to_string(), code);
+        app.command("w").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), code);
     }
     #[test]
     fn copy_cut_paste_with_selection_lines_and_shift_arrows() {

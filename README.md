@@ -1055,7 +1055,12 @@ the terminal's OSC 52, which most terminals support, even over SSH).
 A Shift-selection made while typing behaves like any text field: typing replaces it
 and a plain arrow cancels it. Your terminal's own paste (⌘V on a Mac, `Ctrl-Shift-V` on Linux, `Ctrl-V` in
 Windows Terminal) also works in any mode: it inserts at the cursor, or replaces the
-selection.
+selection. Pasted text goes in as it is, tabs and spaces included: nothing indents it
+again or closes brackets for it, and its line breaks become the file's own, whether
+the terminal sends `\n`, `\r\n` or the lone `\r` tmux and xterm paste.
+
+Text copied from a terminal, AI, preview or Git pane is read off the screen, where a
+tab is already spaces. For code exactly as written, copy it from an editor.
 
 ### Mouse
 

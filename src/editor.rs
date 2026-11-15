@@ -373,11 +373,23 @@ impl Buffer {
         }
         self.clamp();
     }
+    /// `text` with its line breaks made this file's own: `\r\n`, `\n`, and the lone
+    /// `\r` many terminals paste for each one (tmux, xterm) all become `\r\n` or
+    /// `\n`, whichever the file uses. Tabs and spaces are left exactly as they are.
+    pub fn own_line_breaks(&self, text: &str) -> String {
+        let lf = text.replace("\r\n", "\n").replace('\r', "\n");
+        if self.crlf {
+            lf.replace('\n', "\r\n")
+        } else {
+            lf
+        }
+    }
     /// Insert whole lines below (or above) the cursor line and move onto them.
     pub fn paste_lines(&mut self, value: &str, above: bool) {
         if value.is_empty() {
             return;
         }
+        let value = &self.own_line_breaks(value);
         self.checkpoint(false);
         let row = self.row;
         let eol = if self.crlf { "\r\n" } else { "\n" };
@@ -904,6 +916,21 @@ mod tests {
         let new = dir.path().join("new.rs");
         assert!(!Buffer::open_with(&new, LineEndings::Lf).unwrap().crlf);
         assert!(Buffer::open_with(&new, LineEndings::Crlf).unwrap().crlf);
+    }
+
+    #[test]
+    fn pasted_line_breaks_become_the_files_own_and_indents_stay() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch = dir.path().join("build.cmd");
+        fs::write(&batch, "x\r\n").unwrap();
+        let mut b = Buffer::open_with(&batch, LineEndings::Lf).unwrap();
+        assert!(b.crlf);
+        // \n, \r\n and the lone \r terminals paste all end lines as the file does.
+        let pasted = "\tone\n    two\r\n\t  three\r";
+        b.paste_lines(pasted, true);
+        assert_eq!(b.text.to_string(), "\tone\r\n    two\r\n\t  three\r\nx\r\n");
+        b.crlf = false;
+        assert_eq!(b.own_line_breaks(pasted), "\tone\n    two\n\t  three\n");
     }
 
     #[test]
