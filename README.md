@@ -457,11 +457,11 @@ These shortcuts apply while the sidebar has focus (`FILES` or `GIT` in the statu
 
 | Key | Action |
 | --- | --- |
-| Up/Down or `k`/`j` | Select previous/next entry; a selected file is **previewed** in the editor pane while focus stays here |
+| Up/Down or `k`/`j` | Select previous/next entry; a selected file is **previewed** in a pane beside your editor while focus stays here |
 | PageUp/PageDown (Fn-↑/↓ on a Mac), Home/End | Move 5 entries up/down, or to the first/last entry (also in the Git section and in search results) |
 | Right or `l` | Expand directory; enter its first child if already expanded; open file |
 | Left or `h` | Collapse current directory or select parent |
-| Enter | Toggle directory / open selected file and move focus to it |
+| Enter | Toggle directory / open selected file in a pane of its own and move focus to it |
 | Space | Fold or unfold the selected folder; on a file, fold the folder holding it |
 | `c` | Collapse all folders (also `:collapse`) |
 | `E` | Expand the selected folder and every folder inside it; on a top-level file, the whole project. `.git`, `target` and `node_modules` stay folded (also `:expand`) |
@@ -513,10 +513,19 @@ Font is installed, and otherwise shows plain markers in the same colors (`●` f
 `■` folders) instead of `?` or boxes. Force a style with `icons = "nerd"` or
 `icons = "basic"`, or hide icons with `icons = false`.
 
-Browsing reuses a single preview buffer (like a VS Code preview tab), so walking past
-many files does not leave them all open. A previewed file stays open once you press
-Enter on it or edit it. In the Git section, Up/Down previews changed files the same way
-and Enter opens one. Git is
+**Each file you open gets a pane of its own**, beside the editor you're in, which
+stays as it is: from the explorer, `Ctrl-p`, `:e`, the Git section, search results,
+the review or an AI agent. Side by side while both halves keep about 60 columns of
+code, otherwise one above the other. A file already on screen is focused instead of
+opened twice, and the empty pane Raido starts with is filled rather than split. With
+12 panes open, the file takes the focused pane's place (the status line says so).
+Going to a definition (`gd`) and back (`Ctrl-o`) stay in the pane you're in, as in
+Vim; Tab and `:bn` switch a pane between the files you opened.
+
+Browsing previews in one pane beside your editor, reusing a single preview buffer
+(like a VS Code preview tab), so walking past many files does not leave them all
+open. A previewed file stays open once you press Enter on it or edit it. In the Git
+section, Up/Down previews changed files the same way and Enter opens one. Git is
 read-only in the sidebar and refreshes periodically. Common status codes include
 `??` (untracked), `M` (modified), and `A` (added); the two columns distinguish
 index and working-tree status. Symlink directories are not recursively expanded.

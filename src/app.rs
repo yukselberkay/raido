@@ -529,6 +529,16 @@ pub struct App {
     pub changes: review::Changes,
 }
 
+/// How a file opens: [`App::open`] gives it a pane of its own; going to a definition
+/// or back shows it in the pane you're in; browsing the explorer or Git list
+/// previews it in one pane beside the editor.
+#[derive(Clone, Copy, PartialEq)]
+enum Open {
+    Pane,
+    Here,
+    Peek,
+}
+
 impl App {
     pub fn new(root: PathBuf, initial: Option<PathBuf>, demo: bool) -> Result<Self> {
         let config = Config::load()?;
@@ -699,8 +709,10 @@ impl App {
         self.mode = Mode::Normal;
         id
     }
+    /// Open a file in a pane of its own beside the editor, leaving that one as it
+    /// is; or go to the pane showing it already. An empty pane is filled instead.
     pub fn open(&mut self, path: &Path) -> Result<()> {
-        self.open_file(path, false)
+        self.open_file(path, Open::Pane)
     }
     /// Keep the quick diff of every buffer on screen current; with `refetch`, ask Git
     /// for the index versions again (something may have been staged or committed).
@@ -942,7 +954,7 @@ impl App {
         let query = search.query.clone();
         let path = self.root.join(&hit.path);
         if peek {
-            self.open_file(&path, true)?;
+            self.open_file(&path, Open::Peek)?;
         } else {
             self.open(&path)?;
             self.sidebar_focus = false;
@@ -979,12 +991,41 @@ impl App {
                 .map(|e| e.path.clone())
         };
         if let Some(path) = path.filter(|p| p.is_file()) {
-            if let Err(error) = self.open_file(&path, true) {
+            if let Err(error) = self.open_file(&path, Open::Peek) {
                 self.notice(format!("Can't preview {}: {error}", path.display()));
             }
         }
     }
-    fn open_file(&mut self, path: &Path, peek: bool) -> Result<()> {
+    /// A document pane that is filled rather than split when a file opens: one
+    /// showing nothing yet (an empty, unnamed buffer) or a file only being browsed.
+    /// The focused pane first, then the others on screen.
+    fn spare_pane(&self) -> Option<usize> {
+        let preview = self.peek_slot();
+        let spare = |pane: usize| {
+            let buffer = match self.panes.get(&pane) {
+                Some(Pane::Editor(b)) => *b,
+                Some(Pane::Preview(p)) => p.buffer,
+                _ => return false,
+            };
+            let b = &self.buffers[buffer];
+            let blank = b.path.is_none() && !b.dirty && b.text.len_chars() == 0;
+            self.tiles.contains(pane) && (blank || preview == Some(buffer))
+        };
+        std::iter::once(self.focused)
+            .chain(self.panes.keys().copied())
+            .find(|&pane| spare(pane))
+    }
+    /// Side by side while both halves keep about 60 columns of code, else one above
+    /// the other.
+    fn split_axis(&self, pane: usize) -> Axis {
+        match self.rectangles.iter().find(|(id, _)| *id == pane) {
+            Some((_, area)) if area.width < 120 && area.height >= 16 => Axis::Vertical,
+            _ => Axis::Horizontal,
+        }
+    }
+    fn open_file(&mut self, path: &Path, how: Open) -> Result<()> {
+        let peek = how == Open::Peek;
+        let spare = self.spare_pane();
         let path = if path.is_absolute() {
             path.to_path_buf()
         } else {
@@ -992,7 +1033,7 @@ impl App {
         };
         let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
         let document = |p: &Pane| matches!(p, Pane::Editor(_) | Pane::Preview(_));
-        // Browsing only fills an existing editor pane; it never creates one.
+        // Browsing previews beside an editor that's open; it never opens the first.
         if peek
             && !self
                 .panes
@@ -1042,26 +1083,70 @@ impl App {
         // for writing.
         let rendered =
             markdown::kind(&self.buffers[id]).is_some() && self.buffers[id].text.len_chars() > 0;
-        let pane = || {
+        let view = || {
             if rendered {
                 Pane::Preview(Preview::new(id))
             } else {
                 Pane::Editor(id)
             }
         };
-        let document = |p: &Pane| matches!(p, Pane::Editor(_) | Pane::Preview(_));
-        if self.panes.get(&self.focused).is_some_and(document) {
-            self.panes.insert(self.focused, pane());
-        } else if let Some((&pane_id, _)) = self
+        // The editor to fill or split: the focused one, else the first on screen.
+        let target = if self.panes.get(&self.focused).is_some_and(document) {
+            Some(self.focused)
+        } else {
+            self.panes
+                .iter()
+                .find(|(pane, p)| self.tiles.contains(**pane) && document(p))
+                .map(|(pane, _)| *pane)
+        };
+        let shown = self
             .panes
             .iter()
-            .find(|(id, p)| self.tiles.contains(**id) && document(p))
-        {
-            self.focused = pane_id;
-            self.panes.insert(pane_id, pane());
-        } else {
-            self.add_pane(pane(), Axis::Horizontal);
+            .find(|(pane, p)| {
+                self.tiles.contains(**pane)
+                    && matches!(p, Pane::Editor(b) | Pane::Preview(Preview { buffer: b, .. }) if *b == id)
+            })
+            .map(|(pane, _)| *pane);
+        let mut crowded = false;
+        match (how, shown, spare, target) {
+            // Going to a definition or back: in this pane, like Vim.
+            (Open::Here, _, _, Some(here)) => {
+                self.focused = here;
+                self.panes.insert(here, view());
+            }
+            // On screen already: go there. A file browsing just loaded in place of
+            // the last one shows as its kind wants (rendered or not).
+            (_, Some(there), ..) => {
+                if existing.is_none() {
+                    self.panes.insert(there, view());
+                }
+                if !peek {
+                    self.focused = there;
+                }
+            }
+            (_, None, Some(blank), _) => {
+                self.focused = blank;
+                self.panes.insert(blank, view());
+            }
+            // Beside the editor that's open, leaving it as it is.
+            (_, None, None, Some(beside)) if self.panes.len() < 12 => {
+                self.focused = beside;
+                self.add_pane(view(), self.split_axis(beside));
+            }
+            (_, None, None, Some(full)) => {
+                crowded = true;
+                self.focused = full;
+                self.panes.insert(full, view());
+            }
+            (_, _, _, None) => {
+                self.add_pane(view(), Axis::Horizontal);
+            }
         }
+        let eol = if crowded {
+            format!("{eol} · 12 panes are open, so it took this one's place")
+        } else {
+            eol
+        };
         if peek {
             self.sidebar_focus = true;
             self.notice(format!(
@@ -4245,7 +4330,7 @@ impl App {
                 };
                 let b = &self.buffers[id];
                 let here = (b.path.clone(), b.row, b.col);
-                if let Err(error) = self.open(&path) {
+                if let Err(error) = self.open_file(&path, Open::Here) {
                     return self.fail(error);
                 }
                 if let (Some(path), row, col) = here {
@@ -4432,7 +4517,7 @@ impl App {
     }
     fn jump_back(&mut self) -> Result<()> {
         let (path, row, col) = self.jumps.pop().context("No earlier position")?;
-        self.open(&path)?;
+        self.open_file(&path, Open::Here)?;
         if let Some(b) = self.active_buffer() {
             b.row = row;
             b.col = col;
@@ -6493,7 +6578,7 @@ mod tests {
         let right = app.focused;
         let other = dir.path().join("other.txt");
         std::fs::write(&other, "another file\n").unwrap();
-        app.open(&other).unwrap();
+        app.open_file(&other, Open::Here).unwrap();
         app.focused = left;
         let id = app.buffer_id().unwrap();
         // The cursor sits far right in the narrow left pane.
@@ -6907,14 +6992,16 @@ mod tests {
     #[test]
     fn browsing_the_explorer_previews_files_in_one_reused_buffer() {
         let dir = tempfile::tempdir().unwrap();
-        for name in ["a.txt", "b.txt", "c.txt"] {
+        for name in ["a.txt", "b.txt", "c.txt", "d.txt"] {
             std::fs::write(dir.path().join(name), format!("{name}\n")).unwrap();
         }
         let mut app = App::new(dir.path().into(), None, false).unwrap();
-        let shown = |app: &App| match app.panes.get(&0) {
+        let shown_in = |app: &App, pane| match app.panes.get(&pane) {
             Some(Pane::Editor(id)) => app.buffers[*id].name(),
             _ => String::new(),
         };
+        // Raido starts with one empty pane, which previews fill.
+        let shown = |app: &App| shown_in(app, 0);
         press(&mut app, KeyCode::Char('e'), KeyModifiers::CONTROL);
         assert!(app.sidebar_focus);
         // Ctrl-e lands in the explorer even after visiting the Git section.
@@ -6947,20 +7034,96 @@ mod tests {
         press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
         assert!(!app.sidebar_focus);
         assert_eq!(shown(&app), second);
+        assert_eq!(app.panes.len(), 1);
+        // Browsing on previews beside the open file, which stays as it is.
         press(&mut app, KeyCode::Char('e'), KeyModifiers::CONTROL);
         press(&mut app, KeyCode::Up, KeyModifiers::NONE);
-        assert_eq!(shown(&app), first);
+        assert_eq!(shown(&app), second, "the open file stays");
+        let preview = app.focused;
+        assert_ne!(preview, 0);
+        assert_eq!(shown_in(&app, preview), first);
+        assert!(app.sidebar_focus);
         assert_eq!(app.buffers.len(), start + 2);
-        assert!(app.buffers.iter().any(|b| b.name() == second));
-        // An edited preview is kept, not replaced.
-        let Some(Pane::Editor(id)) = app.panes.get(&0) else {
+        // The next preview reuses that pane.
+        press(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        let third = shown_in(&app, preview);
+        assert!(third != first && third != second && third.ends_with(".txt"));
+        assert_eq!((app.panes.len(), shown(&app)), (2, second.clone()));
+        // Enter on a previewed file keeps it in its pane.
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.focused, preview);
+        assert_eq!(app.panes.len(), 2);
+        // An edited preview is kept, not replaced: the next goes beside it, past the
+        // files on screen already.
+        press(&mut app, KeyCode::Char('e'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        let edited = app.focused;
+        assert_eq!(shown_in(&app, edited), first);
+        assert_eq!(app.panes.len(), 3);
+        let Some(Pane::Editor(id)) = app.panes.get(&edited) else {
             panic!("editor pane")
         };
         let id = *id;
         app.buffers[id].insert("edit ");
         press(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        press(&mut app, KeyCode::Down, KeyModifiers::NONE);
         assert!(app.buffers[id].dirty);
-        assert_eq!(app.buffers[id].name(), first);
+        assert_eq!(shown_in(&app, edited), first);
+        assert_eq!(app.panes.len(), 4);
+    }
+    #[test]
+    fn opening_a_file_gives_it_a_pane_of_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a.rs", "b.rs", "c.rs", "d.rs"] {
+            std::fs::write(dir.path().join(name), format!("// {name}\n")).unwrap();
+        }
+        let file = |name: &str| dir.path().join(name);
+        // The empty pane Raido starts with takes the first file.
+        let mut app = App::new(dir.path().into(), Some(file("a.rs")), false).unwrap();
+        assert_eq!(app.panes.len(), 1);
+        let a = app.focused;
+        let name = |app: &App, pane| match app.panes.get(&pane) {
+            Some(Pane::Editor(id)) => app.buffers[*id].name(),
+            _ => String::new(),
+        };
+        // Another goes beside it; the first stays as it is.
+        screen(&mut app, 200, 40);
+        app.open(&file("b.rs")).unwrap();
+        let b = app.focused;
+        assert_ne!(a, b);
+        assert_eq!(
+            (name(&app, a), name(&app, b)),
+            ("a.rs".into(), "b.rs".into())
+        );
+        let rect = |app: &App, pane| app.rectangles.iter().find(|(i, _)| *i == pane).unwrap().1;
+        screen(&mut app, 200, 40);
+        assert_eq!(rect(&app, a).y, rect(&app, b).y, "side by side");
+        // One already on screen is focused, not opened again.
+        app.open(&file("a.rs")).unwrap();
+        assert_eq!((app.focused, app.panes.len()), (a, 2));
+        // :e and Ctrl-p open the same way; a pane too narrow to halve is stacked.
+        screen(&mut app, 150, 40);
+        app.command("e c.rs").unwrap();
+        let c = app.focused;
+        assert_eq!((app.panes.len(), name(&app, c)), (3, "c.rs".into()));
+        screen(&mut app, 150, 40);
+        assert_eq!(rect(&app, a).x, rect(&app, c).x, "stacked");
+        // Going to a definition stays in the pane.
+        app.open_file(&file("d.rs"), Open::Here).unwrap();
+        assert_eq!((app.focused, app.panes.len()), (c, 3));
+        assert_eq!(name(&app, c), "d.rs");
+        // With 12 panes open, a file takes the focused one's place, and says so.
+        for n in 0..9 {
+            let path = file(&format!("more{n}.rs"));
+            std::fs::write(&path, "").unwrap();
+            app.open(&path).unwrap();
+        }
+        assert_eq!(app.panes.len(), 12);
+        let last = app.focused;
+        app.open(&file("c.rs")).unwrap();
+        assert_eq!((app.panes.len(), app.focused), (12, last));
+        assert_eq!(name(&app, last), "c.rs");
+        assert!(app.message.contains("12 panes are open"), "{}", app.message);
     }
     #[test]
     fn field_guide_stays_open_while_commands_and_edits_run() {
