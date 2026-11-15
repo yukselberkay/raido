@@ -478,6 +478,8 @@ pub struct App {
     pub editor_spot: Option<crate::ide::Spot>,
     /// The AI pane focused last, where Ctrl-b i sends a reference.
     last_ai: Option<usize>,
+    /// The shell pane focused last: a new shell starts where it has `cd`'d to.
+    last_shell: Option<usize>,
     /// Quick diff gutter marks, by buffer.
     pub diffs: HashMap<usize, quickdiff::State>,
     /// Copy mode in a terminal pane (Ctrl-b [).
@@ -625,6 +627,7 @@ impl App {
             ide: None,
             editor_spot: None,
             last_ai: None,
+            last_shell: None,
             diffs: HashMap::new(),
             copy: None,
             find: None,
@@ -1192,13 +1195,19 @@ impl App {
             bail!("Maximum of 12 panes; close one first");
         }
         let (shell, shell_args) = crate::platform::shell(self.config.shell.as_deref());
+        // A shell starts where the one you're in has gone; AI CLIs and `:run`
+        // commands in the project.
+        let dir = match program {
+            None => self.shell_dir(),
+            Some(_) => None,
+        };
         let (program, args) = program.unwrap_or((&shell, shell_args));
         let label = Path::new(program)
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or(program);
-        let terminal =
-            TerminalPane::spawn(program, &args, env, &self.root, label, &self.theme, &[])?;
+        let start = dir.as_deref().unwrap_or(&self.root);
+        let terminal = TerminalPane::spawn(program, &args, env, start, label, &self.theme, &[])?;
         if let Some(axis) = split {
             self.add_pane(Pane::Terminal(Box::new(terminal)), axis);
         } else {
@@ -1207,8 +1216,28 @@ impl App {
         }
         self.sidebar_focus = false;
         self.mode = Mode::Normal;
-        self.notice("Terminal active. Ctrl-b then an arrow changes panes; Ctrl-b b sends Ctrl-b.");
+        let place = match &dir {
+            Some(dir) => format!("Terminal in {}", dir.display()),
+            None => "Terminal active".into(),
+        };
+        self.notice(format!(
+            "{place}. Ctrl-b then an arrow changes panes; Ctrl-b b sends Ctrl-b."
+        ));
         Ok(())
+    }
+    /// Where the shell you're in has `cd`'d to, else the one you used last, else
+    /// any other; None when that's the project folder or there's no shell.
+    fn shell_dir(&self) -> Option<PathBuf> {
+        let shell = |id: &usize| match self.panes.get(id) {
+            Some(Pane::Terminal(t)) if t.launch == Launch::Shell && t.exited.is_none() => t.cwd(),
+            _ => None,
+        };
+        [self.focused]
+            .iter()
+            .chain(&self.last_shell)
+            .chain(self.panes.keys())
+            .find_map(shell)
+            .filter(|dir| dir.is_dir() && *dir != self.root)
     }
     fn split_editor(&mut self, axis: Axis) -> Result<()> {
         if self.panes.len() >= 12 {
@@ -1640,8 +1669,12 @@ impl App {
     }
     pub fn tick(&mut self) {
         crate::ide::tick(self);
-        if matches!(self.panes.get(&self.focused), Some(Pane::Terminal(t)) if t.is_agent()) {
-            self.last_ai = Some(self.focused);
+        match self.panes.get(&self.focused) {
+            Some(Pane::Terminal(t)) if t.is_agent() => self.last_ai = Some(self.focused),
+            Some(Pane::Terminal(t)) if t.launch == Launch::Shell => {
+                self.last_shell = Some(self.focused)
+            }
+            _ => {}
         }
         let visible: Vec<usize> = self
             .panes
@@ -8301,6 +8334,61 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         prefix_g(&mut app);
         assert_eq!(app.focused, git_id);
         assert_eq!(app.panes.len(), 2, "one Git pane, reused");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_new_shell_starts_where_the_shell_before_it_went() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        let path = root.join("notes.txt");
+        std::fs::write(&path, "notes\n").unwrap();
+        let mut app = App::new(root.clone(), Some(path), false).unwrap();
+        let editor = app.focused;
+        let cwd = |app: &mut App, pane| {
+            for _ in 0..300 {
+                app.tick();
+                let Some(Pane::Terminal(t)) = app.panes.get(&pane) else {
+                    unreachable!()
+                };
+                if t.transcript().contains("ready") {
+                    return t.cwd();
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            panic!("the shell never started");
+        };
+        // A shell that moves into sub/.
+        app.open_terminal(
+            Some((
+                "/bin/sh",
+                vec!["-c".into(), "cd sub; echo ready; exec sh".into()],
+            )),
+            Some(Axis::Vertical),
+        )
+        .unwrap();
+        let first = app.focused;
+        assert_eq!(cwd(&mut app, first), Some(root.join("sub")));
+        // Ctrl-b c from the editor: the new shell starts there too.
+        app.focused = editor;
+        press(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('c'), KeyModifiers::NONE);
+        let second = app.focused;
+        assert_ne!(second, first);
+        assert!(app.message.starts_with("Terminal in "), "{}", app.message);
+        assert!(app.message.contains("sub"), "{}", app.message);
+        if let Some(Pane::Terminal(t)) = app.panes.get_mut(&second) {
+            t.send(b"echo ready\r").unwrap();
+        }
+        assert_eq!(cwd(&mut app, second), Some(root.join("sub")));
+        // Programs (AI CLIs, :run commands) start in the project.
+        app.open_terminal(
+            Some(("/bin/sh", vec!["-c".into(), "echo ready; exec sh".into()])),
+            Some(Axis::Vertical),
+        )
+        .unwrap();
+        let program = app.focused;
+        assert_eq!(cwd(&mut app, program), Some(root));
     }
     #[cfg(unix)]
     #[test]

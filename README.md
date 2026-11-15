@@ -307,6 +307,10 @@ Splits nest inside the focused pane. Splitting an editor initially shows the
 same buffer in both views; Tab or `:bn` in the new view shows another open file there
 (a file you open gets a pane of its own anyway). The buffer contents, cursor, and scroll position are shared when two views
 show the same buffer. Closing a terminal pane stops its terminal child process.
+A new shell starts in the folder the shell you're in has `cd`'d to (or the one you
+used last, or any other open shell), so `Ctrl-b c` in `/tmp/x` gives you another
+shell in `/tmp/x`; the status line names the folder. With no shell open it starts in
+the project, as AI panes and `:run` commands always do.
 The number in a pane's title counts the panes that are open, docked ones included,
 in the order you opened them: close one and the rest renumber, so they always run
 1 to N.
@@ -428,7 +432,7 @@ Shift on many keyboard layouts. On macOS, **Ctrl means Control, not Command**.
 | `Ctrl-b Shift-arrows` or `Ctrl-b H/J/K/L` | Move the pane: it trades places with the pane on that side, or, at the edge already, takes that whole side of the window (`:move right`) |
 | `Ctrl-b Space` | Flip the pane's split between side by side and stacked (`:flip`) |
 | `Ctrl-b o` | Cycle panes |
-| `Ctrl-b c` / `Ctrl-b C` | New terminal below / beside |
+| `Ctrl-b c` / `Ctrl-b C` | New terminal below / beside, in the folder your shell is in |
 | `Ctrl-b a` / `Ctrl-b A` | New AI launcher beside / below; 1 Codex, 2 Claude, 3 Gemini, 4 Antigravity |
 | `Ctrl-b z` / `x` | Maximize (zoom) / close current pane; a maximized pane shows `⛶ MAXIMIZED · N more panes` on its border |
 | `Ctrl-b y` | Hand the mouse to the terminal for selecting and copying (layout unchanged); again to take it back ([Mouse](#mouse)) |
