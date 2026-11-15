@@ -1179,9 +1179,9 @@ the project root, and talks to it in the background. Install the server once:
 | Language | Server Raido looks for | Install |
 | --- | --- | --- |
 | Rust | `rust-analyzer` | `rustup component add rust-analyzer` |
-| Go | `gopls` | `go install golang.org/x/tools/gopls@latest` |
+| Go | `gopls` (also found in `~/go/bin`, where `go install` puts it) | `go install golang.org/x/tools/gopls@latest` |
 | Python | `pyright-langserver`, `basedpyright-langserver`, `pylsp` or `jedi-language-server` | `npm install -g pyright` or `pip install python-lsp-server` |
-| C / C++ | `clangd` | Arch `pacman -S clang` · Debian/Ubuntu `apt install clangd` · macOS Xcode tools |
+| C / C++ | `clangd` (also found in Homebrew's `llvm` and the Xcode tools on macOS, `C:\Program Files\LLVM\bin` on Windows) | Arch `pacman -S clang` · Debian/Ubuntu `apt install clangd` · Fedora `dnf install clang-tools-extra` · macOS Xcode tools · Windows `winget install LLVM.LLVM` |
 
 | Feature | How |
 | --- | --- |

@@ -161,6 +161,54 @@ pub(crate) fn on_path(program: &str) -> bool {
     crate::platform::which(program).is_some()
 }
 
+/// Folders a server installed the usual way can be in without being on PATH: `go
+/// install`'s for gopls; for clangd, Homebrew's LLVM and Apple's Command Line Tools
+/// on macOS, and the LLVM installer's on Windows. The install scripts rely on these.
+fn off_path(program: &str) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    match program {
+        "gopls" => {
+            dirs.extend(std::env::var_os("GOBIN").map(PathBuf::from));
+            if let Some(gopath) = std::env::var_os("GOPATH") {
+                dirs.extend(std::env::split_paths(&gopath).next().map(|p| p.join("bin")));
+            }
+            dirs.extend(
+                directories::BaseDirs::new().map(|d| d.home_dir().join("go").join("bin")),
+            );
+        }
+        "clangd" if cfg!(target_os = "macos") => dirs.extend(
+            [
+                "/opt/homebrew/opt/llvm/bin",
+                "/usr/local/opt/llvm/bin",
+                "/Library/Developer/CommandLineTools/usr/bin",
+                "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin",
+            ]
+            .map(PathBuf::from),
+        ),
+        "clangd" if cfg!(windows) => dirs.extend(
+            std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("LLVM").join("bin")),
+        ),
+        _ => {}
+    }
+    dirs
+}
+
+/// How to start `program`: its name when it's on PATH, else its full path in one of
+/// the [`off_path`] folders.
+fn locate(program: &str) -> Option<String> {
+    locate_in(program, &off_path(program))
+}
+
+fn locate_in(program: &str, dirs: &[PathBuf]) -> Option<String> {
+    if on_path(program) {
+        return Some(program.to_string());
+    }
+    dirs.iter().find_map(|dir| {
+        let found = crate::platform::which(&dir.join(program).to_string_lossy())?;
+        Some(found.to_string_lossy().into_owned())
+    })
+}
+
 pub fn uri(path: &Path) -> String {
     file_uri(&path.to_string_lossy(), cfg!(windows))
 }
@@ -475,8 +523,7 @@ impl Lsp {
             .or_else(|| {
                 defaults(key)
                     .iter()
-                    .find(|(program, _)| on_path(program))
-                    .map(|(program, a)| (program.to_string(), program.to_string(), args(a)))
+                    .find_map(|(program, a)| Some((program.to_string(), locate(program)?, args(a))))
             })
     }
 
@@ -1311,6 +1358,26 @@ while True:
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_server_off_path_is_found_where_it_was_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty = tempfile::tempdir().unwrap();
+        let name = "raido-test-language-server";
+        let file = dir.path().join(if cfg!(windows) {
+            format!("{name}.exe")
+        } else {
+            name.to_string()
+        });
+        std::fs::write(&file, "").unwrap();
+        assert_eq!(locate_in(name, &[empty.path().into()]), None);
+        assert_eq!(
+            locate_in(name, &[empty.path().into(), dir.path().into()]),
+            Some(file.to_string_lossy().into_owned())
+        );
+        // go install puts gopls in ~/go/bin, which often isn't on PATH.
+        assert!(off_path("gopls").iter().any(|d| d.ends_with("go/bin")));
+        assert!(off_path("rust-analyzer").is_empty());
+    }
     #[test]
     fn positions_convert_between_chars_and_utf16() {
         let line = "a😀b";
