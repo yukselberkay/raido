@@ -4,7 +4,9 @@
 # the languages Raido's editor understands (rust-analyzer, clangd, gopls when Go is
 # installed, a Python server) from the system's package manager, JetBrains Mono Nerd
 # Font, Raido itself (~/.cargo/bin/raido, made runnable by name from PATH), and the
-# Raido skill that teaches AI agents how to use Raido.
+# Raido skill that teaches AI agents how to use Raido. On Omarchy, packages come
+# through `omarchy pkg add`, Raido follows the desktop's theme, and it gets an app
+# launcher entry.
 # Windows: scripts/install.ps1.
 #
 # Run it from a checkout (scripts/install.sh) or piped from GitHub
@@ -12,12 +14,13 @@
 # first. Safe to run again: anything already installed is kept as is.
 set -euo pipefail
 
-usage="Usage: install.sh [--no-font] [--no-lsp] [--no-skill]
+usage="Usage: install.sh [--no-font] [--no-lsp] [--no-skill] [--no-launcher]
 Installs a C compiler, Git, curl, Rust, language servers, JetBrains Mono Nerd Font,
 Raido and its AI agent skill on macOS or Linux.
-  --no-font   skip JetBrains Mono Nerd Font
-  --no-lsp    skip the language servers (rust-analyzer, clangd, gopls, Python)
-  --no-skill  skip the Raido skill for AI agents"
+  --no-font      skip JetBrains Mono Nerd Font
+  --no-lsp       skip the language servers (rust-analyzer, clangd, gopls, Python)
+  --no-skill     skip the Raido skill for AI agents
+  --no-launcher  Omarchy: skip Raido's app launcher entry (SUPER + SPACE)"
 
 REPO_URL="https://github.com/yukselberkay/raido.git"
 FONT_URL="https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.tar.xz"
@@ -27,11 +30,13 @@ MIN_RUST="1.88"
 with_font=1
 with_lsp=1
 with_skill=1
+with_launcher=1
 for arg in "$@"; do
     case "$arg" in
         --no-font) with_font=0 ;;
         --no-lsp) with_lsp=0 ;;
         --no-skill) with_skill=0 ;;
+        --no-launcher) with_launcher=0 ;;
         -h | --help)
             echo "$usage"
             exit 0
@@ -66,6 +71,13 @@ case "$os" in
     Darwin | Linux) ;;
     *) die "This script supports macOS and Linux; on Windows run scripts/install.ps1 in PowerShell." ;;
 esac
+
+# Omarchy (https://omarchy.org): Arch Linux with its own commands for packages,
+# themes and app launchers, which this script then uses.
+omarchy=0
+if [ "$os" = Linux ] && have omarchy && [ -d "${OMARCHY_PATH:-/usr/share/omarchy}" ]; then
+    omarchy=1
+fi
 
 # Where `cargo install` puts programs.
 cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
@@ -110,7 +122,9 @@ linux_packages() {
     else
         die "sudo is not available; install these yourself, then run this script again: ${missing[*]}"
     fi
-    if have apt-get; then
+    if [ "$omarchy" -eq 1 ]; then
+        omarchy pkg add base-devel git curl tar xz fontconfig
+    elif have apt-get; then
         $sudo apt-get update
         apt_updated=1
         $sudo apt-get install -y build-essential git curl ca-certificates tar xz-utils fontconfig
@@ -228,7 +242,12 @@ pm_install() {
             fi
             "${sudo[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" ;;
         dnf | yum) "${sudo[@]}" "$pm" install -y "$@" ;;
-        pacman) "${sudo[@]}" pacman -S --needed --noconfirm "$@" ;;
+        # Omarchy's own: pacman --needed, then a check that each one is there.
+        pacman) if [ "$omarchy" -eq 1 ]; then
+            omarchy pkg add "$@"
+        else
+            "${sudo[@]}" pacman -S --needed --noconfirm "$@"
+        fi ;;
         zypper) "${sudo[@]}" zypper --non-interactive install "$@" ;;
         apk) "${sudo[@]}" apk add "$@" ;;
         brew) brew install "$@" ;;
@@ -292,11 +311,20 @@ package_for() {
     esac
 }
 
+# How $pm is run, for messages: "omarchy pkg add" on Omarchy.
+pm_name() {
+    if [ "$pm" = pacman ] && [ "$omarchy" -eq 1 ]; then
+        echo "omarchy pkg add"
+    else
+        echo "$pm"
+    fi
+}
+
 # Install PACKAGE with $pm, saying so; false when there's none or it fails.
 from_packages() {
     local package="$1"
     [ -n "$package" ] || return 1
-    note "installing $package with $pm"
+    note "installing $package with $(pm_name)"
     pm_install "$package"
 }
 
@@ -313,7 +341,7 @@ python_server() {
 
 install_language_servers() {
     pm="$(package_manager)"
-    step "Language servers for Rust, C/C++, Go and Python ($(system_name)${pm:+, $pm})"
+    step "Language servers for Rust, C/C++, Go and Python ($(system_name)${pm:+, $(pm_name)})"
     if [ -z "$pm" ]; then
         if [ "$os" = Darwin ]; then
             note "Homebrew (https://brew.sh) is missing: only rust-analyzer and servers already here"
@@ -446,10 +474,14 @@ source_dir() {
     printf '%s\n' "$scratch/raido"
 }
 
+# The checkout Raido was built from (its icon comes from there too).
+raido_src=""
+
 install_raido() {
     step "Raido"
     local src
     src="$(source_dir)"
+    raido_src="$src"
     note "building from $src (the first build takes a few minutes)"
     cargo install --path "$src" --locked --force
     local bin="$cargo_bin/raido"
@@ -578,11 +610,67 @@ install_skill() {
     fi
 }
 
+# --- Omarchy: the desktop's theme and an app launcher entry ---
+
+omarchy_setup() {
+    step "Omarchy"
+    # Follow the desktop's theme, as Omarchy's own editors do: only for a new
+    # config, so a theme you picked stays.
+    local config="${XDG_CONFIG_HOME:-$HOME/.config}/raido/config.toml" theme
+    local line='theme = "omarchy"'
+    local why="# Follows the Omarchy theme: omarchy theme set <name> re-themes Raido too."
+    theme=""
+    if [ -f "$config" ]; then
+        theme="$(sed -n 's/^theme *= *"\(.*\)".*/\1/p' "$config" | head -n 1)"
+    fi
+    if [ "$theme" = omarchy ]; then
+        ok "Raido follows your Omarchy theme"
+    elif [ -n "$theme" ]; then
+        note "Raido keeps the theme you chose ($theme); :theme omarchy follows Omarchy's"
+    else
+        # A new config, or one without a theme: the line goes first, where TOML
+        # keeps top-level settings (after a [table] it would belong to that).
+        mkdir -p "$(dirname "$config")"
+        {
+            printf '%s\n%s\n' "$why" "$line"
+            if [ -s "$config" ]; then
+                printf '\n'
+                cat "$config"
+            fi
+        } >"$scratch/config.toml"
+        cp "$scratch/config.toml" "$config"
+        ok "Raido follows your Omarchy theme ($line in $config)"
+    fi
+    if [ "$with_launcher" -eq 0 ]; then
+        return
+    fi
+    # Like any TUI Omarchy installs: SUPER + SPACE finds it, and it opens in your
+    # default terminal, tiled.
+    local icon="$raido_src/docs/raido-icon.png"
+    [ -f "$icon" ] || icon=utilities-terminal
+    if omarchy tui install Raido "$cargo_bin/raido" tile "$icon" >"$scratch/launcher.log" 2>&1; then
+        ok "in the app launcher: SUPER + SPACE, then Raido (omarchy tui remove Raido takes it out)"
+    else
+        note "no launcher entry ($(tail -n 1 "$scratch/launcher.log")); --no-launcher skips this"
+    fi
+}
+
 summary() {
     step "Done"
     echo "  Start Raido in any project:  raido ~/path/to/project"
+    if [ "$omarchy" -eq 1 ] && [ "$with_launcher" -eq 1 ]; then
+        echo "  Or from the app launcher: SUPER + SPACE, then Raido."
+    fi
     if [ "$with_font" -eq 1 ]; then
-        if [ "$os" = Darwin ] && [ "${TERM_PROGRAM:-}" = Apple_Terminal ]; then
+        if [ "$omarchy" -eq 1 ]; then
+            local font
+            font="$(omarchy font current 2>/dev/null || true)"
+            if [[ "$font" == JetBrainsMono* ]]; then
+                echo "  Font: your terminals use $font already (Omarchy's default)."
+            else
+                echo "  Font: omarchy font set \"$FONT_FAMILY\", or inside Raido :font family \"$FONT_FAMILY\"."
+            fi
+        elif [ "$os" = Darwin ] && [ "${TERM_PROGRAM:-}" = Apple_Terminal ]; then
             echo "  macOS Terminal: Raido switches its tab to $FONT_FAMILY Mono at 14 pt while it runs."
         else
             echo "  Font: make \"$FONT_FAMILY Mono\" your terminal's font in its settings,"
@@ -606,6 +694,9 @@ fi
 install_raido
 retire_odin
 put_on_path
+if [ "$omarchy" -eq 1 ]; then
+    omarchy_setup
+fi
 if [ "$with_skill" -eq 1 ]; then
     install_skill
 fi

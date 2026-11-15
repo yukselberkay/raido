@@ -105,6 +105,18 @@ It installs, skipping whatever is already there:
 7. **The [Raido skill](#ask-your-ai-agent-about-raido)** for AI agents, for every project
    of your user (`--no-skill` skips it; a failure here only warns).
 
+**On [Omarchy](https://omarchy.org)** it uses Omarchy's own commands:
+
+- System packages and language servers come through `omarchy pkg add`.
+- Raido follows the desktop's theme: `theme = "omarchy"` goes into a new config, or
+  at the top of one that names no theme (a theme you picked stays), so
+  `omarchy theme set <name>` re-themes Raido too. See [Omarchy themes](#theme-plugins--no-rebuild-needed).
+- `omarchy tui install` adds Raido to the app launcher, with its icon: SUPER + SPACE,
+  then Raido, opens it tiled in your default terminal (`--no-launcher` skips it;
+  `omarchy tui remove Raido` takes it out).
+- Omarchy ships JetBrainsMono Nerd Font as its terminal font, so there's nothing to
+  set.
+
 Run it as yourself, not with `sudo`; it asks for `sudo` only for system packages.
 To do the same steps by hand, read on.
 

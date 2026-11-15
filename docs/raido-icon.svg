@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>Raido</title>
+  <!-- The ◉ mark from Raido's top bar, for app launchers. -->
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="#1b1f27"/>
+  <circle cx="128" cy="128" r="70" fill="none" stroke="#3794ff" stroke-width="20"/>
+  <circle cx="128" cy="128" r="32" fill="#3794ff"/>
+</svg>
