@@ -72,8 +72,25 @@ It installs, skipping whatever is already there:
 2. **Rust**, through [rustup](https://rustup.rs), or `rustup update stable` when
    the installed Rust is older than 1.88. Rust from a distribution package that
    is too old is reported, not replaced.
-3. **rust-analyzer**, for Rust diagnostics, hover and completion in the editor
-   (`--no-lsp` skips it).
+3. **[Language servers](#language-servers-lsp)** for the languages Raido's editor
+   understands (diagnostics, hover, completion), from the system's own package
+   manager: apt on Debian and Ubuntu, dnf (or yum) on Fedora and RHEL, pacman on
+   Arch (all are in its official repos, so no AUR helper is needed), zypper on
+   openSUSE, apk on Alpine, Homebrew on macOS. The step's heading names the system
+   and the package manager it found.
+
+   | Language | Server | apt | dnf / yum | pacman | zypper | apk | Homebrew |
+   | --- | --- | --- | --- | --- | --- | --- | --- |
+   | Rust | rust-analyzer | rustup | rustup | rustup | rustup | rustup | rustup |
+   | C / C++ | clangd | `clangd` | `clang-tools-extra` | `clang` | `clang-tools` | `clang-extra-tools` | Command Line Tools, else `llvm` |
+   | Go | gopls | `gopls` | `golang-x-tools-gopls` | `gopls` | `gopls` | `gopls` | `gopls` |
+   | Python | pyright or pylsp | `python3-pylsp` | `python3-lsp-server` | `pyright` | `python3-python-lsp-server` | `py3-lsp-server` | `pyright` |
+
+   gopls only where Go is installed (it needs Go itself), falling back to
+   `go install`. Without a system package for Python it tries `uv tool install
+   basedpyright`, `pipx install python-lsp-server`, then `npm install -g pyright`.
+   A server already there is kept; one that can't be installed is noted and
+   skipped, never failing the install (`--no-lsp` skips them all).
 4. **JetBrains Mono Nerd Font**, Raido's [font](#fonts) and the source of the explorer's
    Nerd Font file icons, which Raido then shows by default (`icons = true`): Homebrew's cask on macOS
    when Homebrew is installed, otherwise the latest Nerd Fonts release into
@@ -139,7 +156,9 @@ If Rust is already installed but too old, use `rustup update stable`.
 
 On **Windows**, `scripts\install.ps1` does the same in PowerShell, using winget for
 the programs: Git, the Visual Studio C++ build tools (Rust's linker; a large
-download), Rust through rustup, rust-analyzer, JetBrains Mono Nerd Font (for your
+download), Rust through rustup, the language servers (rust-analyzer; clangd from
+LLVM's winget package; gopls through `go install` when Go is installed; pyright from
+npm, else basedpyright from uv or python-lsp-server from pipx), JetBrains Mono Nerd Font (for your
 user, no administrator rights), Raido, the AI-agent skill, and `%USERPROFILE%\.cargo\bin`
 on your user PATH, so `raido` runs in that window at once and in every new one:
 
@@ -1172,7 +1191,8 @@ text, however long, without anything from the screen.
 ### Language servers (LSP)
 
 Raido starts the standard language server for a file the first time you open it, in
-the project root, and talks to it in the background. Install the server once:
+the project root, and talks to it in the background. The [install
+scripts](#install-script) set up all four for your system; by hand, install a server once:
 
 ![clangd hover docs for a C function, with an error marked in the gutter and underlined](docs/raido-lsp.png)
 

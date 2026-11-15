@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Build and install Raido with everything it needs on this machine (macOS or Linux):
-# a C compiler and linker, Git, curl, Rust (via rustup), rust-analyzer,
-# JetBrains Mono Nerd Font, Raido itself (~/.cargo/bin/raido, made runnable by name
-# from PATH), and the Raido skill that teaches AI agents how to use Raido.
+# a C compiler and linker, Git, curl, Rust (via rustup), the language servers for
+# the languages Raido's editor understands (rust-analyzer, clangd, gopls when Go is
+# installed, a Python server) from the system's package manager, JetBrains Mono Nerd
+# Font, Raido itself (~/.cargo/bin/raido, made runnable by name from PATH), and the
+# Raido skill that teaches AI agents how to use Raido.
 # Windows: scripts/install.ps1.
 #
 # Run it from a checkout (scripts/install.sh) or piped from GitHub
@@ -11,10 +13,10 @@
 set -euo pipefail
 
 usage="Usage: install.sh [--no-font] [--no-lsp] [--no-skill]
-Installs a C compiler, Git, curl, Rust, rust-analyzer, JetBrains Mono Nerd Font,
+Installs a C compiler, Git, curl, Rust, language servers, JetBrains Mono Nerd Font,
 Raido and its AI agent skill on macOS or Linux.
   --no-font   skip JetBrains Mono Nerd Font
-  --no-lsp    skip rust-analyzer
+  --no-lsp    skip the language servers (rust-analyzer, clangd, gopls, Python)
   --no-skill  skip the Raido skill for AI agents"
 
 REPO_URL="https://github.com/yukselberkay/raido.git"
@@ -110,6 +112,7 @@ linux_packages() {
     fi
     if have apt-get; then
         $sudo apt-get update
+        apt_updated=1
         $sudo apt-get install -y build-essential git curl ca-certificates tar xz-utils fontconfig
     elif have dnf; then
         $sudo dnf install -y gcc gcc-c++ make git curl tar xz fontconfig
@@ -161,13 +164,221 @@ install_rust() {
         fi
     fi
     ok "rustc $version"
-    if [ "$with_lsp" -eq 1 ] && have rustup; then
-        # Rust language support in Raido's editor (diagnostics, hover, completion).
-        if rustup component add rust-analyzer >/dev/null 2>&1; then
-            ok "rust-analyzer"
-        else
-            note "rust-analyzer could not be added; Raido works without it"
+}
+
+# --- Language servers: diagnostics, completion and hover in Raido's editor ---
+#
+# One for each language Raido knows: Rust, C and C++, Go, Python. Each comes from
+# the system's own package manager where it has one (apt on Debian and Ubuntu, dnf
+# on Fedora, pacman on Arch, zypper on openSUSE, apk on Alpine, Homebrew on macOS).
+# Each is optional: one that can't be installed is noted and skipped, and Raido
+# works without it.
+
+apt_updated=0
+
+# The system's package manager, or nothing.
+package_manager() {
+    if [ "$os" = Darwin ]; then
+        if have brew; then echo brew; fi
+        return
+    fi
+    local pm
+    for pm in apt-get dnf yum pacman zypper apk; do
+        if have "$pm"; then
+            echo "$pm"
+            return
         fi
+    done
+}
+
+# "Arch Linux", "Ubuntu 24.04.1 LTS", "macOS 15.1".
+system_name() {
+    if [ "$os" = Darwin ]; then
+        echo "macOS $(sw_vers -productVersion 2>/dev/null)"
+    elif [ -r /etc/os-release ]; then
+        (
+            # shellcheck disable=SC1091
+            . /etc/os-release
+            echo "${PRETTY_NAME:-${NAME:-Linux}}"
+        )
+    else
+        echo Linux
+    fi
+}
+
+# Install system packages with $pm (sudo for all but Homebrew). Its output goes to
+# $scratch/packages.log; false when it fails.
+pm_install() {
+    local sudo=() log="$scratch/packages.log"
+    : >"$log"
+    if [ "$pm" != brew ] && [ "$(id -u)" -ne 0 ]; then
+        if ! have sudo; then
+            echo "sudo is not available" >"$log"
+            return 1
+        fi
+        sudo=(sudo)
+        # Ask for the password here, not hidden in the log.
+        sudo -v || return 1
+    fi
+    case "$pm" in
+        apt-get)
+            if [ "$apt_updated" -eq 0 ]; then
+                "${sudo[@]}" apt-get update >>"$log" 2>&1 || return 1
+                apt_updated=1
+            fi
+            "${sudo[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" ;;
+        dnf | yum) "${sudo[@]}" "$pm" install -y "$@" ;;
+        pacman) "${sudo[@]}" pacman -S --needed --noconfirm "$@" ;;
+        zypper) "${sudo[@]}" zypper --non-interactive install "$@" ;;
+        apk) "${sudo[@]}" apk add "$@" ;;
+        brew) brew install "$@" ;;
+        *)
+            echo "no supported package manager" >>"$log"
+            return 1
+            ;;
+    esac >>"$log" 2>&1
+}
+
+# The last line of the package log: why an install failed.
+why() { tail -n 1 "$scratch/packages.log" 2>/dev/null; }
+
+# Folders Raido also finds a server in when it isn't on PATH (off_path in
+# src/lsp.rs): go install's for gopls; Homebrew's LLVM and Apple's Command Line
+# Tools for clangd on macOS.
+off_path() {
+    case "$1" in
+        gopls)
+            [ -n "${GOBIN:-}" ] && echo "$GOBIN"
+            [ -n "${GOPATH:-}" ] && echo "${GOPATH%%:*}/bin"
+            echo "$HOME/go/bin"
+            ;;
+        clangd)
+            if [ "$os" = Darwin ]; then
+                echo /opt/homebrew/opt/llvm/bin
+                echo /usr/local/opt/llvm/bin
+                echo /Library/Developer/CommandLineTools/usr/bin
+                echo /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin
+            fi
+            ;;
+    esac
+}
+
+# Whether Raido can start PROGRAM: on PATH, or in one of its off_path folders.
+found() {
+    local dir
+    have "$1" && return 0
+    while IFS= read -r dir; do
+        [ -x "$dir/$1" ] && return 0
+    done < <(off_path "$1")
+    return 1
+}
+
+# The package with PROGRAM in it, for $pm: package_for clangd.
+package_for() {
+    case "$1:$pm" in
+        clangd:apt-get) echo clangd ;;
+        clangd:dnf | clangd:yum) echo clang-tools-extra ;;
+        clangd:pacman) echo clang ;;
+        clangd:zypper) echo clang-tools ;;
+        clangd:apk) echo clang-extra-tools ;;
+        clangd:brew) echo llvm ;;
+        gopls:dnf | gopls:yum) echo golang-x-tools-gopls ;;
+        gopls:apt-get | gopls:pacman | gopls:zypper | gopls:apk | gopls:brew) echo gopls ;;
+        python:apt-get) echo python3-pylsp ;;
+        python:dnf | python:yum) echo python3-lsp-server ;;
+        python:pacman | python:brew) echo pyright ;;
+        python:zypper) echo python3-python-lsp-server ;;
+        python:apk) echo py3-lsp-server ;;
+    esac
+}
+
+# Install PACKAGE with $pm, saying so; false when there's none or it fails.
+from_packages() {
+    local package="$1"
+    [ -n "$package" ] || return 1
+    note "installing $package with $pm"
+    pm_install "$package"
+}
+
+# The Python language server Raido would start (the first of those it knows).
+python_server() {
+    local server
+    for server in pyright-langserver basedpyright-langserver pylsp jedi-language-server; do
+        if have "$server"; then
+            echo "$server"
+            return
+        fi
+    done
+}
+
+install_language_servers() {
+    pm="$(package_manager)"
+    step "Language servers for Rust, C/C++, Go and Python ($(system_name)${pm:+, $pm})"
+    if [ -z "$pm" ]; then
+        if [ "$os" = Darwin ]; then
+            note "Homebrew (https://brew.sh) is missing: only rust-analyzer and servers already here"
+        else
+            note "no supported package manager (apt, dnf, yum, pacman, zypper, apk): only rust-analyzer"
+        fi
+    fi
+
+    # Rust: rustup's own. Its rust-analyzer command is there before the component
+    # is, failing until it's added.
+    if have rust-analyzer && rust-analyzer --version >/dev/null 2>&1; then
+        ok "rust-analyzer (Rust)"
+    elif have rustup && rustup component add rust-analyzer >/dev/null 2>&1; then
+        ok "rust-analyzer (Rust)"
+    else
+        note "rust-analyzer could not be added; later: rustup component add rust-analyzer"
+    fi
+
+    # C and C++.
+    if found clangd; then
+        ok "clangd (C, C++)"
+    elif from_packages "$(package_for clangd)" && found clangd; then
+        ok "clangd (C, C++)"
+    else
+        note "clangd skipped${pm:+ ($(why))}; Raido works without it"
+    fi
+
+    # Go: gopls needs Go itself, so only where Go is installed.
+    if found gopls; then
+        ok "gopls (Go)"
+    elif ! have go; then
+        note "gopls skipped: Go isn't installed (install Go, then run this script again)"
+    elif from_packages "$(package_for gopls)" && found gopls; then
+        ok "gopls (Go)"
+    elif note "installing gopls with go install" &&
+        go install golang.org/x/tools/gopls@latest >"$scratch/packages.log" 2>&1 &&
+        found gopls; then
+        ok "gopls (Go)"
+    else
+        note "gopls skipped ($(why)); later: go install golang.org/x/tools/gopls@latest"
+    fi
+
+    # Python: pyright where the system has it, else the Python LSP Server; or, without
+    # either, from uv, pipx or npm in your home folder.
+    local python
+    python="$(python_server)"
+    if [ -z "$python" ] && from_packages "$(package_for python)"; then
+        python="$(python_server)"
+    fi
+    if [ -z "$python" ] && have uv && note "installing basedpyright with uv" &&
+        uv tool install basedpyright >"$scratch/packages.log" 2>&1; then
+        python="$(python_server)"
+    fi
+    if [ -z "$python" ] && have pipx && note "installing python-lsp-server with pipx" &&
+        pipx install python-lsp-server >"$scratch/packages.log" 2>&1; then
+        python="$(python_server)"
+    fi
+    if [ -z "$python" ] && have npm && note "installing pyright with npm" &&
+        npm install -g pyright >"$scratch/packages.log" 2>&1; then
+        python="$(python_server)"
+    fi
+    if [ -n "$python" ]; then
+        ok "$python (Python)"
+    else
+        note "no Python language server; later: npm install -g pyright, or pipx install python-lsp-server"
     fi
 }
 
@@ -386,6 +597,9 @@ else
     linux_packages
 fi
 install_rust
+if [ "$with_lsp" -eq 1 ]; then
+    install_language_servers
+fi
 if [ "$with_font" -eq 1 ]; then
     install_font
 fi

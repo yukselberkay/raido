@@ -1,9 +1,11 @@
 <#
 .SYNOPSIS
 Build and install Raido on Windows with everything it needs: Git, the Visual Studio
-C++ build tools (Rust's linker), Rust (via rustup), rust-analyzer, JetBrains Mono
-Nerd Font, Raido itself (%USERPROFILE%\.cargo\bin\raido.exe, put on your PATH), and
-the Raido skill that teaches AI agents how to use Raido.
+C++ build tools (Rust's linker), Rust (via rustup), the language servers for the
+languages Raido's editor understands (rust-analyzer, clangd from LLVM, gopls when Go
+is installed, a Python server), JetBrains Mono Nerd Font, Raido itself
+(%USERPROFILE%\.cargo\bin\raido.exe, put on your PATH), and the Raido skill that
+teaches AI agents how to use Raido.
 
 .DESCRIPTION
 Run it from a checkout:
@@ -18,7 +20,7 @@ winget (App Installer, built into Windows 10 and 11).
 .PARAMETER NoFont
 Skip JetBrains Mono Nerd Font.
 .PARAMETER NoLsp
-Skip rust-analyzer.
+Skip the language servers (rust-analyzer, clangd, gopls, Python).
 .PARAMETER NoSkill
 Skip the Raido skill for AI agents.
 #>
@@ -132,11 +134,99 @@ function Install-Rust {
         $version = Get-RustVersion
     }
     Ok "rustc $version"
-    if (-not $NoLsp -and (Have 'rustup')) {
-        # Rust language support in Raido's editor (diagnostics, hover, completion).
-        # Quietly; Windows PowerShell 5.1 would stop on its progress lines otherwise.
-        & { $ErrorActionPreference = 'Continue'; & rustup component add rust-analyzer *> $null }
-        if ($LASTEXITCODE -eq 0) { Ok 'rust-analyzer' } else { Note "rust-analyzer could not be added; Raido works without it" }
+}
+
+# --- Language servers: diagnostics, completion and hover in Raido's editor ---
+# One for each language Raido knows: Rust, C and C++, Go, Python. Each is optional:
+# one that can't be installed is noted and skipped, and Raido works without it.
+
+# Run a program quietly; true when it succeeds. Windows PowerShell 5.1 would stop on
+# the progress lines native tools print to stderr otherwise.
+function Invoke-Quietly([scriptblock]$Command) {
+    & { $ErrorActionPreference = 'Continue'; & $Command *> $null }
+    return ($LASTEXITCODE -eq 0)
+}
+
+# Whether Raido can start a server: on PATH, or where Raido also looks (off_path in
+# src/lsp.rs): go install's folder for gopls, the LLVM installer's for clangd.
+function Test-Server([string]$Name) {
+    if (Have $Name) { return $true }
+    $dirs = @()
+    if ($Name -eq 'gopls') {
+        if ($env:GOBIN) { $dirs += $env:GOBIN }
+        if ($env:GOPATH) { $dirs += (Join-Path ($env:GOPATH -split ';')[0] 'bin') }
+        $dirs += (Join-Path $env:USERPROFILE 'go\bin')
+    }
+    if ($Name -eq 'clangd' -and $env:ProgramFiles) { $dirs += (Join-Path $env:ProgramFiles 'LLVM\bin') }
+    foreach ($dir in $dirs) {
+        if (Test-Path (Join-Path $dir "$Name.exe")) { return $true }
+    }
+    return $false
+}
+
+# The Python language server Raido would start (the first of those it knows).
+function Get-PythonServer {
+    'pyright-langserver', 'basedpyright-langserver', 'pylsp', 'jedi-language-server' |
+        Where-Object { Have $_ } | Select-Object -First 1
+}
+
+function Install-LanguageServers {
+    Step 'Language servers for Rust, C/C++, Go and Python (Windows, winget)'
+
+    # Rust: rustup's own. Its rust-analyzer command is there before the component
+    # is, failing until it's added.
+    if ((Have 'rust-analyzer') -and (Invoke-Quietly { rust-analyzer --version })) {
+        Ok 'rust-analyzer (Rust)'
+    } elseif ((Have 'rustup') -and (Invoke-Quietly { rustup component add rust-analyzer })) {
+        Ok 'rust-analyzer (Rust)'
+    } else {
+        Note 'rust-analyzer could not be added; later: rustup component add rust-analyzer'
+    }
+
+    # C and C++: clangd comes with LLVM, in C:\Program Files\LLVM\bin.
+    if (Test-Server 'clangd') {
+        Ok 'clangd (C, C++)'
+    } else {
+        try {
+            Note 'LLVM is a large download'
+            Install-WithWinget 'LLVM.LLVM' 'LLVM (clangd)'
+            if (Test-Server 'clangd') { Ok 'clangd (C, C++)' } else { Note 'LLVM was installed, but clangd is missing from it' }
+        } catch {
+            Note "clangd skipped ($($_.Exception.Message)); Raido works without it"
+        }
+    }
+
+    # Go: gopls needs Go itself, so only where Go is installed. Go's installer puts
+    # %USERPROFILE%\go\bin on PATH, where go install leaves it.
+    if (Test-Server 'gopls') {
+        Ok 'gopls (Go)'
+    } elseif (-not (Have 'go')) {
+        Note "gopls skipped: Go isn't installed (winget install GoLang.Go, then run this script again)"
+    } elseif ((Invoke-Quietly { go install golang.org/x/tools/gopls@latest }) -and (Test-Server 'gopls')) {
+        Ok 'gopls (Go)'
+    } else {
+        Note 'gopls could not be installed; later: go install golang.org/x/tools/gopls@latest'
+    }
+
+    # Python: pyright from npm, else basedpyright from uv, else the Python LSP Server
+    # from pipx.
+    $python = Get-PythonServer
+    if (-not $python -and (Have 'npm') -and (Invoke-Quietly { npm install -g pyright })) {
+        Update-SessionPath
+        $python = Get-PythonServer
+    }
+    if (-not $python -and (Have 'uv') -and (Invoke-Quietly { uv tool install basedpyright })) {
+        Update-SessionPath
+        $python = Get-PythonServer
+    }
+    if (-not $python -and (Have 'pipx') -and (Invoke-Quietly { pipx install python-lsp-server })) {
+        Update-SessionPath
+        $python = Get-PythonServer
+    }
+    if ($python) {
+        Ok "$python (Python)"
+    } else {
+        Note 'no Python language server; later: install Node.js (winget install OpenJS.NodeJS.LTS), then npm install -g pyright'
     }
 }
 
@@ -281,6 +371,7 @@ try {
     Install-Git
     Install-BuildTools
     Install-Rust
+    if (-not $NoLsp) { Install-LanguageServers }
     if (-not $NoFont) { Install-Font }
     Install-Raido
     Remove-Odin
