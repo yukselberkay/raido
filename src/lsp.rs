@@ -1,5 +1,6 @@
 //! A small Language Server Protocol client: diagnostics, hover, go-to-definition,
-//! completion and formatting for Rust, Go, Python, C and C++.
+//! completion and formatting for Rust, Go, Python, C and C++, and Dockerfiles and
+//! Docker Compose files.
 //!
 //! Each server runs as a child process speaking JSON-RPC over stdio. Reader and
 //! writer threads keep the UI loop non-blocking; `Lsp::poll` drains replies on
@@ -100,12 +101,26 @@ struct Language {
     id: &'static str,
 }
 
-/// The language key (`go`, `rust`, `python`, `c`) of a file Raido has a server for.
+/// The language key (`go`, `rust`, `python`, `c`, `docker`) of a file Raido has a
+/// server for.
 pub fn language_key(path: &Path) -> Option<&'static str> {
     language(path).map(|l| l.key)
 }
 
 fn language(path: &Path) -> Option<Language> {
+    // One server for both: Docker's own.
+    if crate::language::is_dockerfile(path) {
+        return Some(Language {
+            key: "docker",
+            id: "dockerfile",
+        });
+    }
+    if crate::language::is_compose(path) {
+        return Some(Language {
+            key: "docker",
+            id: "dockercompose",
+        });
+    }
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     let (key, id) = match ext.as_str() {
         "rs" => ("rust", "rust"),
@@ -130,6 +145,7 @@ fn defaults(key: &str) -> &'static [(&'static str, &'static [&'static str])] {
             ("jedi-language-server", &[]),
         ],
         "c" => &[("clangd", &[])],
+        "docker" => &[("docker-language-server", &["start", "--stdio"])],
         _ => &[],
     }
 }
@@ -140,6 +156,7 @@ fn install_hint(key: &str) -> &'static str {
         "go" => "go install golang.org/x/tools/gopls@latest",
         "python" => "npm install -g pyright  (or: pip install python-lsp-server)",
         "c" => "install clangd (Arch: pacman -S clang · Debian/Ubuntu: apt install clangd · macOS: xcode-select --install)",
+        "docker" => "go install github.com/docker/docker-language-server/cmd/docker-language-server@latest  (or a release binary from github.com/docker/docker-language-server)",
         _ => "see the README",
     }
 }
@@ -162,12 +179,12 @@ pub(crate) fn on_path(program: &str) -> bool {
 }
 
 /// Folders a server installed the usual way can be in without being on PATH: `go
-/// install`'s for gopls; for clangd, Homebrew's LLVM and Apple's Command Line Tools
+/// install`'s for gopls and Docker's server; for clangd, Homebrew's LLVM and Apple's Command Line Tools
 /// on macOS, and the LLVM installer's on Windows. The install scripts rely on these.
 fn off_path(program: &str) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     match program {
-        "gopls" => {
+        "gopls" | "docker-language-server" => {
             dirs.extend(std::env::var_os("GOBIN").map(PathBuf::from));
             if let Some(gopath) = std::env::var_os("GOPATH") {
                 dirs.extend(std::env::split_paths(&gopath).next().map(|p| p.join("bin")));
@@ -598,6 +615,10 @@ impl Lsp {
                         "workspace": { "workspaceFolders": true }
                     }
                 });
+                if key == "docker" {
+                    // Docker's server reports usage to Docker unless told not to.
+                    params["initializationOptions"] = json!({ "telemetry": "off" });
+                }
                 if key == "python" {
                     // Pyright then registers for file changes, which Raido reports;
                     // other servers watch files themselves unless told otherwise.
@@ -754,11 +775,10 @@ impl Lsp {
         if !self.enabled {
             bail!("Language servers are disabled (lsp_enabled = false)");
         }
-        let lang = buffer
-            .path
-            .as_deref()
-            .and_then(language)
-            .context("No language server for this file type (Rust, Go, Python, C, C++)")?;
+        let lang =
+            buffer.path.as_deref().and_then(language).context(
+                "No language server for this file type (Rust, Go, Python, C, C++, Docker)",
+            )?;
         if let Some(reason) = self.failed.get(lang.key) {
             bail!("{reason}");
         }
@@ -830,7 +850,7 @@ impl Lsp {
     /// A summary of every language's server for `:lsp`.
     pub fn report(&self) -> String {
         let mut parts = Vec::new();
-        for key in ["rust", "go", "python", "c"] {
+        for key in ["rust", "go", "python", "c", "docker"] {
             let state = if let Some(client) = self.clients.get(key) {
                 let on = match &client.python {
                     Some(python) => format!(" on {}", self.venv_name(python.venv.as_deref())),
@@ -1432,6 +1452,89 @@ mod tests {
         assert_eq!(language(Path::new("a.hpp")).unwrap().id, "cpp");
         assert_eq!(language(Path::new("a.py")).unwrap().key, "python");
         assert!(language(Path::new("a.md")).is_none());
+        // Docker's server takes Dockerfiles and Compose files, by their names.
+        for (name, id) in [
+            ("Dockerfile", "dockerfile"),
+            ("Dockerfile.dev", "dockerfile"),
+            ("api.dockerfile", "dockerfile"),
+            ("Containerfile", "dockerfile"),
+            ("compose.yaml", "dockercompose"),
+            ("docker-compose.prod.yml", "dockercompose"),
+        ] {
+            let lang = language(Path::new(name)).unwrap();
+            assert_eq!((lang.key, lang.id), ("docker", id), "{name}");
+        }
+        assert!(language(Path::new("values.yaml")).is_none());
+        assert!(language(Path::new("Dockerfile.dockerignore")).is_none());
+        assert!(off_path("docker-language-server")
+            .iter()
+            .any(|d| d.ends_with("go/bin")));
+    }
+
+    /// Docker's server is told the language of each file, and to keep its usage
+    /// reports to itself: it sends them to Docker unless told not to.
+    #[cfg(unix)]
+    #[test]
+    fn docker_files_go_to_one_server_that_sends_no_telemetry() {
+        if !on_path("python3") {
+            return;
+        }
+        const SERVER: &str = r#"
+import json, sys
+options = {}
+def send(msg):
+    body = json.dumps(msg)
+    sys.stdout.write("Content-Length: %d\r\n\r\n%s" % (len(body.encode()), body)); sys.stdout.flush()
+def read():
+    length = 0
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line: sys.exit(0)
+        line = line.strip()
+        if not line: break
+        if line.lower().startswith(b"content-length:"): length = int(line.split(b":")[1])
+    return json.loads(sys.stdin.buffer.read(length))
+while True:
+    msg = read(); method = msg.get("method")
+    if method == "initialize":
+        options = msg["params"].get("initializationOptions") or {}
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {"capabilities": {}}})
+    elif method == "textDocument/didOpen":
+        doc = msg["params"]["textDocument"]
+        said = "%s telemetry=%s" % (doc["languageId"], options.get("telemetry"))
+        send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {"uri": doc["uri"], "diagnostics": [
+            {"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}}, "severity": 2, "message": said}]}})
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let dockerfile = dir.path().join("Dockerfile");
+        let compose = dir.path().join("compose.yaml");
+        std::fs::write(&dockerfile, "FROM alpine\n").unwrap();
+        std::fs::write(&compose, "services: {}\n").unwrap();
+        let buffers = vec![
+            Buffer::open(&dockerfile).unwrap(),
+            Buffer::open(&compose).unwrap(),
+        ];
+        let mut overrides = BTreeMap::new();
+        overrides.insert(
+            "docker".to_string(),
+            CommandPlugin {
+                program: "python3".into(),
+                args: vec!["-c".into(), SERVER.into()],
+            },
+        );
+        let mut lsp = Lsp::new(dir.path().into(), true, overrides);
+        assert!(lsp.sync(&buffers, &[0, 1]).is_empty());
+        for _ in 0..300 {
+            lsp.poll(&buffers);
+            if lsp.diagnostics.len() == 2 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let said = |id: usize| lsp.diagnostics.get(&id).map(|d| d[0].message.clone());
+        assert_eq!(said(0).as_deref(), Some("dockerfile telemetry=off"));
+        assert_eq!(said(1).as_deref(), Some("dockercompose telemetry=off"));
+        assert_eq!(lsp.clients.len(), 1);
     }
 
     // Windows may resolve `python3` to a Store placeholder; the protocol is the same.

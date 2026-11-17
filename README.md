@@ -411,7 +411,13 @@ the history graph appears after you make commits.
 - **Source highlighting:** bundled Rust, C, C++, Python, Go grammars, plus the
   other bundled Syntect languages (JSON and YAML among them) and Raido's own TOML
   grammar (`pyproject.toml`, `Cargo.toml`, `config.toml`, and ```` ```toml ```` blocks
-  in Markdown). Absolute/relative line numbers.
+  in Markdown) and Dockerfile grammar. Files without an extension are known by name
+  (`Makefile`, `.bashrc`). Absolute/relative line numbers.
+- **Docker:** Dockerfiles and Containerfiles (`Dockerfile.dev`, `api.dockerfile`
+  too) highlighted, instructions that go on over lines indented, and Docker Compose
+  files (`compose.yaml`, `docker-compose.yml` and their overrides) known as Compose;
+  with Docker's language server, Compose completions, checks and formatting.
+  [Details](#docker-dockerfiles-and-compose-files).
 - **File explorer:** keyboard traversal, folders that fold one at a time or all at
   once, dotfiles always shown, VS Code-style Git status colors and letters, new
   file buffers, visible-path completion, open-buffer cycling.
@@ -972,7 +978,8 @@ Typing follows the language of the file, like VS Code:
 | --- | --- | --- |
 | Python | a line ending in `:` (`def f():`, `if x:`) | dedents after `return`, `pass`, `break`, `continue`, `raise`; `else:` / `elif` / `except` / `finally` move back under their `if` / `try` |
 | Rust, Go, C/C++, JS/TS, Java, Kotlin, Swift, C#, PHP, CSS, JSON | `{`, `(`, `[` | Go and Makefiles indent with tabs |
-| YAML, Makefile | `:` | |
+| YAML, Docker Compose, Makefile | `:` | |
+| Dockerfile | an instruction ending in `\` | its next lines line up one level in; the line after the last goes back to the instruction's |
 | Shell | `then`, `do`, `else`, `case … in` | |
 | Lua / Ruby | `then`, `do`, `function` / `def`, `class`, `if`, `do \|x\|` … | |
 | Markdown | | lists continue (`- `, `1.` → `2.`, `- [ ]`); Enter on an empty item ends the list |
@@ -1226,7 +1233,7 @@ text, however long, without anything from the screen.
 
 Raido starts the standard language server for a file the first time you open it, in
 the project root, and talks to it in the background. The [install
-scripts](#install-script) set up all four for your system; by hand, install a server once:
+scripts](#install-script) set up the first four for your system; by hand, install a server once:
 
 ![clangd hover docs for a C function, with an error marked in the gutter and underlined](docs/raido-lsp.png)
 
@@ -1236,6 +1243,7 @@ scripts](#install-script) set up all four for your system; by hand, install a se
 | Go | `gopls` (also found in `~/go/bin`, where `go install` puts it) | `go install golang.org/x/tools/gopls@latest` |
 | Python | `pyright-langserver`, `basedpyright-langserver`, `pylsp` or `jedi-language-server` | `npm install -g pyright` or `pip install python-lsp-server` |
 | C / C++ | `clangd` (also found in Homebrew's `llvm` and the Xcode tools on macOS, `C:\Program Files\LLVM\bin` on Windows) | Arch `pacman -S clang` · Debian/Ubuntu `apt install clangd` · Fedora `dnf install clang-tools-extra` · macOS Xcode tools · Windows `winget install LLVM.LLVM` |
+| Dockerfile, Docker Compose | `docker-language-server` (also found in `~/go/bin`) | `go install github.com/docker/docker-language-server/cmd/docker-language-server@latest`, or a binary from its [releases](https://github.com/docker/docker-language-server/releases) |
 
 | Feature | How |
 | --- | --- |
@@ -1291,8 +1299,36 @@ large module), the file is saved exactly as typed and the status line says why.
 `:w other.go` (a different name) also saves the text as is.
 
 The languages are listed in `format_on_save` (default `["go"]`). Add `"rust"`,
-`"python"` or `"c"` to do the same with their servers, `"json"` for
-[JSON](#json-formatting), or set `format_on_save = []` to turn it off.
+`"python"`, `"c"` or `"docker"` (Compose files) to do the same with their servers,
+`"json"` for [JSON](#json-formatting), or set `format_on_save = []` to turn it off.
+
+#### Docker: Dockerfiles and Compose files
+
+Raido knows a **Dockerfile** by its name: `Dockerfile`, `Containerfile`,
+`Dockerfile.dev`, `api.dockerfile` (but not `Dockerfile.dockerignore`). Its own
+grammar colors instructions (in any case), images and build stages (`AS build`,
+`--from=build`), flags, `ENV` / `ARG` / `LABEL` keys, variables (`$VAR`,
+`${VAR:-default}`), strings and comments, and reads `RUN`, `CMD` and `ENTRYPOINT`
+as shell, heredocs (`RUN <<EOF`) included. An instruction that goes on over lines
+ending in `\` stays one instruction, comment lines in it too. Enter after such a
+line indents the next one level, and the line after the last goes back.
+```` ```dockerfile ```` blocks in Markdown are highlighted too.
+
+A **Compose file** is `compose.yaml` or `docker-compose.yml` (`.yml` or `.yaml`),
+and the ones beside them: `compose.override.yaml`, `docker-compose.prod.yml`. It is
+highlighted and indented as YAML, the status line says *Docker Compose*, and
+completion offers Compose's keys (`depends_on`, `healthcheck`, `restart`…).
+
+**Docker's language server** (`docker-language-server`, see the table above) adds,
+once installed:
+
+- **Compose files:** completion of keys and values, errors, hover docs, go to
+  definition of services, networks and volumes, and `:format` (add `"docker"` to
+  `format_on_save` to format on every save).
+- **Dockerfiles:** warnings from BuildKit's checks (it needs Docker with Buildx)
+  and, with `K` on a `FROM` image, what Docker Scout knows about it.
+
+Raido tells the server not to send usage reports to Docker (`telemetry: off`).
 
 #### JSON formatting
 

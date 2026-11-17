@@ -445,7 +445,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                             severity_color(&theme, d.severity),
                         );
                     } else {
-                        let language = app.syntax.language(buffer);
+                        let compose = buffer
+                            .path
+                            .as_deref()
+                            .is_some_and(crate::language::is_compose);
+                        let language = if compose {
+                            "Docker Compose".to_string()
+                        } else {
+                            app.syntax.language(buffer)
+                        };
                         let errors = diagnostics.iter().filter(|d| d.severity == 1).count();
                         let warnings = diagnostics.iter().filter(|d| d.severity == 2).count();
                         let mut server = app
@@ -3267,7 +3275,7 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         ("Ctrl-a", "Select the whole file"),
         (
             "LANGUAGE SERVERS",
-            "Rust, Go, Python, C, C++ — :lsp shows status",
+            "Rust, Go, Python, C/C++, Docker — :lsp shows status",
         ),
         (
             "K / gd / Ctrl-o",

@@ -14,13 +14,16 @@ use syntect::{
 };
 
 /// Grammars Raido adds to the bundled ones: TOML (`pyproject.toml`, `Cargo.toml`,
-/// Raido's own settings).
-const EXTRA: [&str; 1] = [include_str!("syntaxes/toml.sublime-syntax")];
+/// Raido's own settings) and Dockerfiles.
+const EXTRA: [&str; 2] = [
+    include_str!("syntaxes/toml.sublime-syntax"),
+    include_str!("syntaxes/dockerfile.sublime-syntax"),
+];
 
 pub struct Cached {
     revision: u64,
     name: String,
-    /// The grammar is one of Raido's own (`Syntax::extra`), parsed with that set.
+    /// The grammar is one of Raido's own ([`extra`]), parsed with that set.
     extra: bool,
     parse: ParseState,
     state: HighlightState,
@@ -41,11 +44,22 @@ fn line_hash(line: ropey::RopeSlice) -> u64 {
     hasher.finish()
 }
 
+/// Raido's own grammars, kept in a set of their own: adding them to the bundled set
+/// means rebuilding it, a tenth of a second at every start. Built once, the first
+/// time a file has no bundled grammar.
+fn extra() -> &'static SyntaxSet {
+    static EXTRA_SET: std::sync::OnceLock<SyntaxSet> = std::sync::OnceLock::new();
+    EXTRA_SET.get_or_init(|| {
+        let mut set = SyntaxSetBuilder::new();
+        for source in EXTRA {
+            set.add(SyntaxDefinition::load_from_str(source, true, None).expect("bundled grammar"));
+        }
+        set.build()
+    })
+}
+
 pub struct Syntax {
     pub syntaxes: SyntaxSet,
-    /// Raido's own grammars, kept in a set of their own: adding them to the
-    /// bundled set means rebuilding it, a tenth of a second at every start.
-    extra: SyntaxSet,
     pub theme: Theme,
     pub cache: HashMap<usize, Cached>,
 }
@@ -53,12 +67,6 @@ pub struct Syntax {
 impl Syntax {
     pub fn new(palette: &config::Theme) -> Self {
         let syntaxes = SyntaxSet::load_defaults_newlines();
-        let mut extra = SyntaxSetBuilder::new();
-        for source in EXTRA {
-            extra
-                .add(SyntaxDefinition::load_from_str(source, true, None).expect("bundled grammar"));
-        }
-        let extra = extra.build();
         let theme = if let Some(colors) = &palette.syntax_colors {
             let mut theme = Theme {
                 settings: ThemeSettings {
@@ -108,7 +116,6 @@ impl Syntax {
         };
         Self {
             syntaxes,
-            extra,
             theme,
             cache: HashMap::new(),
         }
@@ -120,10 +127,34 @@ impl Syntax {
             .find_syntax_by_extension(extension)
             .map(|g| (g, &self.syntaxes)))
         .or_else(|| {
-            self.extra
+            extra()
                 .find_syntax_by_extension(extension)
-                .map(|g| (g, &self.extra))
+                .map(|g| (g, extra()))
         })
+    }
+    /// The grammar for the file at `path`, and the set to parse it with: by its whole
+    /// name first (`Makefile`, `.bashrc`, `Dockerfile`), else by its extension.
+    /// Dockerfiles go by their kind too (`Dockerfile.dev`, `api.dockerfile`).
+    pub fn for_path(&self, path: &std::path::Path) -> Option<(&SyntaxReference, &SyntaxSet)> {
+        if crate::language::is_dockerfile(path) {
+            return self.by_extension("Dockerfile");
+        }
+        let keys = [
+            path.file_name().and_then(|n| n.to_str()),
+            path.extension().and_then(|e| e.to_str()),
+        ];
+        // The bundled grammars first, so Raido's own are built only when needed.
+        let find = |set: &'static SyntaxSet| {
+            keys.iter()
+                .flatten()
+                .find_map(|key| set.find_syntax_by_extension(key))
+                .map(|g| (g, set))
+        };
+        keys.iter()
+            .flatten()
+            .find_map(|key| self.syntaxes.find_syntax_by_extension(key))
+            .map(|g| (g, &self.syntaxes))
+            .or_else(|| find(extra()))
     }
     /// The grammar a Markdown code block labeled `token` (`rust`, `toml`) means,
     /// and the set to parse it with.
@@ -132,15 +163,11 @@ impl Syntax {
             .syntaxes
             .find_syntax_by_token(token)
             .map(|g| (g, &self.syntaxes)))
-        .or_else(|| {
-            self.extra
-                .find_syntax_by_token(token)
-                .map(|g| (g, &self.extra))
-        })
+        .or_else(|| extra().find_syntax_by_token(token).map(|g| (g, extra())))
     }
-    fn set(&self, extra: bool) -> &SyntaxSet {
-        if extra {
-            &self.extra
+    fn set(&self, own: bool) -> &SyntaxSet {
+        if own {
+            extra()
         } else {
             &self.syntaxes
         }
@@ -148,10 +175,8 @@ impl Syntax {
     pub fn language(&self, buffer: &Buffer) -> String {
         buffer
             .path
-            .as_ref()
-            .and_then(|p| p.extension())
-            .and_then(|e| e.to_str())
-            .and_then(|e| self.by_extension(e))
+            .as_deref()
+            .and_then(|p| self.for_path(p))
             .map(|(g, _)| g.name.clone())
             .unwrap_or_else(|| "Plain text".into())
     }
@@ -190,12 +215,10 @@ impl Syntax {
         if reset {
             let (syntax, set) = buffer
                 .path
-                .as_ref()
-                .and_then(|p| p.extension())
-                .and_then(|s| s.to_str())
-                .and_then(|extension| self.by_extension(extension))
+                .as_deref()
+                .and_then(|p| self.for_path(p))
                 .unwrap_or_else(|| (self.syntaxes.find_syntax_plain_text(), &self.syntaxes));
-            let extra = std::ptr::eq(set, &self.extra);
+            let extra = std::ptr::eq(set, extra());
             let highlighter = Highlighter::new(&self.theme);
             self.cache.insert(
                 id,
@@ -213,11 +236,7 @@ impl Syntax {
             );
         }
         let cache = self.cache.get_mut(&id).expect("cache just inserted");
-        let set = if cache.extra {
-            &self.extra
-        } else {
-            &self.syntaxes
-        };
+        let set = if cache.extra { extra() } else { &self.syntaxes };
         let highlighter = Highlighter::new(&self.theme);
         let target = end.min(buffer.lines());
         let stop = target.min(cache.lines.len() + budget);
@@ -246,8 +265,7 @@ impl Syntax {
     /// The grammar for a file named `name`, unless it's plain text, and the set to
     /// parse it with.
     pub fn grammar(&self, name: &str) -> Option<(&SyntaxReference, &SyntaxSet)> {
-        let extension = std::path::Path::new(name).extension()?.to_str()?;
-        self.by_extension(extension)
+        self.for_path(std::path::Path::new(name))
     }
     /// A review hunk's lines in the colors of file `name`'s language. The lines as
     /// they were (context and removed) and as they are (context and added) each go
@@ -400,8 +418,21 @@ mod tests {
     /// The scopes the TOML grammar gives `token` where it first appears after
     /// `after` in `text`, line by line as the editor parses it.
     fn toml_scope(text: &str, after: &str, token: &str) -> String {
-        let syntax = Syntax::new(&config::Theme::default());
-        let (grammar, set) = syntax.by_extension("toml").expect("toml grammar");
+        scope_in("a.toml", text, after, token)
+    }
+
+    /// The scopes the grammar for a file named `name` gives `token` where it first
+    /// appears after `after` in `text`.
+    fn scope_in(name: &str, text: &str, after: &str, token: &str) -> String {
+        // Loading the grammars takes a while; once per test thread is enough.
+        thread_local! {
+            static SYNTAX: Syntax = Syntax::new(&config::Theme::default());
+        }
+        SYNTAX.with(|syntax| scope_with(syntax, name, text, after, token))
+    }
+
+    fn scope_with(syntax: &Syntax, name: &str, text: &str, after: &str, token: &str) -> String {
+        let (grammar, set) = syntax.grammar(name).expect("grammar");
         let mut parse = ParseState::new(grammar);
         let mut stack = ScopeStack::new();
         let from = text.find(after).expect("anchor");
@@ -421,6 +452,123 @@ mod tests {
             offset += line.len();
         }
         stack.to_string()
+    }
+
+    #[test]
+    fn dockerfiles_are_highlighted_by_raidos_own_grammar() {
+        let text = r#"# syntax=docker/dockerfile:1
+# A build stage
+ARG GO_VERSION=1.22
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS build
+ENV CGO_ENABLED=0 PATH="/go/bin:$PATH"
+RUN --mount=type=cache,target=/go/pkg/mod \
+    # fetch first
+    go mod download && echo "done" \
+    || exit 1
+RUN echo it's
+WORKDIR /src
+COPY --from=build /out/app /app
+RUN <<EOF
+set -e
+echo "in a heredoc"
+EOF
+COPY <<CONF /etc/app.conf
+listen = 8080
+CONF
+EXPOSE 8080/tcp
+HEALTHCHECK --interval=30s CMD curl -f http://localhost/ || exit 1
+CMD ["/app", "--port"]
+LABEL org.opencontainers.image.source="https://example.com" version=1
+user app
+"#;
+        for (after, token, scope) in [
+            ("# syntax", "syntax", "keyword.other.directive"),
+            (
+                "syntax=",
+                "docker/dockerfile:1",
+                "string.unquoted.directive",
+            ),
+            ("# A build", "build", "comment.line"),
+            ("ARG", "ARG", "keyword.other.instruction"),
+            ("ARG", "GO_VERSION", "variable.other.key"),
+            ("FROM", "FROM", "keyword.other.instruction"),
+            ("FROM", "--platform", "variable.parameter.flag"),
+            ("--platform=", "$BUILDPLATFORM", "variable.other"),
+            ("FROM", "golang", "support.class.image"),
+            ("golang:", "${GO_VERSION}", "variable.other"),
+            ("} AS", "AS", "keyword.other"),
+            ("AS ", "build", "entity.name.type.stage"),
+            ("ENV", "CGO_ENABLED", "variable.other.key"),
+            ("PATH=", "/go/bin", "string.quoted.double"),
+            ("/go/bin:", "$PATH", "variable.other"),
+            ("RUN --mount", "--mount", "variable.parameter.flag"),
+            // A comment line inside an instruction that goes on.
+            ("# fetch", "fetch", "comment.line"),
+            ("download ", "&&", "keyword.operator.shell"),
+            ("&& ", "echo", "support.function.builtin"),
+            ("echo \"", "done", "string.quoted.double"),
+            ("|| exit", "exit", "support.function.builtin"),
+            // A quote left open ends with its line.
+            ("it's\n", "WORKDIR", "keyword.other.instruction"),
+            ("--from=", "build", "entity.name.type.stage"),
+            ("RUN <<", "<<", "keyword.operator.heredoc"),
+            ("set -e", "set", "support.function.builtin"),
+            ("in a heredoc", "heredoc", "string.quoted.double"),
+            ("heredoc\"\n", "EOF", "entity.name.tag.heredoc"),
+            ("listen", "listen", "string.unquoted.heredoc"),
+            ("8080\n", "CONF", "entity.name.tag.heredoc"),
+            ("EXPOSE", "EXPOSE", "keyword.other.instruction"),
+            ("EXPOSE", "8080", "constant.numeric"),
+            ("8080/", "tcp", "constant.language.protocol"),
+            ("HEALTHCHECK", "--interval", "variable.parameter.flag"),
+            ("30s ", "CMD", "keyword.other.instruction"),
+            ("localhost/ ", "||", "keyword.operator.shell"),
+            ("CMD [", "/app", "string.quoted.double"),
+            (
+                "LABEL",
+                "org.opencontainers.image.source",
+                "variable.other.key",
+            ),
+            ("com\" ", "version", "variable.other.key"),
+            // Instructions are read in any case.
+            ("user app", "user", "keyword.other.instruction"),
+        ] {
+            let found = scope_in("Dockerfile", text, after, token);
+            assert!(found.contains(scope), "{token} after {after}: {found}");
+        }
+        // With Windows line breaks too: the heredoc still ends.
+        let crlf = "RUN <<EOF\r\necho hi\r\nEOF\r\nUSER app\r\n";
+        assert!(scope_in("Dockerfile", crlf, "USER", "USER").contains("keyword.other"));
+        // Plain words stay plain: a path, a command's arguments.
+        for (after, token) in [("COPY --from=build ", "/out/app"), ("go mod", "mod")] {
+            let found = scope_in("Dockerfile", text, after, token);
+            assert_eq!(found.trim(), "source.dockerfile", "{token}");
+        }
+    }
+
+    #[test]
+    fn grammars_are_found_by_file_name_too() {
+        let syntax = Syntax::new(&config::Theme::default());
+        let name = |file: &str| syntax.grammar(file).map(|(g, _)| g.name.clone());
+        for file in [
+            "Dockerfile",
+            "dockerfile",
+            "Containerfile",
+            "Dockerfile.dev",
+            "docker/api.Dockerfile",
+        ] {
+            assert_eq!(name(file).as_deref(), Some("Dockerfile"), "{file}");
+        }
+        assert_ne!(
+            name("Dockerfile.dockerignore").as_deref(),
+            Some("Dockerfile")
+        );
+        assert_eq!(name("Makefile").as_deref(), Some("Makefile"));
+        assert_eq!(name("compose.yaml").as_deref(), Some("YAML"));
+        assert_eq!(name("main.rs").as_deref(), Some("Rust"));
+        // Markdown code blocks labeled for Docker.
+        assert!(syntax.by_token("dockerfile").is_some());
+        assert!(syntax.by_token("Containerfile").is_some());
     }
 
     #[test]

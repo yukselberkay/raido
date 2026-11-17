@@ -1,0 +1,315 @@
+%YAML 1.2
+---
+# Dockerfiles and Containerfiles (https://docs.docker.com/reference/dockerfile/),
+# written for Raido. Its scopes are the ones Raido's themes color: instructions as
+# keywords; images and build stages as types; flags, variables and ENV / ARG /
+# LABEL keys as variables; strings, numbers and comments. RUN, CMD and ENTRYPOINT
+# read as shell: strings, variables, operators, builtins and heredocs (RUN <<EOF).
+# An instruction goes on over lines ending in a backslash, comment lines in it
+# left out, as Docker reads them.
+name: Dockerfile
+file_extensions:
+  - Dockerfile
+  - Containerfile
+  - dockerfile
+  - containerfile
+scope: source.dockerfile
+
+variables:
+  onbuild: '^\s*(?:((?i:onbuild))\s+)?'
+  key: '[A-Za-z_][A-Za-z0-9_.-]*'
+  # A shell word on its own: not part of a longer word, path or option.
+  before: '(?<![\w.$/-])'
+  after: '(?![\w./-])'
+
+contexts:
+  main:
+    - include: directives
+    - include: comment-line
+    - match: '{{onbuild}}((?i:run))\b'
+      captures:
+        1: keyword.other.instruction.dockerfile
+        2: keyword.other.instruction.dockerfile
+      push: run
+    - match: '{{onbuild}}((?i:cmd|entrypoint|shell))\b'
+      captures:
+        1: keyword.other.instruction.dockerfile
+        2: keyword.other.instruction.dockerfile
+      push: command
+    - match: '^\s*((?i:from))\b'
+      captures:
+        1: keyword.other.instruction.dockerfile
+      push: from
+    - match: '{{onbuild}}((?i:env|label))\b'
+      captures:
+        1: keyword.other.instruction.dockerfile
+        2: keyword.other.instruction.dockerfile
+      push: pairs
+    - match: '{{onbuild}}((?i:arg))\b'
+      captures:
+        1: keyword.other.instruction.dockerfile
+        2: keyword.other.instruction.dockerfile
+      push: arg
+    - match: '{{onbuild}}((?i:expose))\b'
+      captures:
+        1: keyword.other.instruction.dockerfile
+        2: keyword.other.instruction.dockerfile
+      push: expose
+    - match: '{{onbuild}}((?i:healthcheck))\b'
+      captures:
+        1: keyword.other.instruction.dockerfile
+        2: keyword.other.instruction.dockerfile
+      push: healthcheck
+    - match: '{{onbuild}}((?i:add|copy|workdir|user|volume|stopsignal|maintainer|onbuild))\b'
+      captures:
+        1: keyword.other.instruction.dockerfile
+        2: keyword.other.instruction.dockerfile
+      push: args
+
+  # `# syntax=docker/dockerfile:1`, `# escape=\``, `# check=skip=…`
+  directives:
+    - match: '^\s*(#)\s*((?i:syntax|escape|check))\s*(=)\s*(.*?)\s*$'
+      captures:
+        1: comment.line.number-sign.dockerfile punctuation.definition.comment.dockerfile
+        2: keyword.other.directive.dockerfile
+        3: keyword.operator.assignment.dockerfile
+        4: string.unquoted.directive.dockerfile
+
+  # Only a whole line is a comment: `#` later on is the instruction's own.
+  comment-line:
+    - match: '^\s*(#).*$\n?'
+      scope: comment.line.number-sign.dockerfile
+      captures:
+        1: punctuation.definition.comment.dockerfile
+
+  # Where an instruction ends: at the end of a line, unless it ends in a backslash.
+  # The lines it goes on over may be comments or blank; Docker leaves them out.
+  # (Ends look ahead to the newline: after it, `$` would match again.)
+  end:
+    - match: '(\\)\s*$\n?'
+      captures:
+        1: punctuation.separator.continuation.dockerfile
+    - include: comment-line
+    - match: '^\s*\n'
+    - match: '(?=\n)'
+      pop: true
+
+  flags:
+    - match: '(?<!\S)(--from)(=)([^\s\\$]+)'
+      captures:
+        1: variable.parameter.flag.dockerfile
+        2: keyword.operator.assignment.dockerfile
+        3: entity.name.type.stage.dockerfile
+    - match: '(?<!\S)(--[A-Za-z][A-Za-z0-9-]*)(=)'
+      captures:
+        1: variable.parameter.flag.dockerfile
+        2: keyword.operator.assignment.dockerfile
+      push: flag-value
+    - match: '(?<!\S)--[A-Za-z][A-Za-z0-9-]*'
+      scope: variable.parameter.flag.dockerfile
+
+  # --mount=type=cache,target=/root/.cache, --platform=$BUILDPLATFORM
+  flag-value:
+    - match: '(?=\s|\\\s*$)'
+      pop: true
+    - include: strings
+    - include: variables
+
+  variables:
+    - match: '\$\{[^}\n]*\}'
+      scope: variable.other.dockerfile
+    - match: '\${{key}}'
+      scope: variable.other.dockerfile
+    - match: '\$[0-9@*#?$!-]'
+      scope: variable.language.dockerfile
+
+  escapes:
+    - match: '\\.'
+      scope: constant.character.escape.dockerfile
+
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.dockerfile
+      push: string-double
+    - match: "'"
+      scope: punctuation.definition.string.begin.dockerfile
+      push: string-single
+
+  # A quote left open ends with its line, so it can't swallow the instructions after.
+  string-double:
+    - meta_scope: string.quoted.double.dockerfile
+    - match: '"'
+      scope: punctuation.definition.string.end.dockerfile
+      pop: true
+    - match: '(\\)\s*$\n?'
+      captures:
+        1: punctuation.separator.continuation.dockerfile
+    - include: escapes
+    - include: variables
+    - match: '(?=\n)'
+      pop: true
+
+  string-single:
+    - meta_scope: string.quoted.single.dockerfile
+    - match: "'"
+      scope: punctuation.definition.string.end.dockerfile
+      pop: true
+    - match: '(\\)\s*$\n?'
+      captures:
+        1: punctuation.separator.continuation.dockerfile
+    - match: '(?=\n)'
+      pop: true
+
+  # FROM [--platform=…] image [AS name]
+  from:
+    - include: end
+    - include: flags
+    - include: variables
+    - match: '\s+((?i:as))\s+([^\s\\]+)'
+      captures:
+        1: keyword.other.as.dockerfile
+        2: entity.name.type.stage.dockerfile
+    - match: '[^\s\\$]+'
+      scope: support.class.image.dockerfile
+
+  # RUN [--mount=… --network=…] then a command, shell or ["exec", "form"].
+  run:
+    - include: end
+    - include: flags
+    - match: '(?=\[)'
+      set: exec
+    - match: '(?=\S)'
+      set: shell
+
+  command:
+    - include: end
+    - match: '(?=\[)'
+      set: exec
+    - match: '(?=\S)'
+      set: shell
+
+  exec:
+    - include: end
+    - match: '\['
+      scope: punctuation.section.brackets.begin.dockerfile
+    - match: '\]'
+      scope: punctuation.section.brackets.end.dockerfile
+    - match: ','
+      scope: punctuation.separator.comma.dockerfile
+    - match: '"'
+      scope: punctuation.definition.string.begin.dockerfile
+      push: string-json
+
+  string-json:
+    - meta_scope: string.quoted.double.dockerfile
+    - match: '"'
+      scope: punctuation.definition.string.end.dockerfile
+      pop: true
+    - include: escapes
+    - match: '(?=\n)'
+      pop: true
+
+  shell:
+    - include: end
+    - include: shell-words
+
+  shell-words:
+    # RUN <<EOF … EOF: the lines up to the closing word are the script.
+    - match: '(<<-?)\s*(["'']?)(\w+)\2.*$\n?'
+      captures:
+        1: keyword.operator.heredoc.dockerfile
+        3: entity.name.tag.heredoc.dockerfile
+      push: heredoc-script
+    - match: '(?<!\S)#.*?(?=\s*\\?\s*$)'
+      scope: comment.line.number-sign.shell.dockerfile
+    - include: strings
+    - include: variables
+    - include: escapes
+    - match: '&&|\|\||;;|[;&|]|>>|[<>]&?|\(|\)'
+      scope: keyword.operator.shell.dockerfile
+    - match: '{{before}}(?:if|then|else|elif|fi|for|in|while|until|do|done|case|esac|function|select){{after}}'
+      scope: keyword.control.shell.dockerfile
+    - match: '{{before}}(?:echo|cd|set|export|exec|source|test|printf|read|eval|unset|shift|exit|return|trap|umask|wait|command|type|ulimit|alias|true|false){{after}}'
+      scope: support.function.builtin.shell.dockerfile
+
+  heredoc-script:
+    - match: '^[ \t]*(\3)[ \t\r]*$'
+      captures:
+        1: entity.name.tag.heredoc.dockerfile
+      pop: true
+    - include: shell-words
+
+  # COPY <<EOF /etc/app.conf: the lines up to the closing word are the file.
+  heredoc-text:
+    - meta_content_scope: string.unquoted.heredoc.dockerfile
+    - match: '^[ \t]*(\3)[ \t\r]*$'
+      captures:
+        1: entity.name.tag.heredoc.dockerfile
+      pop: true
+
+  # ENV / LABEL key=value …
+  pairs:
+    - include: end
+    - match: '(?<!\S)({{key}})(=)'
+      captures:
+        1: variable.other.key.dockerfile
+        2: keyword.operator.assignment.dockerfile
+    - match: '(?<!\S)("[^"\n]*")(=)'
+      captures:
+        1: variable.other.key.dockerfile
+        2: keyword.operator.assignment.dockerfile
+    - include: strings
+    - include: variables
+    - include: escapes
+
+  # ARG name[=default] …
+  arg:
+    - include: end
+    - match: '(?<!\S)({{key}})(=)?'
+      captures:
+        1: variable.other.key.dockerfile
+        2: keyword.operator.assignment.dockerfile
+    - include: strings
+    - include: variables
+    - include: escapes
+
+  # EXPOSE 80/tcp 8000-8010
+  expose:
+    - include: end
+    - include: variables
+    - match: '\b[0-9]+(?:-[0-9]+)?\b'
+      scope: constant.numeric.port.dockerfile
+    - match: '(/)((?i:tcp|udp|sctp))\b'
+      captures:
+        1: punctuation.separator.protocol.dockerfile
+        2: constant.language.protocol.dockerfile
+
+  # HEALTHCHECK [--interval=…] CMD command, or HEALTHCHECK NONE
+  healthcheck:
+    - include: end
+    - include: flags
+    - match: '\b(?i:none)\b'
+      scope: constant.language.none.dockerfile
+    - match: '\b((?i:cmd))\b'
+      captures:
+        1: keyword.other.instruction.dockerfile
+      set: command
+
+  # COPY, ADD, WORKDIR, USER, VOLUME, STOPSIGNAL: flags, paths, strings, variables.
+  args:
+    - include: end
+    - include: flags
+    - match: '(<<-?)\s*(["'']?)(\w+)\2.*$\n?'
+      captures:
+        1: keyword.operator.heredoc.dockerfile
+        3: entity.name.tag.heredoc.dockerfile
+      push: heredoc-text
+    - match: '\['
+      scope: punctuation.section.brackets.begin.dockerfile
+    - match: '\]'
+      scope: punctuation.section.brackets.end.dockerfile
+    - match: ','
+      scope: punctuation.separator.comma.dockerfile
+    - include: strings
+    - include: variables
+    - include: escapes

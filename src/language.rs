@@ -22,6 +22,10 @@ pub enum Lang {
     /// JSON.
     Brace,
     Yaml,
+    /// Docker Compose files: YAML, with Compose's keys to complete.
+    Compose,
+    /// Dockerfiles and Containerfiles.
+    Docker,
     Toml,
     Shell,
     Lua,
@@ -42,6 +46,12 @@ impl Lang {
             .unwrap_or_default();
         if matches!(name, "Makefile" | "makefile" | "GNUmakefile") {
             return Self::Make;
+        }
+        if is_dockerfile(path) {
+            return Self::Docker;
+        }
+        if is_compose(path) {
+            return Self::Compose;
         }
         let ext = path
             .extension()
@@ -68,9 +78,14 @@ impl Lang {
     }
     fn comment(self) -> Option<&'static str> {
         match self {
-            Self::Python | Self::Yaml | Self::Toml | Self::Shell | Self::Ruby | Self::Make => {
-                Some("#")
-            }
+            Self::Python
+            | Self::Yaml
+            | Self::Compose
+            | Self::Docker
+            | Self::Toml
+            | Self::Shell
+            | Self::Ruby
+            | Self::Make => Some("#"),
             Self::Lua => Some("--"),
             Self::Rust | Self::Go | Self::C | Self::Js | Self::Brace => Some("//"),
             Self::Markdown | Self::Plain => None,
@@ -92,6 +107,37 @@ impl Lang {
             _ => &[('(', ')'), ('[', ']'), ('{', '}'), ('"', '"'), ('\'', '\'')],
         }
     }
+}
+
+/// A Dockerfile by its name, as Docker and VS Code know them: `Dockerfile`,
+/// `Containerfile`, `Dockerfile.dev`, `api.dockerfile` (not `Dockerfile.dockerignore`).
+pub fn is_dockerfile(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let name = name.to_ascii_lowercase();
+    !name.ends_with(".dockerignore")
+        && ["dockerfile", "containerfile"].iter().any(|kind| {
+            name == *kind
+                || name.starts_with(&format!("{kind}."))
+                || name.ends_with(&format!(".{kind}"))
+        })
+}
+
+/// A Docker Compose file by its name: `compose.yaml`, `docker-compose.yml`, and the
+/// ones beside them (`compose.override.yaml`, `docker-compose.prod.yml`).
+pub fn is_compose(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let name = name.to_ascii_lowercase();
+    let Some(stem) = name
+        .strip_suffix(".yaml")
+        .or_else(|| name.strip_suffix(".yml"))
+    else {
+        return false;
+    };
+    stem == "compose" || stem.starts_with("compose.") || stem.contains("docker-compose")
 }
 
 impl Lang {
@@ -408,6 +454,105 @@ impl Lang {
                 "attr_accessor",
             ],
             Self::Yaml | Self::Toml => &["true", "false", "null"],
+            Self::Docker => &[
+                "FROM",
+                "AS",
+                "RUN",
+                "CMD",
+                "ENTRYPOINT",
+                "SHELL",
+                "COPY",
+                "ADD",
+                "WORKDIR",
+                "ENV",
+                "ARG",
+                "LABEL",
+                "EXPOSE",
+                "VOLUME",
+                "USER",
+                "HEALTHCHECK",
+                "STOPSIGNAL",
+                "ONBUILD",
+            ],
+            // The Compose file's own keys, and the values that are words.
+            Self::Compose => &[
+                "services",
+                "networks",
+                "volumes",
+                "configs",
+                "secrets",
+                "include",
+                "name",
+                "image",
+                "build",
+                "context",
+                "dockerfile",
+                "args",
+                "target",
+                "command",
+                "entrypoint",
+                "environment",
+                "env_file",
+                "ports",
+                "expose",
+                "depends_on",
+                "condition",
+                "service_started",
+                "service_healthy",
+                "service_completed_successfully",
+                "restart",
+                "unless-stopped",
+                "always",
+                "on-failure",
+                "healthcheck",
+                "test",
+                "interval",
+                "timeout",
+                "retries",
+                "start_period",
+                "container_name",
+                "hostname",
+                "working_dir",
+                "user",
+                "labels",
+                "profiles",
+                "platform",
+                "pull_policy",
+                "deploy",
+                "replicas",
+                "resources",
+                "limits",
+                "reservations",
+                "cpus",
+                "memory",
+                "logging",
+                "driver",
+                "driver_opts",
+                "options",
+                "external",
+                "extra_hosts",
+                "cap_add",
+                "cap_drop",
+                "privileged",
+                "read_only",
+                "tmpfs",
+                "ulimits",
+                "init",
+                "tty",
+                "stdin_open",
+                "stop_signal",
+                "stop_grace_period",
+                "extends",
+                "develop",
+                "watch",
+                "action",
+                "path",
+                "sync",
+                "rebuild",
+                "true",
+                "false",
+                "null",
+            ],
             Self::Markdown | Self::Make | Self::Plain => &[],
         }
     }
@@ -475,7 +620,7 @@ impl Rules {
         let unit = detect_unit(buffer).unwrap_or_else(|| match lang {
             Lang::Go | Lang::Make => "\t".into(),
             Lang::Python => "    ".into(),
-            Lang::Yaml | Lang::Ruby => "  ".into(),
+            Lang::Yaml | Lang::Compose | Lang::Ruby => "  ".into(),
             _ => " ".repeat(tab_width.clamp(1, 8)),
         });
         Self { lang, unit }
@@ -491,7 +636,7 @@ impl Rules {
         let first = words.first().copied().unwrap_or_default();
         let last = words.last().copied().unwrap_or_default();
         match self.lang {
-            Lang::Python | Lang::Yaml | Lang::Make => code.ends_with(':'),
+            Lang::Python | Lang::Yaml | Lang::Compose | Lang::Make => code.ends_with(':'),
             Lang::Shell => {
                 matches!(last, "then" | "do" | "else") || (first == "case" && last == "in")
             }
@@ -663,6 +808,32 @@ fn next_indent(rules: &Rules, current: &str, before: &str) -> String {
     }
 }
 
+/// The indentation for a new line below row `row` of a Dockerfile, whose text
+/// before the cursor is `before`: an instruction that goes on (its line ends in a
+/// backslash) indents the lines it goes on over by one level, and the line after its
+/// last one goes back to where the instruction starts.
+fn docker_indent(b: &Buffer, row: usize, rules: &Rules, current: &str, before: &str) -> String {
+    let goes_on = |text: &str| text.trim_end().ends_with('\\');
+    let mut first = row;
+    while first > 0 && goes_on(&b.line(first - 1)) {
+        first -= 1;
+    }
+    if goes_on(before) {
+        if first == row {
+            format!("{current}{}", rules.unit)
+        } else {
+            current.to_string()
+        }
+    } else if first < row {
+        b.line(first)
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect()
+    } else {
+        next_indent(rules, current, before)
+    }
+}
+
 /// A Markdown list item: (indent + marker to repeat, whether the item is empty).
 fn list_item(before: &str) -> Option<(String, bool)> {
     let trimmed = before.trim_start();
@@ -728,7 +899,10 @@ pub fn enter(b: &mut Buffer, rules: &Rules) {
     } else {
         indent.chars().take(before.chars().count()).collect()
     };
-    let inner = next_indent(rules, &indent, &before);
+    let inner = match rules.lang {
+        Lang::Docker => docker_indent(b, b.row, rules, &indent, &before),
+        _ => next_indent(rules, &indent, &before),
+    };
     // Between a bracket pair: the closer gets a line of its own.
     let last = before.trim_end().chars().last();
     let first = after.chars().next();
@@ -757,7 +931,10 @@ pub fn open_line(b: &mut Buffer, rules: &Rules, above: bool) {
         .chars()
         .take_while(|c| *c == ' ' || *c == '\t')
         .collect();
-    let wanted = next_indent(rules, &indent, &text);
+    let wanted = match rules.lang {
+        Lang::Docker => docker_indent(b, row, rules, &indent, &text),
+        _ => next_indent(rules, &indent, &text),
+    };
     if wanted != indent {
         let start = b.text.line_to_char(b.row);
         b.replace(start, start + indent.chars().count(), &wanted);
@@ -1119,6 +1296,75 @@ mod tests {
             b.text.to_string(),
             "- one\n- two\n\n1. a\n2. b\n- [x] done\n- [ ] "
         );
+    }
+
+    #[test]
+    fn dockerfiles_and_compose_files_are_known_by_name() {
+        for name in [
+            "Dockerfile",
+            "dockerfile",
+            "Containerfile",
+            "Dockerfile.dev",
+            "api.Dockerfile",
+            "web.containerfile",
+        ] {
+            assert_eq!(Lang::detect(Some(Path::new(name))), Lang::Docker, "{name}");
+        }
+        for name in [
+            "compose.yaml",
+            "compose.yml",
+            "docker-compose.yml",
+            "docker-compose.yaml",
+            "compose.override.yaml",
+            "docker-compose.prod.yml",
+        ] {
+            assert_eq!(Lang::detect(Some(Path::new(name))), Lang::Compose, "{name}");
+        }
+        for (name, lang) in [
+            ("Dockerfile.dockerignore", Lang::Plain),
+            ("values.yaml", Lang::Yaml),
+            ("composer.json", Lang::Brace),
+            ("compose.md", Lang::Markdown),
+        ] {
+            assert_eq!(Lang::detect(Some(Path::new(name))), lang, "{name}");
+        }
+    }
+
+    #[test]
+    fn dockerfile_instructions_indent_the_lines_they_go_on_over() {
+        let mut b = buffer("Dockerfile", "");
+        typed(
+            &mut b,
+            "FROM alpine\nRUN apk add \\\ncurl \\\ngit\nCMD [\n\"sh\"",
+        );
+        assert_eq!(
+            b.text.to_string(),
+            "FROM alpine\nRUN apk add \\\n    curl \\\n    git\nCMD [\n    \"sh\"\n]"
+        );
+        // `o` too: below an instruction that goes on, and below its last line.
+        let mut b = buffer("Dockerfile", "RUN a \\\n    b\n");
+        let rules = Rules::new(&b, 4);
+        b.row = 0;
+        open_line(&mut b, &rules, false);
+        assert_eq!(b.text.to_string(), "RUN a \\\n    \n    b\n");
+        let mut b = buffer("Dockerfile", "RUN a \\\n    b\n");
+        b.row = 1;
+        open_line(&mut b, &rules, false);
+        assert_eq!(b.text.to_string(), "RUN a \\\n    b\n\n");
+        // A comment line is a comment.
+        let rules = Rules::new(&buffer("Dockerfile", ""), 4);
+        assert_eq!(rules.lang.comment(), Some("#"));
+    }
+
+    #[test]
+    fn compose_files_indent_as_yaml_and_complete_compose_keys() {
+        let mut b = buffer("compose.yaml", "");
+        typed(&mut b, "services:\nweb:\nimage: nginx");
+        assert_eq!(b.text.to_string(), "services:\n  web:\n    image: nginx");
+        let found = suggestions(Lang::Compose, &[], "dep");
+        assert_eq!(found.first().map(|(w, _)| w.as_str()), Some("depends_on"));
+        let found = suggestions(Lang::Docker, &[], "ent");
+        assert_eq!(found.first().map(|(w, _)| w.as_str()), Some("ENTRYPOINT"));
     }
 
     #[test]

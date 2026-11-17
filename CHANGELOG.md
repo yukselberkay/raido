@@ -10,6 +10,17 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **Docker support.** Dockerfiles and Containerfiles (`Dockerfile.dev`,
+  `api.dockerfile` too) are highlighted by Raido's own grammar: instructions, images
+  and build stages, flags, variables, strings, comments, and `RUN` / `CMD` read as
+  shell, heredocs included. Enter indents the lines an instruction goes on over.
+  Docker Compose files (`compose.yaml`, `docker-compose.yml` and their overrides)
+  show as *Docker Compose* and complete Compose's keys. With Docker's
+  `docker-language-server` installed, Compose files get completion, errors, hover,
+  go to definition and formatting, and Dockerfiles BuildKit's warnings; Raido turns
+  the server's usage reports to Docker off.
+- Files without an extension are highlighted by their name (`Makefile`, `.bashrc`).
+
 - **`Ctrl-a` selects the whole file** in an editor, in any mode: then Backspace
   deletes it, `Ctrl-c` copies it, `Ctrl-x` cuts it and `Ctrl-v` pastes over it
   (typing replaces it too, when you were typing). Terminal and AI panes keep `Ctrl-a`

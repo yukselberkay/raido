@@ -23,6 +23,9 @@ pub fn folder(open: bool, name: &str) -> Icon {
     }
 }
 
+/// Dockerfiles, Compose files and `.dockerignore`: Docker's whale.
+const DOCKER: Icon = ("\u{f0868}", rgb(0x458ee6));
+
 pub fn file(path: &Path) -> Icon {
     let name = path
         .file_name()
@@ -31,9 +34,7 @@ pub fn file(path: &Path) -> Icon {
     // Whole-name matches first: they beat the extension.
     let by_name = match name.to_ascii_lowercase().as_str() {
         "cargo.toml" | "cargo.lock" => Some(("\u{e7a8}", rgb(0xdea584))),
-        "dockerfile" | "containerfile" | "docker-compose.yml" | "compose.yaml" => {
-            Some(("\u{f0868}", rgb(0x458ee6)))
-        }
+        ".dockerignore" => Some(DOCKER),
         "makefile" | "gnumakefile" | "justfile" => Some(("\u{e779}", rgb(0x6d8086))),
         "license" | "license.md" | "license.txt" | "copying" => Some(("\u{e60a}", rgb(0xd0bf41))),
         ".gitignore" | ".gitattributes" | ".gitmodules" | ".gitkeep" => {
@@ -46,6 +47,9 @@ pub fn file(path: &Path) -> Icon {
     };
     if let Some(icon) = by_name {
         return icon;
+    }
+    if crate::language::is_dockerfile(path) || crate::language::is_compose(path) {
+        return DOCKER;
     }
     let ext = path
         .extension()

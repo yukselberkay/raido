@@ -69,18 +69,20 @@ review_ignored = ["*.md", "*.txt"]
 mouse = true
 # shell = "/bin/zsh"
 
-# Language servers start automatically for Rust, Go, Python, C and C++ files.
+# Language servers start automatically for Rust, Go, Python, C and C++ files,
+# and for Dockerfiles and Docker Compose files (Docker's docker-language-server).
 lsp_enabled = true
 # On save, organize imports and format with the language server, as VS Code does
-# for Go (gopls: goimports + gofmt). Keys: go, rust, python, c, and json (laid out
-# by Raido itself, no server needed). [] turns it off.
+# for Go (gopls: goimports + gofmt). Keys: go, rust, python, c, docker (Compose
+# files), and json (laid out by Raido itself, no server needed). [] turns it off.
 format_on_save = ["go"]
 # How lines end in the files Raido saves: "lf" (\n, as on Linux and macOS; a file
 # with Windows line endings gets \n when saved), "crlf" (\r\n) or "auto" (each
 # file's own, what most of its lines use). Windows .bat/.cmd files keep theirs.
 # Pastes take the file's line breaks; copies leave Raido with \n.
 line_endings = "lf"
-# Optional: choose a different server per language (keys: rust, go, python, c).
+# Optional: choose a different server per language (keys: rust, go, python, c,
+# docker).
 # [lsp.python]
 # program = "pylsp"
 # args = []
