@@ -273,6 +273,9 @@ fn agent_flags(
     }
 }
 
+/// How long Ctrl-b n waits for the second press that stops an agent mid-answer.
+const ASK_AGAIN: Duration = Duration::from_secs(5);
+
 /// A built-in CLI's display name ("Claude Code"), else the name itself.
 fn agent_title(program: &str) -> &str {
     AGENTS
@@ -452,6 +455,9 @@ pub struct App {
     clipboard_watch: Option<crate::screenshot::Watcher>,
     /// The terminal app Raido runs in, found when the clipboard watcher first starts.
     terminal_app: Option<crate::screenshot::Host>,
+    /// Ctrl-b n on an AI pane still answering: the pane, and when you were asked to
+    /// press it again.
+    new_conversation_asked: Option<(usize, Instant)>,
     /// Where screenshots handed to agents are kept.
     pub image_folder: Option<PathBuf>,
     /// The pane last told it has the focus, for programs that ask (`CSI ? 1004 h`).
@@ -616,6 +622,7 @@ impl App {
             window_focused: true,
             clipboard_watch: None,
             terminal_app: None,
+            new_conversation_asked: None,
             image_folder: crate::screenshot::keep_folder(),
             focus_told: None,
             last_model_check: Instant::now() - MODEL_CHECK,
@@ -3374,6 +3381,49 @@ impl App {
             .or(agents.first().copied())
             .context("No AI pane on screen: Ctrl-b a starts one, Ctrl-b D brings back a docked one")
     }
+    /// Ctrl-b n (`:ai new`): a new conversation in the AI pane (the focused one, else
+    /// the one used last). Its CLI starts again in the pane, as it was started (the
+    /// same agent, model and `[ai.<name>]` command) but on a new conversation, so it
+    /// works the same for every agent and local model; the CLIs that keep their
+    /// conversations still have the last one. While the agent is answering a prompt,
+    /// it asks first: a second Ctrl-b n within a few seconds stops it.
+    fn new_conversation(&mut self) -> Result<()> {
+        let id = self.ai_pane()?;
+        let Some(Pane::Terminal(t)) = self.panes.get(&id) else {
+            return Ok(());
+        };
+        let Launch::Agent { name, model, .. } = &t.launch else {
+            return Ok(());
+        };
+        let (program, model) = (name.clone(), model.clone());
+        let title = agent_title(&program).to_string();
+        let asked = self
+            .new_conversation_asked
+            .take()
+            .is_some_and(|(pane, at)| pane == id && at.elapsed() < ASK_AGAIN);
+        if t.answering() && !asked {
+            self.new_conversation_asked = Some((id, Instant::now()));
+            self.notice(format!(
+                "{title} is still answering · Ctrl-b n again stops it and starts a new conversation"
+            ));
+            return Ok(());
+        }
+        self.focused = id;
+        self.sidebar_focus = false;
+        self.launch(&program, model.as_deref(), None, true)?;
+        // The model the last conversation used isn't this one's until it says so.
+        self.agent_models.remove(&id);
+        // A warning from starting it (a model server out of reach) stays on screen.
+        if !self.error {
+            let kept = if self.resumable(&program) {
+                " · the last one stays in its history"
+            } else {
+                ""
+            };
+            self.notice(format!("New {title} conversation{kept}"));
+        }
+        Ok(())
+    }
     /// `:explain [commit]` (`e` on a commit in the Git pane): the AI pane's agent
     /// reads the commit, its message and changes and the code around them, in your
     /// repository with its own tools, and answers there: what it does and why, how
@@ -3467,6 +3517,7 @@ impl App {
             KeyCode::Char('v') => self.changes_pane()?,
             KeyCode::Char('i') => self.mention()?,
             KeyCode::Char('I') => self.attach_image()?,
+            KeyCode::Char('n') => self.new_conversation()?,
             KeyCode::Char('z') => {
                 self.zoom = !self.zoom;
                 self.sidebar_focus = false;
@@ -5899,6 +5950,8 @@ impl App {
                 }
                 _ => bail!("Use :git (open / focus / zoom the Git pane), :git all or :git side"),
             },
+            // :ai new (Ctrl-b n): a new conversation in the AI pane.
+            "ai" if matches!(arg, "new" | "fresh") => self.new_conversation()?,
             // :ai [codex|claude|gemini|agy|local|opencode|<[ai.name]>] [model] [new] [right|below]
             // (`new`: a new conversation, not the one a closed pane was in)
             "ai" => {
@@ -9411,6 +9464,107 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
             marks(&app).iter().all(Option::is_none),
             "staged changes are clean"
         );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn ctrl_b_n_starts_a_new_conversation_in_the_ai_pane() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().into(), None, false).unwrap();
+        let editor = app.focused;
+        // Your own agent: it says what it started on, then echoes what you type.
+        app.config.ai.insert(
+            "mine".into(),
+            crate::local_ai::Launcher {
+                program: "sh".into(),
+                args: vec!["-c".into(), "echo started on {model}; exec cat".into()],
+                ..Default::default()
+            },
+        );
+        app.command("ai mine small").unwrap();
+        let ai = app.focused;
+        let pid = |app: &App| match app.panes.get(&ai) {
+            Some(Pane::Terminal(t)) => t.pid(),
+            _ => None,
+        };
+        let text = |app: &App| match app.panes.get(&ai) {
+            Some(Pane::Terminal(t)) => t.parser.lock().unwrap().screen().contents(),
+            _ => String::new(),
+        };
+        let until = |app: &mut App, done: &dyn Fn(&App) -> bool| {
+            for _ in 0..300 {
+                app.tick();
+                if done(app) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            panic!("timed out: {:?}", text(app));
+        };
+        let ctrl_b_n = |app: &mut App| {
+            press(app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+            press(app, KeyCode::Char('n'), KeyModifiers::NONE);
+        };
+        until(&mut app, &|app| text(app).contains("started on small"));
+        app.event(Event::Paste("old words".into()));
+        until(&mut app, &|app| text(app).contains("old words"));
+        // From the editor: the AI pane's CLI starts again there, on the same model,
+        // and the pane is focused for your first prompt.
+        app.focused = editor;
+        let before = pid(&app);
+        ctrl_b_n(&mut app);
+        assert_ne!(pid(&app), before, "{}", app.message);
+        assert_eq!(app.focused, ai);
+        assert!(
+            app.message.starts_with("New mine conversation"),
+            "{}",
+            app.message
+        );
+        assert!(matches!(
+            app.panes.get(&ai),
+            Some(Pane::Terminal(t)) if t.launch == Launch::Agent {
+                name: "mine".into(),
+                model: Some("small".into()),
+                session: None,
+            }
+        ));
+        until(&mut app, &|app| text(app).contains("started on small"));
+        assert!(!text(&app).contains("old words"));
+        // While it answers a prompt, it asks first; a second Ctrl-b n stops it.
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        let answering = pid(&app);
+        ctrl_b_n(&mut app);
+        assert_eq!(pid(&app), answering);
+        assert!(app.message.contains("still answering"), "{}", app.message);
+        ctrl_b_n(&mut app);
+        assert_ne!(pid(&app), answering);
+        // :ai new does the same.
+        let before = pid(&app);
+        app.command("ai new").unwrap();
+        assert_ne!(pid(&app), before);
+        // With no AI pane, it says how to start one.
+        drop(app);
+        let mut bare = App::new(dir.path().into(), None, false).unwrap();
+        assert!(bare.command("ai new").is_err());
+    }
+    #[test]
+    fn a_new_conversation_never_resumes_the_last_one() {
+        let new_id = || "11111111-2222-4333-8444-555555555555".to_string();
+        let yes = |_: &str, _: &str| true;
+        for program in ["claude", "codex", "gemini", "agy", "opencode"] {
+            for gemini_ids in [true, false] {
+                let (args, _, session) =
+                    agent_flags(program, false, None, &yes, gemini_ids, &new_id);
+                assert!(
+                    !args
+                        .iter()
+                        .any(|a| a.contains("resume") || a == "--continue"),
+                    "{program}: {args:?}"
+                );
+                if let Some(id) = session {
+                    assert_eq!(id, new_id(), "{program}: a new conversation id");
+                }
+            }
+        }
     }
     fn screen(app: &mut App, width: u16, height: u16) -> Vec<String> {
         let mut terminal =

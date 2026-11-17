@@ -443,6 +443,11 @@ impl TerminalPane {
     pub fn is_agent(&self) -> bool {
         matches!(self.launch, Launch::Agent { .. })
     }
+    /// An AI pane working on a prompt you sent: from Enter until it has answered
+    /// and gone quiet (or stopped to ask you something).
+    pub fn answering(&self) -> bool {
+        self.is_agent() && self.exited.is_none() && self.turn.is_some()
+    }
     /// An AI pane working: a prompt is in flight or its output still moves (agents
     /// animate a spinner while they work).
     pub fn agent_busy(&self) -> bool {

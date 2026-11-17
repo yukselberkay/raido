@@ -3206,6 +3206,10 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
             "The clipboard's image, else your latest screenshot, into the AI pane",
         ),
         (
+            ":ai new  or  Ctrl-b n",
+            "A new conversation in the AI pane: its agent starts again",
+        ),
+        (
             ":explain [commit]  or  e in Git",
             "The AI pane's agent explains and reviews a commit",
         ),

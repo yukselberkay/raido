@@ -474,6 +474,7 @@ Shift on many keyboard layouts. On macOS, **Ctrl means Control, not Command**.
 | `Ctrl-b v` | [Review what AI agents changed](#review-ai-changes): keep or undo each change; again focuses the review, and when focused maximizes / restores it |
 | `Ctrl-b i` | [Hand the AI pane where you are](#ai-panes-see-your-editor): the file and the lines you selected, typed into its prompt as `@file#L10-20`, and on to that pane |
 | `Ctrl-b I` | [Give the AI pane a screenshot](#screenshots-and-images-in-ai-panes): the image on the clipboard, else the one you just took, attached to its prompt |
+| `Ctrl-b n` | [A new conversation in the AI pane](#a-new-conversation-in-an-ai-pane): its agent or local model starts again there, on the same model |
 | `PageUp` / `PageDown` (Fn-↑/↓ on a Mac) | Scroll a terminal or AI pane's history half a page; then ↑/↓ one line, Home/End top/bottom, Esc or typing returns. Full-screen programs (vim, less) get the keys instead |
 | `Ctrl-b [` | [Copy mode](#copying-from-terminal-and-ai-panes) in a terminal or AI pane |
 | `Ctrl-b Z` | [Copy view](#copying-from-terminal-and-ai-panes): only the focused pane's text; again to return |
@@ -868,6 +869,21 @@ Three ways to hand an AI pane a screenshot:
 
 Reading the clipboard's image uses `osascript` on a Mac, `wl-paste` or `xclip` on
 Linux and PowerShell on Windows.
+
+### A new conversation in an AI pane
+
+**`Ctrl-b n`** (or `:ai new`) starts a new conversation in the AI pane you're in, or
+the one you used last. Raido starts the pane's CLI again in the same place, as it was
+started (the same agent, the model you chose, your `[ai.<name>]` command) but on a
+new conversation, so it works the same for Claude Code, Codex, Gemini CLI,
+Antigravity, OpenCode, the Local LLM (Ollama, LM Studio, your `[ai.local]`) and your
+own launchers. The pane's focused for your first prompt, and the status line says
+`New Claude Code conversation`. The CLIs that keep conversations still have the last
+one, to go back to with their own `/resume`; a local model's chat just starts over.
+
+While the agent is answering a prompt, `Ctrl-b n` asks first (`Claude Code is still
+answering`); press it again within five seconds to stop it and start the new
+conversation. To keep the pane and open another beside it, use `:ai claude new`.
 
 ### Model and effort in AI panes
 
@@ -1443,6 +1459,7 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 :ai [codex|claude|gemini|agy|opencode] [new] [right|below]
                           AI launcher, or launch a CLI, beside or below
                           (reopens a closed pane's conversation; new: a new one)
+:ai new                   A new conversation in the AI pane: its CLI starts again there (Ctrl-b n)
 :ai local [model]         Your local LLM ([ai.local], else your model server, else Ollama / LM Studio)
 :ai <name> [model]        A launcher you defined as [ai.<name>]
 :themes                   Theme picker with live preview (also Ctrl-b t)

@@ -10,6 +10,12 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **`Ctrl-b n` starts a new conversation in the AI pane** (or `:ai new`): its CLI
+  starts again in place, on the same model and command, so it works for every agent
+  and local model (Claude Code, Codex, Gemini CLI, Antigravity, OpenCode, Ollama, LM
+  Studio, your `[ai.<name>]`). While the agent is answering a prompt it asks first;
+  `Ctrl-b n` again stops it.
+
 - **⌘V pastes screenshots into AI panes on macOS** (`paste_screenshots`): a
   terminal's ⌘V pastes only text, so while an AI pane is open Raido saves a
   screenshot put on the clipboard and adds its path beside the image. ⌘V then pastes
