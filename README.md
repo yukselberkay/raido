@@ -837,10 +837,12 @@ Three ways to hand an AI pane a screenshot:
   image as text (the status line says `Screenshot on the clipboard · ⌘V pastes it
   into the AI pane`). ⌘V in the AI pane then pastes the path, and Claude Code,
   Codex and OpenCode attach the image; the Local LLM gets the path to ask about.
-  Apps that take images (Messages, Slack, Notes) still get the image; a plain-text
-  field gets the path. Text you copy is never touched. It runs while Raido's
-  window has the focus, as far as the terminal reports it. `paste_screenshots =
-  false` turns it off. Terminals that send an empty paste for an image work without
+  The path is there only while Raido is in front (its terminal is the active app
+  and, as far as the terminal reports it, Raido's window has the focus): switch to
+  another app, a browser to paste into GitLab or GitHub, Slack, Messages, and the
+  clipboard holds the screenshot exactly as copied, with its path again when you
+  come back. Closing the last AI pane or quitting Raido puts it back too. Text you
+  copy is never touched. `paste_screenshots = false` turns it off. Terminals that send an empty paste for an image work without
   it too (`raido --keys`, ⌘V: `Pasted nothing (an image paste)`).
 - **`Ctrl-b I`** (or `:image`) from any pane, in any terminal: Raido takes the
   image on the clipboard, else the screenshot you took in the last 30 minutes (the
@@ -1794,7 +1796,7 @@ theme immediately. The configuration supports:
 | `review_changes` | `true` | Track the files AI panes change, to [review, keep or undo](#review-ai-changes) them (`Ctrl-b v`) |
 | `review_summary` | `true` | In the review, list what each file's change added, changed and removed, and sum it up at the end, read from the code without AI |
 | `review_ai_auto` | `true` | Explain new agent changes in the review by themselves once the agents stop (`false`: only on `s`) |
-| `paste_screenshots` | `true` | macOS: [⌘V pastes a screenshot into an AI pane](#screenshots-and-images-in-ai-panes): while one is open, a screenshot on the clipboard is saved and its path added beside the image as text |
+| `paste_screenshots` | `true` | macOS: [⌘V pastes a screenshot into an AI pane](#screenshots-and-images-in-ai-panes): while one is open, a screenshot on the clipboard is saved and, while Raido is in front, its path added beside the image as text |
 | `review_ignored` | `["*.md", "*.txt"]` | [Gitignored files](#review-ai-changes) the review tracks anyway, by name (`"*.md"`) or path (`"plans/*.md"`); not over 2 MB or in dependency and build folders; `[]` for none |
 | `review_ai` | `"auto"` | Which AI explains the changes in the review, or a list to try in order: `"auto"`, `"claude"`, `"codex"`, `"gemini"`, `"local"`, each with an optional `:model`, a command, or `"off"` |
 | `claude_ide` | `true` | Let Claude Code [see your editor](#ai-panes-see-your-editor) (the file and selection) as in VS Code |

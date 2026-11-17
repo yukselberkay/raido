@@ -450,6 +450,8 @@ pub struct App {
     window_focused: bool,
     /// macOS: readies screenshots on the clipboard for ⌘V (`paste_screenshots`).
     clipboard_watch: Option<crate::screenshot::Watcher>,
+    /// The terminal app Raido runs in, found when the clipboard watcher first starts.
+    terminal_app: Option<crate::screenshot::Host>,
     /// Where screenshots handed to agents are kept.
     pub image_folder: Option<PathBuf>,
     /// The pane last told it has the focus, for programs that ask (`CSI ? 1004 h`).
@@ -613,6 +615,7 @@ impl App {
             agent_models: HashMap::new(),
             window_focused: true,
             clipboard_watch: None,
+            terminal_app: None,
             image_folder: crate::screenshot::keep_folder(),
             focus_told: None,
             last_model_check: Instant::now() - MODEL_CHECK,
@@ -3320,25 +3323,31 @@ impl App {
         Ok(())
     }
     /// Run the clipboard watcher (macOS, `paste_screenshots`) while an AI pane is
-    /// open and Raido's window has the focus, and say when a screenshot is ready.
+    /// open, tell it whether Raido's window has the focus (only then does ⌘V paste
+    /// a screenshot's path), and say when a screenshot is ready.
     fn watch_clipboard(&mut self) {
         let wanted = cfg!(target_os = "macos")
             && !cfg!(test)
             && self.config.paste_screenshots
-            && self.window_focused
             && self
                 .panes
                 .values()
                 .any(|p| matches!(p, Pane::Terminal(t) if t.is_agent() && t.exited.is_none()));
         match (&self.clipboard_watch, wanted) {
             (None, true) => {
+                let host = self
+                    .terminal_app
+                    .get_or_insert_with(crate::screenshot::Host::current);
                 self.clipboard_watch = self
                     .image_folder
                     .as_deref()
-                    .and_then(|keep| crate::screenshot::Watcher::start(keep, None));
+                    .and_then(|keep| crate::screenshot::Watcher::start(keep, None, host));
             }
             (Some(_), false) => self.clipboard_watch = None,
             _ => {}
+        }
+        if let Some(watch) = &mut self.clipboard_watch {
+            watch.focus(self.window_focused);
         }
         if self
             .clipboard_watch

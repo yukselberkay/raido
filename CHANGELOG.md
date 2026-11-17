@@ -13,8 +13,9 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 - **⌘V pastes screenshots into AI panes on macOS** (`paste_screenshots`): a
   terminal's ⌘V pastes only text, so while an AI pane is open Raido saves a
   screenshot put on the clipboard and adds its path beside the image. ⌘V then pastes
-  the path and Claude Code, Codex and OpenCode attach the image. Apps that take
-  images still get the image; text you copy is never touched.
+  the path and Claude Code, Codex and OpenCode attach the image. The path is there
+  only while Raido is in front: other apps (a browser pasting into GitLab, Slack)
+  get the screenshot exactly as copied. Text you copy is never touched.
 
 - **Screenshots for AI panes:** `Ctrl-b I` (`:image`) attaches the image on the
   clipboard, else the screenshot you took in the last 30 minutes, to the AI pane's

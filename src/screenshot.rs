@@ -18,33 +18,92 @@ const WAIT: Duration = Duration::from_secs(5);
 const IMAGES: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
 
 /// macOS's ⌘V for screenshots (`paste_screenshots`): a helper watching the
-/// clipboard, which saves a screenshot put there and adds its path as text beside
-/// the image, so the terminal's ⌘V pastes the path and the agent attaches the image.
-/// Stopped when dropped (and by itself when Raido is gone).
+/// clipboard, which saves a screenshot put there and, while Raido has the front,
+/// adds its path as text beside the image, so the terminal's ⌘V pastes the path
+/// and the agent attaches the image. Other apps get the screenshot as it was
+/// copied: the helper takes the path away when another app comes to the front,
+/// and when it stops. Stopped when dropped (and by itself when Raido is gone).
 pub struct Watcher {
-    child: std::process::Child,
+    child: Option<std::process::Child>,
+    /// Hears whether Raido's window has the focus; the helper stops when it's closed.
+    tell: Option<std::process::ChildStdin>,
     found: std::sync::mpsc::Receiver<PathBuf>,
+    focused: bool,
+}
+
+/// The terminal app Raido runs in, as the watcher knows it when it's in front.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Host {
+    /// The processes Raido runs under, the terminal app among them.
+    pub pids: Vec<u32>,
+    /// The terminal's bundle id (`__CFBundleIdentifier`), which iTerm2's sessions
+    /// carry though they don't run under it. Not under tmux, where it can be stale.
+    pub bundle: Option<String>,
+}
+
+impl Host {
+    /// This process's terminal app. Empty where it can't be told.
+    pub fn current() -> Self {
+        let table = Command::new("ps")
+            .args(["-axo", "pid=,ppid="])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        let bundle = std::env::var("__CFBundleIdentifier")
+            .ok()
+            .filter(|b| !b.is_empty() && std::env::var_os("TMUX").is_none());
+        Self {
+            pids: ancestors(&table, std::process::id()),
+            bundle,
+        }
+    }
+}
+
+/// The processes above `pid` in `ps -o pid=,ppid=` output, launchd excluded.
+fn ancestors(table: &str, pid: u32) -> Vec<u32> {
+    let parents: std::collections::HashMap<u32, u32> = table
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace().map(str::parse::<u32>);
+            Some((fields.next()?.ok()?, fields.next()?.ok()?))
+        })
+        .collect();
+    let mut found = Vec::new();
+    let mut at = pid;
+    while let Some(&parent) = parents.get(&at) {
+        if parent <= 1 || found.contains(&parent) {
+            break;
+        }
+        found.push(parent);
+        at = parent;
+    }
+    found
 }
 
 impl Watcher {
     /// Watch the clipboard (or the private pasteboard `pasteboard`, in tests),
-    /// keeping screenshots in `keep`. None where it can't run (not macOS).
-    pub fn start(keep: &Path, pasteboard: Option<&str>) -> Option<Self> {
+    /// keeping screenshots in `keep`, for Raido running in `host`. None where it
+    /// can't run (not macOS).
+    pub fn start(keep: &Path, pasteboard: Option<&str>, host: &Host) -> Option<Self> {
         use std::io::BufRead;
         if !cfg!(target_os = "macos") {
             return None;
         }
         fs::create_dir_all(keep).ok()?;
         clear_old(keep);
+        let pids: Vec<String> = host.pids.iter().map(u32::to_string).collect();
         let mut child = Command::new("osascript")
             .args(["-l", "JavaScript", "-e", include_str!("clipboard_watch.js")])
             .arg(keep)
+            .arg(pids.join(","))
+            .arg(host.bundle.as_deref().unwrap_or_default())
             .arg(pasteboard.unwrap_or_default())
-            .stdin(std::process::Stdio::null())
+            .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
             .spawn()
             .ok()?;
+        let tell = child.stdin.take();
         let lines = child.stderr.take()?;
         let (send, found) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -56,7 +115,25 @@ impl Watcher {
                 }
             }
         });
-        Some(Self { child, found })
+        Some(Self {
+            child: Some(child),
+            tell,
+            found,
+            focused: true,
+        })
+    }
+
+    /// Tell the helper whether Raido's window has the focus: only then may ⌘V
+    /// paste the path (the terminal's other windows and tabs get the image).
+    pub fn focus(&mut self, focused: bool) {
+        use std::io::Write;
+        if focused == self.focused {
+            return;
+        }
+        if let Some(tell) = &mut self.tell {
+            let _ = tell.write_all(if focused { b"1\n" } else { b"0\n" });
+        }
+        self.focused = focused;
     }
 
     /// The screenshot made ready for ⌘V since asked last, if any.
@@ -66,9 +143,23 @@ impl Watcher {
 }
 
 impl Drop for Watcher {
+    /// The helper puts the screenshot back as it was copied and stops when its
+    /// stdin closes; it's killed if it hasn't within two seconds. Raido doesn't
+    /// wait for it.
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.tell = None;
+        if let Some(mut child) = self.child.take() {
+            std::thread::spawn(move || {
+                for _ in 0..40 {
+                    if !matches!(child.try_wait(), Ok(None)) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+            });
+        }
     }
 }
 
@@ -344,14 +435,17 @@ mod tests {
         assert_ne!(source, Source::Clipboard);
     }
 
-    /// A private pasteboard's types and text, or puts an image file on it.
+    /// A private pasteboard's types and text, or puts an image file on it (as
+    /// TIFF), puts text on it (`text:…`), saves its TIFF (`save:…`) or lets it go.
     #[cfg(target_os = "macos")]
     fn pasteboard(name: &str, put: Option<&Path>) -> String {
         let script = r#"ObjC.import('AppKit');
 function run(argv) {
   var pb = $.NSPasteboard.pasteboardWithName(argv[0]);
   if (argv[1] === 'release') { pb.releaseGlobally; return ''; }
-  if (argv[1].indexOf('text:') === 0) {
+  if (argv[1].indexOf('save:') === 0) {
+    pb.dataForType('public.tiff').writeToFileAtomically(argv[1].slice(5), true);
+  } else if (argv[1].indexOf('text:') === 0) {
     pb.clearContents;
     pb.setStringForType(argv[1].slice(5), 'public.utf8-plain-text');
   } else if (argv[1]) {
@@ -369,16 +463,25 @@ function run(argv) {
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
+    /// Poll the pasteboard until `done` holds for what it says, up to 10 seconds.
     #[cfg(target_os = "macos")]
-    #[test]
-    fn a_screenshot_on_the_clipboard_gets_its_path_beside_it_for_cmd_v() {
-        let dir = tempfile::tempdir().unwrap();
-        let keep = dir.path().join("images");
-        // A private pasteboard: the system clipboard is left alone.
-        let name = format!("raido-test-{}", std::process::id());
-        // A TIFF, as some apps copy images: saved as PNG all the same. Small, so
-        // converting it doesn't race the wait below on a busy machine.
-        let tiff = dir.path().join("shot.tiff");
+    fn until(name: &str, done: impl Fn(&str) -> bool) -> String {
+        let mut now = String::new();
+        for _ in 0..100 {
+            now = pasteboard(name, None);
+            if done(&now) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        now
+    }
+
+    /// A small TIFF, as some apps copy images (small, so converting it doesn't race
+    /// the waits on a busy machine), and how a pasteboard with only it looks.
+    #[cfg(target_os = "macos")]
+    fn small_tiff(dir: &Path) -> (PathBuf, String) {
+        let tiff = dir.join("shot.tiff");
         let made = Command::new("sips")
             .args(["-s", "format", "tiff", "-Z", "64"])
             .arg(concat!(
@@ -390,7 +493,29 @@ function run(argv) {
             .output()
             .unwrap();
         assert!(made.status.success());
-        let watcher = Watcher::start(&keep, Some(&name)).unwrap();
+        // Its own pasteboard: the tests run side by side.
+        let name = format!(
+            "raido-test-copied-{}",
+            dir.file_name().unwrap_or_default().to_string_lossy()
+        );
+        let copied = pasteboard(&name, Some(&tiff));
+        pasteboard(&name, Some(Path::new("release")));
+        assert!(
+            copied.starts_with("public.tiff") && !copied.contains("png"),
+            "{copied}"
+        );
+        (tiff, copied)
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_screenshot_on_the_clipboard_gets_its_path_beside_it_for_cmd_v() {
+        let dir = tempfile::tempdir().unwrap();
+        let keep = dir.path().join("images");
+        // A private pasteboard: the system clipboard is left alone.
+        let name = format!("raido-test-{}", std::process::id());
+        let (tiff, copied) = small_tiff(dir.path());
+        let mut watcher = Watcher::start(&keep, Some(&name), &Host::default()).unwrap();
         std::thread::sleep(Duration::from_millis(500));
         assert!(pasteboard(&name, Some(&tiff)).contains("public.tiff"));
         let mut ready = None;
@@ -407,19 +532,74 @@ function run(argv) {
             kept_image(&keep, &path.to_string_lossy()),
             Some(path.clone())
         );
-        // The image stays; its path is there as text for the terminal's ⌘V.
-        let now = pasteboard(&name, None);
-        assert!(now.contains("public.png"), "{now}");
-        assert!(now.ends_with(&format!(" | {}", path.display())), "{now}");
+        // The image stays, as PNG too; its path is there as text for the terminal's ⌘V.
+        let with_path = format!(" | {}", path.display());
+        let now = until(&name, |now| now.ends_with(&with_path));
+        assert!(
+            now.contains("public.png") && now.contains("public.tiff"),
+            "{now}"
+        );
+        assert!(now.ends_with(&with_path), "{now}");
+        // Raido's window loses the focus: other apps get the screenshot exactly as
+        // it was copied, with no text to paste instead of it.
+        watcher.focus(false);
+        assert_eq!(until(&name, |now| now == copied), copied);
+        let back = dir.path().join("back.tiff");
+        pasteboard(&name, Some(Path::new(&format!("save:{}", back.display()))));
+        assert_eq!(fs::read(&back).unwrap(), fs::read(&tiff).unwrap());
+        // Back in Raido: the same file again, not a new one.
+        watcher.focus(true);
+        assert!(until(&name, |now| now.ends_with(&with_path)).ends_with(&with_path));
+        assert_eq!(watcher.ready(), None);
         // Text on the clipboard is left alone.
         assert!(pasteboard(&name, Some(Path::new("text:a password"))).ends_with(" | a password"));
         std::thread::sleep(Duration::from_millis(700));
         assert_eq!(watcher.ready(), None);
         assert!(pasteboard(&name, None).ends_with(" | a password"));
+        // A new screenshot, then the watcher stops (the last AI pane closed, Raido
+        // quit): the clipboard is the screenshot as copied.
+        pasteboard(&name, Some(&tiff));
+        let next = until(&name, |now| now.contains(" | /"));
+        assert!(
+            next.contains(&keep.to_string_lossy().into_owned()),
+            "{next}"
+        );
         drop(watcher);
+        assert_eq!(until(&name, |now| now == copied), copied);
         pasteboard(&name, Some(Path::new("release")));
         assert_eq!(kept_image(&keep, "notes"), None);
         assert_eq!(kept_image(dir.path(), &path.to_string_lossy()), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn with_another_app_in_front_the_screenshot_is_left_as_copied() {
+        let dir = tempfile::tempdir().unwrap();
+        let keep = dir.path().join("images");
+        let name = format!("raido-test-front-{}", std::process::id());
+        let (tiff, copied) = small_tiff(dir.path());
+        // Raido's terminal is no app running here, so it's never in front.
+        let elsewhere = Host {
+            pids: vec![u32::MAX - 1],
+            bundle: Some("dev.raido.nowhere".into()),
+        };
+        let watcher = Watcher::start(&keep, Some(&name), &elsewhere).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        pasteboard(&name, Some(&tiff));
+        std::thread::sleep(Duration::from_millis(1000));
+        assert_eq!(watcher.ready(), None);
+        assert_eq!(pasteboard(&name, None), copied);
+        drop(watcher);
+        pasteboard(&name, Some(Path::new("release")));
+    }
+
+    #[test]
+    fn the_terminal_app_is_found_above_raido() {
+        let table =
+            "    1     0\n  500     1\n  600   500\n  700   600\n  800   700\n  900     1\n";
+        assert_eq!(ancestors(table, 800), vec![700, 600, 500]);
+        assert_eq!(ancestors(table, 900), Vec::<u32>::new());
+        assert_eq!(ancestors(table, 42), Vec::<u32>::new());
     }
 
     #[test]
