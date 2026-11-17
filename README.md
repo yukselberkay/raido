@@ -397,8 +397,9 @@ the history graph appears after you make commits.
 - **Modal text editing:** Vim-inspired normal/insert modes, arrows/hjkl, words,
   line jumps, delete/change, grouped undo/redo, search with wrap,
   automatic indentation, bracketed paste, horizontal/vertical scrolling.
-- **Copy and paste:** `v`/`V` or Shift+arrows select; Ctrl-c/Ctrl-x/Ctrl-v and
-  `y`/`d`/`p` share the **system clipboard** with your other apps.
+- **Copy and paste:** `v`/`V` or Shift+arrows select, Ctrl-a selects the whole
+  file; Ctrl-c/Ctrl-x/Ctrl-v and `y`/`d`/`p` share the **system clipboard** with
+  your other apps.
 - **Language servers:** diagnostics, hover docs, go-to-definition, completion and
   formatting for Rust, Go, Python, C and C++ via their standard servers.
 - **Markdown preview:** `.md` files open rendered — headings, lists, task
@@ -1108,6 +1109,7 @@ the terminal's OSC 52, which most terminals support, even over SSH).
 | --- | --- |
 | Shift + arrows / Home / End | Select from the cursor, in normal or insert mode |
 | `v` / `V` | Start a character / line selection, then move with any motion |
+| `Ctrl-a` | Select the whole file, in any mode (terminal and AI panes keep Ctrl-a for their program) |
 | `Ctrl-c` or `y` | Copy the selection — or, with nothing selected, the whole line |
 | `Ctrl-x` or `d` | Cut the selection — or the whole line |
 | `Ctrl-v` | Paste at the cursor; a copied **line** goes above the cursor line |

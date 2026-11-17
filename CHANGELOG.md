@@ -10,6 +10,11 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **`Ctrl-a` selects the whole file** in an editor, in any mode: then Backspace
+  deletes it, `Ctrl-c` copies it, `Ctrl-x` cuts it and `Ctrl-v` pastes over it
+  (typing replaces it too, when you were typing). Terminal and AI panes keep `Ctrl-a`
+  for their program.
+
 - **`Ctrl-b n` starts a new conversation in the AI pane** (or `:ai new`): its CLI
   starts again in place, on the same model and command, so it works for every agent
   and local model (Claude Code, Codex, Gemini CLI, Antigravity, OpenCode, Ollama, LM

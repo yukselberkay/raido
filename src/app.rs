@@ -2721,6 +2721,11 @@ impl App {
             self.open_find(key.code == KeyCode::Char('h'));
             return Ok(());
         }
+        // Ctrl-Shift-A, and Caps Lock on Windows, report a capital.
+        if ctrl && self.buffer_id().is_some() && matches!(key.code, KeyCode::Char('a' | 'A')) {
+            self.select_all();
+            return Ok(());
+        }
         if self.buffer_id().is_some() {
             if let Some((back, select)) = word_key(key) {
                 return self.jump(select, |b| if back { b.word(true) } else { b.word_end() });
@@ -2960,6 +2965,40 @@ impl App {
             self.visual_from = from;
             self.mode = mode;
         }
+    }
+    /// Ctrl-a: the whole file selected, from any mode, to delete (Backspace), copy
+    /// (Ctrl-c, `y`), cut (Ctrl-x, `d`) or paste over (Ctrl-v, `p`); started while
+    /// typing, typing replaces it, as in any text field.
+    fn select_all(&mut self) {
+        let Some(id) = self.buffer_id() else {
+            return;
+        };
+        let len = self.buffers[id].text.len_chars();
+        if len == 0 {
+            self.notice("Nothing to select: the file is empty");
+            return;
+        }
+        // A half-typed `d` or `3` would act on the selection's first key.
+        self.pending = None;
+        self.count.clear();
+        self.menu = None;
+        if !matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+            self.start_visual(Mode::Visual);
+        }
+        self.mode = Mode::Visual;
+        let b = &mut self.buffers[id];
+        b.anchor = Some(0);
+        b.set_index(len);
+        let lines = b.lines() - usize::from(b.text.char(len - 1) == '\n');
+        let cut = if self.visual_from == Mode::Insert {
+            "Ctrl-x cuts · typing replaces it"
+        } else {
+            "Ctrl-x cuts"
+        };
+        self.notice(format!(
+            "Selected all {lines} line{} · Backspace deletes · Ctrl-c copies · {cut}",
+            if lines == 1 { "" } else { "s" }
+        ));
     }
     fn end_visual(&mut self) {
         if let Some(b) = self.active_buffer() {
@@ -7015,6 +7054,69 @@ mod tests {
         press(&mut app, KeyCode::Esc, none);
         app.event(Event::Paste("!".into()));
         assert!(text(&mut app).starts_with("!Zbeta") || text(&mut app).starts_with("Z!beta"));
+    }
+    #[test]
+    fn ctrl_a_selects_the_whole_file_to_copy_delete_or_replace() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.txt");
+        std::fs::write(&path, "alpha beta\ngamma\n").unwrap();
+        let mut app = App::new(dir.path().into(), Some(path), false).unwrap();
+        let text = |app: &mut App| app.active_buffer().unwrap().text.to_string();
+        let none = KeyModifiers::NONE;
+        let ctrl = KeyModifiers::CONTROL;
+        // From normal mode, wherever the cursor is; Ctrl-c copies it all and the
+        // file stays as it was.
+        press(&mut app, KeyCode::Char('j'), none);
+        press(&mut app, KeyCode::Char('a'), ctrl);
+        assert_eq!(app.mode, Mode::Visual);
+        assert_eq!(app.selection(), Some((0, 17)));
+        assert!(
+            app.message.starts_with("Selected all 2 lines"),
+            "{}",
+            app.message
+        );
+        press(&mut app, KeyCode::Char('c'), ctrl);
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.clipboard.paste(), ("alpha beta\ngamma\n".into(), false));
+        assert_eq!(text(&mut app), "alpha beta\ngamma\n");
+        // Backspace deletes it all, and u brings it back.
+        press(&mut app, KeyCode::Char('a'), ctrl);
+        press(&mut app, KeyCode::Backspace, none);
+        assert_eq!(text(&mut app), "");
+        assert_eq!(app.mode, Mode::Normal);
+        // An empty file has nothing to select.
+        press(&mut app, KeyCode::Char('a'), ctrl);
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.selection(), None);
+        press(&mut app, KeyCode::Char('u'), none);
+        assert_eq!(text(&mut app), "alpha beta\ngamma\n");
+        // A half-typed `d` doesn't act on the selection: y copies it.
+        app.clipboard.copy("other".into(), false);
+        press(&mut app, KeyCode::Char('d'), none);
+        press(&mut app, KeyCode::Char('A'), ctrl | KeyModifiers::SHIFT);
+        press(&mut app, KeyCode::Char('y'), none);
+        assert_eq!(text(&mut app), "alpha beta\ngamma\n");
+        assert_eq!(app.clipboard.paste().0, "alpha beta\ngamma\n");
+        // Ctrl-v pastes over all of it.
+        app.clipboard.copy("new\n".into(), false);
+        press(&mut app, KeyCode::Char('a'), ctrl);
+        press(&mut app, KeyCode::Char('v'), ctrl);
+        assert_eq!(text(&mut app), "new\n");
+        // Inside a selection, it widens to the whole file.
+        press(&mut app, KeyCode::Char('i'), none);
+        app.event(Event::Paste("one\ntwo".into()));
+        press(&mut app, KeyCode::Left, KeyModifiers::SHIFT);
+        press(&mut app, KeyCode::Char('a'), ctrl);
+        assert_eq!(app.selection(), Some((0, 11)));
+        assert!(
+            app.message.contains("typing replaces it"),
+            "{}",
+            app.message
+        );
+        // Started while typing, typing replaces it and you keep typing.
+        press(&mut app, KeyCode::Char('Z'), KeyModifiers::SHIFT);
+        assert_eq!(text(&mut app), "Z");
+        assert_eq!(app.mode, Mode::Insert);
     }
     #[cfg(unix)]
     #[test]

@@ -3264,6 +3264,7 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
             "Ctrl-c / Ctrl-x / Ctrl-v",
             "Copy / cut / paste (line if nothing selected)",
         ),
+        ("Ctrl-a", "Select the whole file"),
         (
             "LANGUAGE SERVERS",
             "Rust, Go, Python, C, C++ — :lsp shows status",
