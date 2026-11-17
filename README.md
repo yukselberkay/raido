@@ -85,13 +85,17 @@ It installs, skipping whatever is already there:
    | C / C++ | clangd | `clangd` | `clang-tools-extra` | `clang` | `clang-tools` | `clang-extra-tools` | Command Line Tools, else `llvm` |
    | Go | gopls | `gopls` | `golang-x-tools-gopls` | `gopls` | `gopls` | `gopls` | `gopls` |
    | Python | pyright or pylsp | `python3-pylsp` | `python3-lsp-server` | `pyright` | `python3-python-lsp-server` | `py3-lsp-server` | `pyright` |
+   | Shell | bash-language-server | npm | `nodejs-bash-language-server` | `bash-language-server` | npm | npm | `bash-language-server` |
+   | Shell warnings, formatting | ShellCheck, shfmt | `shellcheck`, `shfmt` | `ShellCheck`, `shfmt` | `shellcheck`, `shfmt` | `ShellCheck`, `shfmt` | `shellcheck`, `shfmt` | `shellcheck`, `shfmt` |
    | Dockerfile, Docker Compose | docker-language-server | `go install` | `go install` | `go install` | `go install` | `go install` | `go install` |
 
    gopls only where Go is installed (it needs Go itself), falling back to
    `go install`. Docker's server is in no package, so `go install` builds it, which
    takes a few minutes: only where Docker (or Podman) and Go are installed (Go fetches
    the newer Go it needs, 1.25, unless your Go is set to stay local). Without a system package for Python it tries `uv tool install
-   basedpyright`, `pipx install python-lsp-server`, then `npm install -g pyright`.
+   basedpyright`, `pipx install python-lsp-server`, then `npm install -g pyright`;
+   for the shell server, `npm install -g bash-language-server` (Node.js 20 or later),
+   and for shfmt, `go install` where Go is.
    A server already there is kept; one that can't be installed is noted and
    skipped, never failing the install (`--no-lsp` skips them all).
 4. **JetBrains Mono Nerd Font**, Raido's [font](#fonts) and the source of the explorer's
@@ -173,7 +177,8 @@ On **Windows**, `scripts\install.ps1` does the same in PowerShell, using winget 
 the programs: Git, the Visual Studio C++ build tools (Rust's linker; a large
 download), Rust through rustup, the language servers (rust-analyzer; clangd from
 LLVM's winget package; gopls through `go install` when Go is installed; pyright from
-npm, else basedpyright from uv or python-lsp-server from pipx; docker-language-server
+npm, else basedpyright from uv or python-lsp-server from pipx; bash-language-server
+from npm with ShellCheck and shfmt from winget; docker-language-server
 through `go install` when Docker and Go are installed), JetBrains Mono Nerd Font (for your
 user, no administrator rights), Raido, the AI-agent skill, and `%USERPROFILE%\.cargo\bin`
 on your user PATH, so `raido` runs in that window at once and in every new one:
@@ -417,6 +422,11 @@ the history graph appears after you make commits.
   grammar (`pyproject.toml`, `Cargo.toml`, `config.toml`, and ```` ```toml ```` blocks
   in Markdown) and Dockerfile grammar. Files without an extension are known by name
   (`Makefile`, `.bashrc`). Absolute/relative line numbers.
+- **Shell scripts:** `.sh`, `.bash`, `.zsh`, `.bashrc`, `.zshrc`, `PKGBUILD`, and
+  scripts without an extension by their `#!` line, highlighted and indented
+  (`fi`, `done` and `esac` line up with what they close); with the Bash language
+  server, ShellCheck's warnings, completion, hover, go to definition and shfmt's
+  formatting. [Details](#shell-scripts).
 - **Docker:** Dockerfiles and Containerfiles (`Dockerfile.dev`, `api.dockerfile`
   too) highlighted, instructions that go on over lines indented, and Docker Compose
   files (`compose.yaml`, `docker-compose.yml` and their overrides) known as Compose;
@@ -984,7 +994,7 @@ Typing follows the language of the file, like VS Code:
 | Rust, Go, C/C++, JS/TS, Java, Kotlin, Swift, C#, PHP, CSS, JSON | `{`, `(`, `[` | Go and Makefiles indent with tabs |
 | YAML, Docker Compose, Makefile | `:` | |
 | Dockerfile | an instruction ending in `\` | its next lines line up one level in; the line after the last goes back to the instruction's |
-| Shell | `then`, `do`, `else`, `case … in` | |
+| Shell | `then`, `do`, `else`, `case … in`, a case's pattern (`start)`), a line ending in `\` | `fi`, `done`, `esac`, `else`, `elif` go back under the `if`, loop or `case` they close as you finish typing them; `;;` goes back to the patterns; the line after a command that goes on goes back to its start |
 | Lua / Ruby | `then`, `do`, `function` / `def`, `class`, `if`, `do \|x\|` … | |
 | Markdown | | lists continue (`- `, `1.` → `2.`, `- [ ]`); Enter on an empty item ends the list |
 
@@ -1248,6 +1258,7 @@ are installed); by hand, install a server once:
 | Go | `gopls` (also found in `~/go/bin`, where `go install` puts it) | `go install golang.org/x/tools/gopls@latest` |
 | Python | `pyright-langserver`, `basedpyright-langserver`, `pylsp` or `jedi-language-server` | `npm install -g pyright` or `pip install python-lsp-server` |
 | C / C++ | `clangd` (also found in Homebrew's `llvm` and the Xcode tools on macOS, `C:\Program Files\LLVM\bin` on Windows) | Arch `pacman -S clang` · Debian/Ubuntu `apt install clangd` · Fedora `dnf install clang-tools-extra` · macOS Xcode tools · Windows `winget install LLVM.LLVM` |
+| Shell (sh, bash, ksh) | `bash-language-server`, with `shellcheck` for warnings and `shfmt` for formatting (also found in `~/go/bin`) | `npm install -g bash-language-server` (Homebrew and Arch: `bash-language-server`) · `brew` / `apt` / `pacman install shellcheck shfmt` (Fedora, openSUSE: `ShellCheck`) |
 | Dockerfile, Docker Compose | `docker-language-server` (also found in `~/go/bin`) | `go install github.com/docker/docker-language-server/cmd/docker-language-server@latest`, or a binary from its [releases](https://github.com/docker/docker-language-server/releases) |
 
 | Feature | How |
@@ -1304,8 +1315,44 @@ large module), the file is saved exactly as typed and the status line says why.
 `:w other.go` (a different name) also saves the text as is.
 
 The languages are listed in `format_on_save` (default `["go"]`). Add `"rust"`,
-`"python"`, `"c"` or `"docker"` (Compose files) to do the same with their servers,
-`"json"` for [JSON](#json-formatting), or set `format_on_save = []` to turn it off.
+`"python"`, `"c"`, `"shell"` or `"docker"` (Compose files) to do the same with their
+servers, `"json"` for [JSON](#json-formatting), or set `format_on_save = []` to turn
+it off.
+
+#### Shell scripts
+
+Raido knows a **shell script** by its extension (`.sh`, `.bash`, `.ksh`, `.zsh`,
+`.fish`, `.bats`, `.command`), by name (`.bashrc`, `.bash_profile`, `.profile`,
+`.zshrc`, `.zprofile`, `.envrc`, `PKGBUILD`), and, without an extension, by the `#!`
+line it starts with (`#!/bin/bash`, `#!/usr/bin/env -S bash -e`, `#!/bin/sh`).
+Typing a `#!` line into a new file makes it one at once. The status line names the
+shell (`Shell (bash)`), and ```` ```sh ````, ```` ```bash ```` and ```` ```shell ````
+blocks in Markdown are highlighted too.
+
+Typing follows the script's blocks: Enter indents after `then`, `do`, `else`,
+`case … in` and a case's pattern; `fi`, `done`, `esac`, `else` and `elif` go back
+under the `if`, loop or `case` they close (matched through the blocks in between,
+so nesting works) once you type the space, `;` or Enter after them; `;;` goes back
+to the patterns; and a command that goes on over lines ending in `\` indents them,
+the line after going back to its start.
+
+The **Bash language server** (`bash-language-server`, see the table above) adds,
+for sh, bash and ksh scripts:
+
+- **ShellCheck's warnings** as diagnostics: unquoted variables, typos (`$nam` where
+  `$name` is set), unreachable code, missing `cd ... || exit`.
+- **Completion** of variables, functions, commands and builtins, **hover** docs for
+  builtins and commands (`K`), **go to definition** of functions and variables
+  (`gd`), across files a script `source`s.
+- **`:format` with shfmt**, keeping the file's own indentation (tabs stay tabs, two
+  spaces stay two); add `"shell"` to `format_on_save` to format on every save.
+
+ShellCheck and shfmt are separate programs the server runs when they're installed;
+`:lsp` says when one is missing (`shell: bash-language-server ready (shfmt not
+installed)`). Raido hands the server their paths when they're off PATH, as `go
+install` leaves shfmt. zsh scripts are highlighted and indented as above, fish
+scripts highlighted (fish closes its blocks with `end`); both go without the server,
+as ShellCheck doesn't read them and would flag every line.
 
 #### Docker: Dockerfiles and Compose files
 

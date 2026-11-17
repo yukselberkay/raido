@@ -3,8 +3,8 @@
 Build and install Raido on Windows with everything it needs: Git, the Visual Studio
 C++ build tools (Rust's linker), Rust (via rustup), the language servers for the
 languages Raido's editor understands (rust-analyzer, clangd from LLVM, gopls when Go
-is installed, a Python server, Docker's when Docker and Go are), JetBrains Mono Nerd
-Font, Raido itself
+is installed, a Python server, bash-language-server with ShellCheck and shfmt,
+Docker's when Docker and Go are), JetBrains Mono Nerd Font, Raido itself
 (%USERPROFILE%\.cargo\bin\raido.exe, put on your PATH), and the Raido skill that
 teaches AI agents how to use Raido.
 
@@ -21,7 +21,8 @@ winget (App Installer, built into Windows 10 and 11).
 .PARAMETER NoFont
 Skip JetBrains Mono Nerd Font.
 .PARAMETER NoLsp
-Skip the language servers (rust-analyzer, clangd, gopls, Python, Docker).
+Skip the language servers (rust-analyzer, clangd, gopls, Python, bash-language-server
+with ShellCheck and shfmt, Docker).
 .PARAMETER NoSkill
 Skip the Raido skill for AI agents.
 #>
@@ -138,7 +139,7 @@ function Install-Rust {
 }
 
 # --- Language servers: diagnostics, completion and hover in Raido's editor ---
-# One for each language Raido knows: Rust, C and C++, Go, Python, Docker. Each is optional:
+# One for each language Raido knows: Rust, C and C++, Go, Python, shell, Docker. Each is optional:
 # one that can't be installed is noted and skipped, and Raido works without it.
 
 # Run a program quietly; true when it succeeds. Windows PowerShell 5.1 would stop on
@@ -173,7 +174,7 @@ function Get-PythonServer {
 }
 
 function Install-LanguageServers {
-    Step 'Language servers for Rust, C/C++, Go, Python and Docker (Windows, winget)'
+    Step 'Language servers for Rust, C/C++, Go, Python, shell and Docker (Windows, winget)'
 
     # Rust: rustup's own. Its rust-analyzer command is there before the component
     # is, failing until it's added.
@@ -229,6 +230,31 @@ function Install-LanguageServers {
         Ok "$python (Python)"
     } else {
         Note 'no Python language server; later: install Node.js (winget install OpenJS.NodeJS.LTS), then npm install -g pyright'
+    }
+
+    # Shell scripts: the Bash language server from npm, with ShellCheck for its
+    # warnings and shfmt for :format from winget (it quietly does without them).
+    foreach ($tool in @(
+            @{ Name = 'shellcheck'; Id = 'koalaman.shellcheck'; What = 'shell script warnings' },
+            @{ Name = 'shfmt'; Id = 'mvdan.shfmt'; What = 'shell script formatting' })) {
+        if (Have $tool.Name) {
+            Ok "$($tool.Name) ($($tool.What))"
+            continue
+        }
+        try {
+            Install-WithWinget $tool.Id $tool.Name
+            if (Have $tool.Name) { Ok "$($tool.Name) ($($tool.What))" } else { Note "$($tool.Name) was installed; open a new terminal to use it" }
+        } catch {
+            Note "$($tool.Name) skipped ($($_.Exception.Message))"
+        }
+    }
+    if (Test-Server 'bash-language-server') {
+        Ok 'bash-language-server (shell scripts)'
+    } elseif ((Have 'npm') -and (Invoke-Quietly { npm install -g bash-language-server })) {
+        Update-SessionPath
+        if (Test-Server 'bash-language-server') { Ok 'bash-language-server (shell scripts)' } else { Note 'bash-language-server was installed; open a new terminal to use it' }
+    } else {
+        Note 'bash-language-server skipped; later: install Node.js (winget install OpenJS.NodeJS.LTS), then npm install -g bash-language-server'
     }
 
     # Docker: Docker's own server, for Dockerfiles and Compose files. No winget package

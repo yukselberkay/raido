@@ -23,6 +23,8 @@ pub fn folder(open: bool, name: &str) -> Icon {
     }
 }
 
+/// Shell scripts and the shells' own files.
+const SHELL: Icon = ("\u{e795}", rgb(0x89e051));
 /// Dockerfiles, Compose files and `.dockerignore`: Docker's whale.
 const DOCKER: Icon = ("\u{f0868}", rgb(0x458ee6));
 
@@ -41,7 +43,6 @@ pub fn file(path: &Path) -> Icon {
             Some(("\u{e702}", rgb(0xf14c28)))
         }
         ".env" | ".envrc" => Some(("\u{f462}", rgb(0xfaf743))),
-        ".bashrc" | ".bash_profile" | ".zshrc" | ".profile" => Some(("\u{e795}", rgb(0x89e051))),
         "readme" | "readme.md" => Some(("\u{f48a}", rgb(0x42a5f5))),
         _ => None,
     };
@@ -50,6 +51,10 @@ pub fn file(path: &Path) -> Icon {
     }
     if crate::language::is_dockerfile(path) || crate::language::is_compose(path) {
         return DOCKER;
+    }
+    // Scripts by every name they go by: `.sh`, `.zshrc`, `PKGBUILD`, `.ksh`.
+    if crate::language::shell(Some(path), "").is_some() {
+        return SHELL;
     }
     let ext = path
         .extension()
@@ -75,7 +80,6 @@ pub fn file(path: &Path) -> Icon {
         "html" | "htm" => ("\u{e736}", rgb(0xe44d26)),
         "css" => ("\u{e749}", rgb(0x42a5f5)),
         "scss" | "sass" => ("\u{e603}", rgb(0xf55385)),
-        "sh" | "bash" | "zsh" | "fish" => ("\u{e795}", rgb(0x89e051)),
         "lua" => ("\u{e620}", rgb(0x51a0cf)),
         "vim" => ("\u{e62b}", rgb(0x019833)),
         "java" => ("\u{e738}", rgb(0xcc3e44)),

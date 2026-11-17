@@ -1,6 +1,6 @@
 //! A small Language Server Protocol client: diagnostics, hover, go-to-definition,
-//! completion and formatting for Rust, Go, Python, C and C++, and Dockerfiles and
-//! Docker Compose files.
+//! completion and formatting for Rust, Go, Python, C and C++, shell scripts, and
+//! Dockerfiles and Docker Compose files.
 //!
 //! Each server runs as a child process speaking JSON-RPC over stdio. Reader and
 //! writer threads keep the UI loop non-blocking; `Lsp::poll` drains replies on
@@ -101,13 +101,29 @@ struct Language {
     id: &'static str,
 }
 
-/// The language key (`go`, `rust`, `python`, `c`, `docker`) of a file Raido has a
-/// server for.
-pub fn language_key(path: &Path) -> Option<&'static str> {
-    language(path).map(|l| l.key)
+/// The language key (`go`, `rust`, `python`, `c`, `shell`, `docker`) of a buffer
+/// Raido has a server for.
+pub fn language_key(buffer: &Buffer) -> Option<&'static str> {
+    language_of(buffer).map(|l| l.key)
 }
 
-fn language(path: &Path) -> Option<Language> {
+fn language_of(buffer: &Buffer) -> Option<Language> {
+    language(
+        buffer.path.as_deref()?,
+        &crate::language::first_line(buffer),
+    )
+}
+
+/// The language of the file at `path` that starts with `first_line`.
+fn language(path: &Path, first_line: &str) -> Option<Language> {
+    // sh, bash and ksh scripts, by their name or `#!` line; zsh and fish are
+    // languages of their own to the Bash server and ShellCheck.
+    if let Some(shell) = crate::language::shell(Some(path), first_line) {
+        return shell.checked().then_some(Language {
+            key: "shell",
+            id: "shellscript",
+        });
+    }
     // One server for both: Docker's own.
     if crate::language::is_dockerfile(path) {
         return Some(Language {
@@ -145,6 +161,7 @@ fn defaults(key: &str) -> &'static [(&'static str, &'static [&'static str])] {
             ("jedi-language-server", &[]),
         ],
         "c" => &[("clangd", &[])],
+        "shell" => &[("bash-language-server", &["start"])],
         "docker" => &[("docker-language-server", &["start", "--stdio"])],
         _ => &[],
     }
@@ -156,6 +173,7 @@ fn install_hint(key: &str) -> &'static str {
         "go" => "go install golang.org/x/tools/gopls@latest",
         "python" => "npm install -g pyright  (or: pip install python-lsp-server)",
         "c" => "install clangd (Arch: pacman -S clang · Debian/Ubuntu: apt install clangd · macOS: xcode-select --install)",
+        "shell" => "npm install -g bash-language-server, with shellcheck and shfmt for its warnings and :format (brew / apt / dnf / pacman install shellcheck shfmt)",
         "docker" => "go install github.com/docker/docker-language-server/cmd/docker-language-server@latest  (or a release binary from github.com/docker/docker-language-server)",
         _ => "see the README",
     }
@@ -179,12 +197,12 @@ pub(crate) fn on_path(program: &str) -> bool {
 }
 
 /// Folders a server installed the usual way can be in without being on PATH: `go
-/// install`'s for gopls and Docker's server; for clangd, Homebrew's LLVM and Apple's Command Line Tools
+/// install`'s for gopls, shfmt and Docker's server; for clangd, Homebrew's LLVM and Apple's Command Line Tools
 /// on macOS, and the LLVM installer's on Windows. The install scripts rely on these.
 fn off_path(program: &str) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     match program {
-        "gopls" | "docker-language-server" => {
+        "gopls" | "shfmt" | "docker-language-server" => {
             dirs.extend(std::env::var_os("GOBIN").map(PathBuf::from));
             if let Some(gopath) = std::env::var_os("GOPATH") {
                 dirs.extend(std::env::split_paths(&gopath).next().map(|p| p.join("bin")));
@@ -615,6 +633,18 @@ impl Lsp {
                         "workspace": { "workspaceFolders": true }
                     }
                 });
+                if key == "shell" {
+                    // The Bash server runs ShellCheck and shfmt by name; say where they
+                    // are when go install left shfmt off PATH.
+                    let mut options = json!({});
+                    if let Some(shellcheck) = locate("shellcheck") {
+                        options["shellcheckPath"] = json!(shellcheck);
+                    }
+                    if let Some(shfmt) = locate("shfmt") {
+                        options["shfmt"] = json!({ "path": shfmt });
+                    }
+                    params["initializationOptions"] = options;
+                }
                 if key == "docker" {
                     // Docker's server reports usage to Docker unless told not to.
                     params["initializationOptions"] = json!({ "telemetry": "off" });
@@ -665,7 +695,7 @@ impl Lsp {
             let Some(path) = buffer.path.as_deref() else {
                 continue;
             };
-            let Some(lang) = language(path) else {
+            let Some(lang) = language(path, &crate::language::first_line(buffer)) else {
                 continue;
             };
             if let Some(reason) = self.ensure(lang.key, path) {
@@ -775,10 +805,9 @@ impl Lsp {
         if !self.enabled {
             bail!("Language servers are disabled (lsp_enabled = false)");
         }
-        let lang =
-            buffer.path.as_deref().and_then(language).context(
-                "No language server for this file type (Rust, Go, Python, C, C++, Docker)",
-            )?;
+        let lang = language_of(buffer).context(
+            "No language server for this file type (Rust, Go, Python, C, C++, shell, Docker)",
+        )?;
         if let Some(reason) = self.failed.get(lang.key) {
             bail!("{reason}");
         }
@@ -805,10 +834,18 @@ impl Lsp {
                 "textDocument/completion",
                 json!({ "textDocument": document, "position": position, "context": { "triggerKind": 1 } }),
             ),
-            Kind::Format => client.request(
-                "textDocument/formatting",
-                json!({ "textDocument": document, "options": { "tabSize": tab_width, "insertSpaces": true } }),
-            ),
+            Kind::Format => {
+                // The file's own indentation: tabs stay tabs (shfmt, clang-format).
+                let unit = crate::language::Rules::new(buffer, tab_width).unit;
+                let (size, spaces) = match unit.as_str() {
+                    "\t" => (tab_width, false),
+                    unit => (unit.len(), true),
+                };
+                client.request(
+                    "textDocument/formatting",
+                    json!({ "textDocument": document, "options": { "tabSize": size, "insertSpaces": spaces } }),
+                )
+            }
             Kind::OrganizeImports => client.request(
                 "textDocument/codeAction",
                 json!({
@@ -832,7 +869,7 @@ impl Lsp {
 
     /// One line for the editor status: server name and state.
     pub fn status(&self, id: usize, buffer: &Buffer) -> Option<String> {
-        let lang = language(buffer.path.as_deref()?)?;
+        let lang = language_of(buffer)?;
         if !self.enabled {
             return None;
         }
@@ -850,7 +887,7 @@ impl Lsp {
     /// A summary of every language's server for `:lsp`.
     pub fn report(&self) -> String {
         let mut parts = Vec::new();
-        for key in ["rust", "go", "python", "c", "docker"] {
+        for key in ["rust", "go", "python", "c", "shell", "docker"] {
             let state = if let Some(client) = self.clients.get(key) {
                 let on = match &client.python {
                     Some(python) => format!(" on {}", self.venv_name(python.venv.as_deref())),
@@ -870,8 +907,22 @@ impl Lsp {
             } else {
                 format!("not installed — {}", install_hint(key))
             };
+            // The Bash server warns through ShellCheck and formats through shfmt,
+            // quietly doing without them when they're missing.
+            let helpers = if key == "shell" {
+                let missing: Vec<&str> = ["shellcheck", "shfmt"]
+                    .into_iter()
+                    .filter(|tool| locate(tool).is_none())
+                    .collect();
+                match missing.as_slice() {
+                    [] => String::new(),
+                    tools => format!(" ({} not installed)", tools.join(", ")),
+                }
+            } else {
+                String::new()
+            };
             parts.push(format!(
-                "{}: {state}",
+                "{}: {state}{helpers}",
                 if key == "c" { "c/c++" } else { key }
             ));
         }
@@ -1448,10 +1499,11 @@ mod tests {
 
     #[test]
     fn languages_map_to_servers() {
-        assert_eq!(language(Path::new("a.rs")).unwrap().key, "rust");
-        assert_eq!(language(Path::new("a.hpp")).unwrap().id, "cpp");
-        assert_eq!(language(Path::new("a.py")).unwrap().key, "python");
-        assert!(language(Path::new("a.md")).is_none());
+        let language = |name: &str| language(Path::new(name), "");
+        assert_eq!(language("a.rs").unwrap().key, "rust");
+        assert_eq!(language("a.hpp").unwrap().id, "cpp");
+        assert_eq!(language("a.py").unwrap().key, "python");
+        assert!(language("a.md").is_none());
         // Docker's server takes Dockerfiles and Compose files, by their names.
         for (name, id) in [
             ("Dockerfile", "dockerfile"),
@@ -1461,14 +1513,188 @@ mod tests {
             ("compose.yaml", "dockercompose"),
             ("docker-compose.prod.yml", "dockercompose"),
         ] {
-            let lang = language(Path::new(name)).unwrap();
+            let lang = language(name).unwrap();
             assert_eq!((lang.key, lang.id), ("docker", id), "{name}");
         }
-        assert!(language(Path::new("values.yaml")).is_none());
-        assert!(language(Path::new("Dockerfile.dockerignore")).is_none());
+        assert!(language("values.yaml").is_none());
+        assert!(language("Dockerfile.dockerignore").is_none());
+        // The Bash server takes sh, bash and ksh scripts, by name or by `#!` line.
+        for name in [
+            "deploy.sh",
+            "a.bash",
+            "a.ksh",
+            ".bashrc",
+            ".profile",
+            "PKGBUILD",
+        ] {
+            let lang = language(name).unwrap();
+            assert_eq!((lang.key, lang.id), ("shell", "shellscript"), "{name}");
+        }
+        let script = |name: &str, first: &str| language_at(name, first).map(|l| l.id);
+        assert_eq!(script("deploy", "#!/usr/bin/env bash"), Some("shellscript"));
+        assert_eq!(script("run", "#!/bin/sh -e"), Some("shellscript"));
+        // zsh and fish aren't theirs, even with a .sh name; nor other #! lines.
+        for (name, first) in [
+            ("a.zsh", ""),
+            (".zshrc", ""),
+            ("config.fish", ""),
+            ("deploy", "#!/usr/bin/env zsh"),
+            ("tool.sh", "#!/bin/zsh"),
+            ("deploy", "#!/usr/bin/env python3"),
+            ("notes.txt", "#!/bin/bash"),
+        ] {
+            assert_eq!(script(name, first), None, "{name} {first}");
+        }
         assert!(off_path("docker-language-server")
             .iter()
             .any(|d| d.ends_with("go/bin")));
+    }
+
+    fn language_at(name: &str, first_line: &str) -> Option<Language> {
+        language(Path::new(name), first_line)
+    }
+
+    /// The real Bash language server on a script known by its `#!` line: ShellCheck's
+    /// warnings, completion of its variables, hover docs and shfmt's formatting.
+    #[test]
+    #[ignore = "talks to the real bash-language-server: RAIDO_BASH_LS=<path> cargo test real_bash -- --ignored (with shellcheck and shfmt on PATH)"]
+    fn real_bash_language_server_warns_completes_and_formats() {
+        let program = std::env::var("RAIDO_BASH_LS").unwrap_or("bash-language-server".into());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("deploy");
+        std::fs::write(
+            &path,
+            "#!/usr/bin/env bash\nname=world\nif [ $name = x ]; then\necho \"hi $nam\"\nfi\n",
+        )
+        .unwrap();
+        let mut buffer = Buffer::open(&path).unwrap();
+        (buffer.row, buffer.col) = (3, 12);
+        let buffers = vec![buffer];
+        let mut overrides = BTreeMap::new();
+        overrides.insert(
+            "shell".to_string(),
+            CommandPlugin {
+                program,
+                args: vec!["start".into()],
+            },
+        );
+        let mut lsp = Lsp::new(dir.path().into(), true, overrides);
+        lsp.sync(&buffers, &[0]);
+        let ask = |lsp: &mut Lsp, kind: Kind| -> Event {
+            let mut asked = false;
+            for _ in 0..1000 {
+                if !asked {
+                    asked = lsp.request(kind, 0, &buffers[0], 4).is_ok();
+                }
+                let (events, _) = lsp.poll(&buffers);
+                if let Some(event) = events.into_iter().find(|e| !matches!(e, Event::Notice(_))) {
+                    return event;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            panic!("no answer to {kind:?}");
+        };
+        let Event::Completion { items, .. } = ask(&mut lsp, Kind::Completion) else {
+            panic!("completion")
+        };
+        assert!(
+            items.iter().any(|i| i.label == "name"),
+            "{:?}",
+            items.iter().map(|i| &i.label).collect::<Vec<_>>()
+        );
+        if on_path("shellcheck") {
+            for _ in 0..500 {
+                lsp.poll(&buffers);
+                if lsp.diagnostics.get(&0).is_some_and(|d| !d.is_empty()) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            let found: Vec<String> = lsp.diagnostics[&0]
+                .iter()
+                .map(|d| d.message.clone())
+                .collect();
+            // A typo: ShellCheck's SC2154.
+            assert!(
+                found
+                    .iter()
+                    .any(|m| m.contains("nam is referenced but not assigned")),
+                "{found:?}"
+            );
+        }
+        if locate("shfmt").is_some() {
+            let Event::Format { edits, .. } = ask(&mut lsp, Kind::Format) else {
+                panic!("format")
+            };
+            assert!(
+                edits.iter().any(|(_, _, text)| text.contains("    echo")),
+                "{edits:?}"
+            );
+        }
+    }
+
+    /// Formatting goes by the file's own indentation: shfmt keeps a script's tabs.
+    #[cfg(unix)]
+    #[test]
+    fn formatting_asks_for_the_files_own_indentation() {
+        if !on_path("python3") {
+            return;
+        }
+        const SERVER: &str = r#"
+import json, sys
+def send(msg):
+    body = json.dumps(msg)
+    sys.stdout.write("Content-Length: %d\r\n\r\n%s" % (len(body.encode()), body)); sys.stdout.flush()
+def read():
+    length = 0
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line: sys.exit(0)
+        line = line.strip()
+        if not line: break
+        if line.lower().startswith(b"content-length:"): length = int(line.split(b":")[1])
+    return json.loads(sys.stdin.buffer.read(length))
+while True:
+    msg = read(); method = msg.get("method")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {"capabilities": {}}})
+    elif method == "textDocument/formatting":
+        o = msg["params"]["options"]
+        said = "%s %s" % (o["tabSize"], o["insertSpaces"])
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": [{"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}}, "newText": said}]})
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let tabs = dir.path().join("tabs.sh");
+        let two = dir.path().join("two.sh");
+        std::fs::write(&tabs, "if x; then\n\techo\nfi\n").unwrap();
+        std::fs::write(&two, "if x; then\n  echo\nfi\n").unwrap();
+        let buffers = vec![Buffer::open(&tabs).unwrap(), Buffer::open(&two).unwrap()];
+        let mut overrides = BTreeMap::new();
+        overrides.insert(
+            "shell".to_string(),
+            CommandPlugin {
+                program: "python3".into(),
+                args: vec!["-c".into(), SERVER.into()],
+            },
+        );
+        let mut lsp = Lsp::new(dir.path().into(), true, overrides);
+        lsp.sync(&buffers, &[0, 1]);
+        for (id, expected) in [(0, "4 False"), (1, "2 True")] {
+            let mut said = None;
+            for _ in 0..300 {
+                if said.is_none() && lsp.request(Kind::Format, id, &buffers[id], 4).is_ok() {
+                    said = Some(String::new());
+                }
+                let (events, _) = lsp.poll(&buffers);
+                if let Some(Event::Format { edits, .. }) = events.into_iter().next() {
+                    assert_eq!(edits[0].2, expected, "{id}");
+                    said = Some(edits[0].2.clone());
+                    break;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            assert_eq!(said.as_deref(), Some(expected), "{id}");
+        }
     }
 
     /// Docker's server is told the language of each file, and to keep its usage

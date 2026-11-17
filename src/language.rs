@@ -53,6 +53,9 @@ impl Lang {
         if is_compose(path) {
             return Self::Compose;
         }
+        if shell(Some(path), "").is_some() {
+            return Self::Shell;
+        }
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
@@ -68,12 +71,20 @@ impl Lang {
             | "jsonc" | "dart" | "scala" | "zig" => Self::Brace,
             "yaml" | "yml" => Self::Yaml,
             "toml" => Self::Toml,
-            "sh" | "bash" | "zsh" | "fish" => Self::Shell,
             "lua" => Self::Lua,
             "rb" | "rake" | "gemspec" => Self::Ruby,
             "md" | "markdown" => Self::Markdown,
             "mk" => Self::Make,
             _ => Self::Plain,
+        }
+    }
+    /// The language of `buffer`: by its file's name, else, for a script without an
+    /// extension, by its `#!` line.
+    pub fn of(buffer: &Buffer) -> Self {
+        let path = buffer.path.as_deref();
+        match Self::detect(path) {
+            Self::Plain if shell(path, &first_line(buffer)).is_some() => Self::Shell,
+            lang => lang,
         }
     }
     fn comment(self) -> Option<&'static str> {
@@ -138,6 +149,96 @@ pub fn is_compose(path: &Path) -> bool {
         return false;
     };
     stem == "compose" || stem.starts_with("compose.") || stem.contains("docker-compose")
+}
+
+/// The shell a script is written for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shell {
+    /// POSIX sh, dash, ash.
+    Sh,
+    Bash,
+    /// ksh, mksh.
+    Ksh,
+    Zsh,
+    Fish,
+}
+
+impl Shell {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Sh => "sh",
+            Self::Bash => "bash",
+            Self::Ksh => "ksh",
+            Self::Zsh => "zsh",
+            Self::Fish => "fish",
+        }
+    }
+    /// Whether ShellCheck and the Bash language server read it: zsh and fish are
+    /// languages of their own to them.
+    pub fn checked(self) -> bool {
+        !matches!(self, Self::Zsh | Self::Fish)
+    }
+}
+
+/// The shell `path` is a script for: by its extension (`.sh`, `.bash`, `.zsh`), its
+/// name (`.bashrc`, `.zshrc`, `PKGBUILD`), or, without an extension, the `#!` line
+/// it starts with (`first_line`). A `#!` line names the shell of a `.sh` file too.
+pub fn shell(path: Option<&Path>, first_line: &str) -> Option<Shell> {
+    let by_shebang = shebang(first_line);
+    let Some(path) = path else {
+        return by_shebang;
+    };
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let by_name = match name.as_str() {
+        ".bashrc" | ".bash_profile" | ".bash_login" | ".bash_logout" | ".bash_aliases"
+        | ".bash_functions" | ".envrc" | "pkgbuild" | "apkbuild" => Some(Shell::Bash),
+        ".profile" | ".xprofile" | ".xinitrc" | ".xsession" => Some(Shell::Sh),
+        ".kshrc" | ".mkshrc" => Some(Shell::Ksh),
+        ".zshrc" | ".zshenv" | ".zprofile" | ".zlogin" | ".zlogout" => Some(Shell::Zsh),
+        _ => None,
+    };
+    let extension = path.extension().and_then(|e| e.to_str());
+    let by_extension = match extension.map(str::to_ascii_lowercase).as_deref() {
+        Some("sh") => Some(Shell::Sh),
+        Some("bash" | "bats" | "command") => Some(Shell::Bash),
+        Some("ksh" | "mksh") => Some(Shell::Ksh),
+        Some("zsh") => Some(Shell::Zsh),
+        Some("fish") => Some(Shell::Fish),
+        _ => None,
+    };
+    match by_name.or(by_extension) {
+        Some(known) => Some(by_shebang.unwrap_or(known)),
+        None if extension.is_none() => by_shebang,
+        None => None,
+    }
+}
+
+/// The shell a `#!` line runs: `#!/bin/bash`, `#!/usr/bin/env bash`,
+/// `#!/usr/bin/env -S bash -e`.
+fn shebang(line: &str) -> Option<Shell> {
+    let mut words = line.strip_prefix("#!")?.split_whitespace();
+    let base = |word: &str| word.rsplit('/').next().unwrap_or(word).to_string();
+    let mut program = base(words.next()?);
+    if program == "env" {
+        program = base(words.find(|w| !w.starts_with('-') && !w.contains('='))?);
+    }
+    Some(match program.as_str() {
+        "sh" | "dash" | "ash" => Shell::Sh,
+        "bash" => Shell::Bash,
+        "ksh" | "mksh" | "ksh93" => Shell::Ksh,
+        "zsh" => Shell::Zsh,
+        "fish" => Shell::Fish,
+        _ => return None,
+    })
+}
+
+/// The start of `buffer`'s first line, enough for a `#!` line.
+pub fn first_line(buffer: &Buffer) -> String {
+    buffer.text.line(0).chars().take(200).collect()
 }
 
 impl Lang {
@@ -405,7 +506,9 @@ impl Lang {
             Self::Shell => &[
                 "case", "do", "done", "elif", "else", "esac", "export", "fi", "for", "function",
                 "if", "in", "local", "readonly", "return", "then", "until", "while", "echo",
-                "printf", "exit", "shift", "source",
+                "printf", "exit", "shift", "source", "select", "declare", "typeset", "unset",
+                "trap", "shopt", "getopts", "read", "eval", "exec", "wait", "command", "builtin",
+                "break", "continue", "true", "false", "pushd", "popd", "mapfile", "set",
             ],
             Self::Lua => &[
                 "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto",
@@ -616,7 +719,7 @@ impl Rules {
     /// or the most common step between indented lines), else the language's
     /// convention, else `tab_width` spaces.
     pub fn new(buffer: &Buffer, tab_width: usize) -> Self {
-        let lang = Lang::detect(buffer.path.as_deref());
+        let lang = Lang::of(buffer);
         let unit = detect_unit(buffer).unwrap_or_else(|| match lang {
             Lang::Go | Lang::Make => "\t".into(),
             Lang::Python => "    ".into(),
@@ -638,7 +741,10 @@ impl Rules {
         match self.lang {
             Lang::Python | Lang::Yaml | Lang::Compose | Lang::Make => code.ends_with(':'),
             Lang::Shell => {
-                matches!(last, "then" | "do" | "else") || (first == "case" && last == "in")
+                matches!(last, "then" | "do" | "else")
+                    || (first == "case" && last == "in")
+                    // A case's pattern on a line of its own: `start)`, `-h|--help)`.
+                    || (code.ends_with(')') && !code.contains('(') && code != ")")
             }
             Lang::Lua => {
                 matches!(last, "then" | "do" | "else" | "repeat")
@@ -674,8 +780,20 @@ impl Rules {
     /// (Python's `return`, `pass`, `break`, `continue`, `raise`).
     pub fn dedents_after(&self, before: &str) -> bool {
         let first = before.split_whitespace().next().unwrap_or_default();
-        self.lang == Lang::Python
-            && matches!(first, "return" | "pass" | "break" | "continue" | "raise")
+        match self.lang {
+            Lang::Python => matches!(first, "return" | "pass" | "break" | "continue" | "raise"),
+            // A case's pattern ends with `;;` (or `;&`, `;;&`): the next one goes back.
+            // Not after a pattern on one line, `a) run ;;`.
+            Lang::Shell => {
+                let code = self.strip_comment(before).trim_end();
+                let one_line = match (code.find(')'), code.find('(')) {
+                    (Some(close), Some(open)) => close < open,
+                    (close, _) => close.is_some(),
+                };
+                (code.ends_with(";;") || code.ends_with(";&")) && !one_line
+            }
+            _ => false,
+        }
     }
     fn closer(&self, open: char) -> Option<char> {
         self.lang
@@ -706,7 +824,16 @@ impl Rules {
                     }
                 }
                 None if c == '"' || c == '\'' || c == '`' => quote = Some(c),
-                None if line[at..].starts_with(marker) => return &line[..at],
+                // A shell comment starts a word: `${#list[@]}` and `a#b` aren't ones.
+                None if line[at..].starts_with(marker)
+                    && (self.lang != Lang::Shell
+                        || line[..at]
+                            .chars()
+                            .next_back()
+                            .is_none_or(char::is_whitespace)) =>
+                {
+                    return &line[..at]
+                }
                 None => {}
             }
         }
@@ -808,11 +935,11 @@ fn next_indent(rules: &Rules, current: &str, before: &str) -> String {
     }
 }
 
-/// The indentation for a new line below row `row` of a Dockerfile, whose text
-/// before the cursor is `before`: an instruction that goes on (its line ends in a
-/// backslash) indents the lines it goes on over by one level, and the line after its
-/// last one goes back to where the instruction starts.
-fn docker_indent(b: &Buffer, row: usize, rules: &Rules, current: &str, before: &str) -> String {
+/// The indentation for a new line below row `row` of a Dockerfile or shell script,
+/// whose text before the cursor is `before`: an instruction or command that goes on
+/// (its line ends in a backslash) indents the lines it goes on over by one level, and
+/// the line after its last one goes back to where it starts.
+fn continued_indent(b: &Buffer, row: usize, rules: &Rules, current: &str, before: &str) -> String {
     let goes_on = |text: &str| text.trim_end().ends_with('\\');
     let mut first = row;
     while first > 0 && goes_on(&b.line(first - 1)) {
@@ -861,6 +988,9 @@ fn list_item(before: &str) -> Option<(String, bool)> {
 
 /// Enter in insert mode.
 pub fn enter(b: &mut Buffer, rules: &Rules) {
+    if rules.lang == Lang::Shell {
+        shell_dedent(b);
+    }
     let Line {
         start,
         indent,
@@ -900,7 +1030,7 @@ pub fn enter(b: &mut Buffer, rules: &Rules) {
         indent.chars().take(before.chars().count()).collect()
     };
     let inner = match rules.lang {
-        Lang::Docker => docker_indent(b, b.row, rules, &indent, &before),
+        Lang::Docker | Lang::Shell => continued_indent(b, b.row, rules, &indent, &before),
         _ => next_indent(rules, &indent, &before),
     };
     // Between a bracket pair: the closer gets a line of its own.
@@ -932,7 +1062,7 @@ pub fn open_line(b: &mut Buffer, rules: &Rules, above: bool) {
         .take_while(|c| *c == ' ' || *c == '\t')
         .collect();
     let wanted = match rules.lang {
-        Lang::Docker => docker_indent(b, row, rules, &indent, &text),
+        Lang::Docker | Lang::Shell => continued_indent(b, row, rules, &indent, &text),
         _ => next_indent(rules, &indent, &text),
     };
     if wanted != indent {
@@ -1013,6 +1143,65 @@ pub fn type_char(b: &mut Buffer, rules: &Rules, c: char, typing: Typing) {
     // Python: `else:`, `elif x:`, `except E:`, `finally:` go back under their if/try.
     if typing.smart_indent && rules.lang == Lang::Python && c == ':' {
         python_dedent(b);
+    }
+    // Shell: `fi`, `done`, `esac`, `else`, `elif` once the word is typed out.
+    if typing.smart_indent && rules.lang == Lang::Shell && " ;&|<>".contains(c) {
+        let here = line(b);
+        let word = here.before.trim_start().strip_suffix(c).unwrap_or_default();
+        if matches!(word, "fi" | "done" | "esac" | "else" | "elif") {
+            shell_dedent(b);
+        }
+    }
+}
+
+/// Shell: a line starting with `fi`, `else` or `elif`, `done` or `esac` goes back
+/// under the `if`, loop or `case` it belongs to, found by matching blocks up from it
+/// (one opened and closed on a line, `if x; then y; fi`, counts as neither).
+fn shell_dedent(b: &mut Buffer) {
+    let here = line(b);
+    let words = |text: &str| -> Vec<String> {
+        text.split(|c: char| c.is_whitespace() || ";&|()<>".contains(c))
+            .filter(|w| !w.is_empty())
+            .map(String::from)
+            .collect()
+    };
+    let first = words(&here.before).into_iter().next().unwrap_or_default();
+    let (openers, closer): (&[&str], &str) = match first.as_str() {
+        "fi" | "else" | "elif" => (&["if"], "fi"),
+        "done" => (&["for", "while", "until", "select"], "done"),
+        "esac" => (&["case"], "esac"),
+        _ => return,
+    };
+    let mut depth = 0usize;
+    for row in (0..b.row).rev() {
+        let text = b.line(row);
+        let line_words = words(&text);
+        let Some(word) = line_words.first() else {
+            continue;
+        };
+        let opens = openers.contains(&word.as_str());
+        if opens && line_words.iter().any(|w| w == closer) {
+            continue;
+        }
+        if word == closer {
+            depth += 1;
+        } else if opens {
+            if depth > 0 {
+                depth -= 1;
+                continue;
+            }
+            let target: String = text
+                .chars()
+                .take_while(|c| *c == ' ' || *c == '\t')
+                .collect();
+            if target != here.indent {
+                let (ours, theirs) = (here.indent.chars().count(), target.chars().count());
+                let col = b.col;
+                b.replace(here.start, here.start + ours, &target);
+                b.set_index(here.start + (col + theirs).saturating_sub(ours));
+            }
+            return;
+        }
     }
 }
 
@@ -1365,6 +1554,104 @@ mod tests {
         assert_eq!(found.first().map(|(w, _)| w.as_str()), Some("depends_on"));
         let found = suggestions(Lang::Docker, &[], "ent");
         assert_eq!(found.first().map(|(w, _)| w.as_str()), Some("ENTRYPOINT"));
+    }
+
+    #[test]
+    fn shell_scripts_are_known_by_name_and_by_their_first_line() {
+        let shell_of = |name: &str, first: &str| shell(Some(Path::new(name)), first);
+        for (name, first, expected) in [
+            ("deploy.sh", "", Some(Shell::Sh)),
+            ("deploy.sh", "#!/usr/bin/env bash", Some(Shell::Bash)),
+            ("a.bash", "", Some(Shell::Bash)),
+            ("t.bats", "", Some(Shell::Bash)),
+            ("a.ksh", "", Some(Shell::Ksh)),
+            ("a.zsh", "", Some(Shell::Zsh)),
+            ("config.fish", "", Some(Shell::Fish)),
+            (".bashrc", "", Some(Shell::Bash)),
+            (".zshrc", "", Some(Shell::Zsh)),
+            (".profile", "", Some(Shell::Sh)),
+            ("PKGBUILD", "", Some(Shell::Bash)),
+            ("deploy", "#!/bin/bash", Some(Shell::Bash)),
+            ("deploy", "#! /bin/sh -e", Some(Shell::Sh)),
+            ("deploy", "#!/usr/bin/env -S bash -eu", Some(Shell::Bash)),
+            ("deploy", "#!/usr/bin/env zsh", Some(Shell::Zsh)),
+            ("deploy", "#!/bin/dash", Some(Shell::Sh)),
+            ("deploy", "#!/usr/bin/env python3", None),
+            ("deploy", "", None),
+            ("notes.txt", "#!/bin/bash", None),
+        ] {
+            assert_eq!(shell_of(name, first), expected, "{name} {first}");
+        }
+        assert_eq!(shell(None, "#!/bin/bash\n"), Some(Shell::Bash));
+        // A script without an extension types as shell too.
+        let b = buffer("deploy", "#!/usr/bin/env bash\necho hi\n");
+        assert_eq!(Lang::of(&b), Lang::Shell);
+        assert_eq!(Lang::of(&buffer("notes", "hello\n")), Lang::Plain);
+        assert_eq!(Lang::detect(Some(Path::new(".zshrc"))), Lang::Shell);
+    }
+
+    #[test]
+    fn shell_blocks_indent_and_their_closers_line_up() {
+        let typed_in = |name: &str, keys: &str| {
+            let mut b = buffer(name, "");
+            typed(&mut b, keys);
+            b.text.to_string()
+        };
+        // if / else / fi, on Enter.
+        assert_eq!(
+            typed_in("a.sh", "if test -f x; then\necho a\nelse\necho b\nfi\n"),
+            "if test -f x; then\n    echo a\nelse\n    echo b\nfi\n"
+        );
+        // elif once its word is typed out; nested blocks match their own opener.
+        assert_eq!(
+            typed_in("a.sh", "if a; then\nx\nelif b; then\ny\nfi\n"),
+            "if a; then\n    x\nelif b; then\n    y\nfi\n"
+        );
+        assert_eq!(
+            typed_in(
+                "a.sh",
+                "for f in *; do\nif test -d x; then\ncontinue\nfi\ndone\n"
+            ),
+            "for f in *; do\n    if test -d x; then\n        continue\n    fi\ndone\n"
+        );
+        // A loop's `do` on its own line, and `done <` closing it as it's typed.
+        assert_eq!(
+            typed_in("a.sh", "while read -r l\ndo\necho\ndone <"),
+            "while read -r l\ndo\n    echo\ndone <"
+        );
+        // A one-line block between them counts as neither.
+        assert_eq!(
+            typed_in("a.sh", "if a; then\nif b; then c; fi\nfi\n"),
+            "if a; then\n    if b; then c; fi\nfi\n"
+        );
+        // case: patterns indent their commands, ;; goes back to the patterns.
+        assert_eq!(
+            typed_in("a.sh", "case \"$1\" in\nstart)\nrun\n;;\n*)\nusage\n;;\nesac\n"),
+            "case \"$1\" in\n    start)\n        run\n        ;;\n    *)\n        usage\n        ;;\nesac\n"
+        );
+        // A pattern and its commands on one line stay with the patterns.
+        assert_eq!(
+            typed_in("a.sh", "case x in\na) run ;;\nb)"),
+            "case x in\n    a) run ;;\n    b)"
+        );
+        // `file` isn't `fi`.
+        assert_eq!(
+            typed_in("a.sh", "if x; then\nfile=1"),
+            "if x; then\n    file=1"
+        );
+        // A command that goes on over lines ending in a backslash.
+        assert_eq!(
+            typed_in("a.sh", "apt-get install \\\ncurl \\\ngit\necho ok"),
+            "apt-get install \\\n    curl \\\n    git\necho ok"
+        );
+        // Without an extension, by its #! line.
+        let mut b = buffer("deploy", "#!/bin/sh\n");
+        typed(&mut b, "if x; then\ny");
+        assert_eq!(b.text.to_string(), "#!/bin/sh\nif x; then\n    y");
+        // `#` starts a comment only as a word of its own.
+        let rules = Rules::new(&buffer("a.sh", ""), 4);
+        assert!(rules.opens_block("if [ ${#list[@]} -gt 0 ]; then"));
+        assert!(rules.opens_block("if x; then # check"));
     }
 
     #[test]

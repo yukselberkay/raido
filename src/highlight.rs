@@ -134,10 +134,14 @@ impl Syntax {
     }
     /// The grammar for the file at `path`, and the set to parse it with: by its whole
     /// name first (`Makefile`, `.bashrc`, `Dockerfile`), else by its extension.
-    /// Dockerfiles go by their kind too (`Dockerfile.dev`, `api.dockerfile`).
+    /// Dockerfiles go by their kind too (`Dockerfile.dev`, `api.dockerfile`), and
+    /// shell scripts by every name they go by (`.zshrc`, `PKGBUILD`, `.ksh`).
     pub fn for_path(&self, path: &std::path::Path) -> Option<(&SyntaxReference, &SyntaxSet)> {
         if crate::language::is_dockerfile(path) {
             return self.by_extension("Dockerfile");
+        }
+        if crate::language::shell(Some(path), "").is_some() {
+            return self.by_extension("sh");
         }
         let keys = [
             path.file_name().and_then(|n| n.to_str()),
@@ -156,9 +160,29 @@ impl Syntax {
             .map(|g| (g, &self.syntaxes))
             .or_else(|| find(extra()))
     }
+    /// The grammar for `buffer`: by its file's name, else by its first line, as for a
+    /// script without an extension (`#!/usr/bin/env bash`, `#!/usr/bin/env python3`).
+    pub fn for_buffer(&self, buffer: &Buffer) -> Option<(&SyntaxReference, &SyntaxSet)> {
+        if let Some(found) = buffer.path.as_deref().and_then(|p| self.for_path(p)) {
+            return Some(found);
+        }
+        let first = crate::language::first_line(buffer);
+        if crate::language::shell(buffer.path.as_deref(), &first).is_some() {
+            return self.by_extension("sh");
+        }
+        self.syntaxes
+            .find_syntax_by_first_line(&first)
+            .map(|g| (g, &self.syntaxes))
+    }
     /// The grammar a Markdown code block labeled `token` (`rust`, `toml`) means,
     /// and the set to parse it with.
     pub fn by_token(&self, token: &str) -> Option<(&SyntaxReference, &SyntaxSet)> {
+        // The names GitHub knows shell blocks by too.
+        let shell = matches!(
+            token.to_ascii_lowercase().as_str(),
+            "shell" | "shellscript" | "ksh" | "dash" | "posix"
+        );
+        let token = if shell { "sh" } else { token };
         (self
             .syntaxes
             .find_syntax_by_token(token)
@@ -173,10 +197,7 @@ impl Syntax {
         }
     }
     pub fn language(&self, buffer: &Buffer) -> String {
-        buffer
-            .path
-            .as_deref()
-            .and_then(|p| self.for_path(p))
+        self.for_buffer(buffer)
             .map(|(g, _)| g.name.clone())
             .unwrap_or_else(|| "Plain text".into())
     }
@@ -189,6 +210,7 @@ impl Syntax {
     /// `prepare`, highlighting at most `budget` lines in this call.
     pub fn prepare_lines(&mut self, id: usize, buffer: &Buffer, end: usize, budget: usize) -> bool {
         let name = buffer.name();
+        let mut first_line_edited = false;
         if let Some(cache) = self
             .cache
             .get_mut(&id)
@@ -198,6 +220,7 @@ impl Syntax {
             let first = (0..known)
                 .find(|&row| line_hash(buffer.text.line(row)) != cache.hashes[row])
                 .unwrap_or(known);
+            first_line_edited = first == 0;
             if first < cache.starts.len() {
                 let (parse, state) = cache.starts[first].clone();
                 cache.parse = parse;
@@ -208,15 +231,17 @@ impl Syntax {
             cache.starts.truncate(first);
             cache.revision = buffer.revision;
         }
+        // A new first line may mean a new grammar: `#!/bin/bash` typed into a new file.
+        if first_line_edited {
+            self.cache.remove(&id);
+        }
         let reset = self
             .cache
             .get(&id)
             .is_none_or(|c| c.revision != buffer.revision || c.name != name);
         if reset {
-            let (syntax, set) = buffer
-                .path
-                .as_deref()
-                .and_then(|p| self.for_path(p))
+            let (syntax, set) = self
+                .for_buffer(buffer)
                 .unwrap_or_else(|| (self.syntaxes.find_syntax_plain_text(), &self.syntaxes));
             let extra = std::ptr::eq(set, extra());
             let highlighter = Highlighter::new(&self.theme);
@@ -566,9 +591,54 @@ user app
         assert_eq!(name("Makefile").as_deref(), Some("Makefile"));
         assert_eq!(name("compose.yaml").as_deref(), Some("YAML"));
         assert_eq!(name("main.rs").as_deref(), Some("Rust"));
-        // Markdown code blocks labeled for Docker.
+        // Shell scripts by every name they go by.
+        for file in [
+            ".zshrc",
+            "PKGBUILD",
+            "a.ksh",
+            "t.bats",
+            "x.command",
+            ".envrc",
+        ] {
+            assert_eq!(
+                name(file).as_deref(),
+                Some("Bourne Again Shell (bash)"),
+                "{file}"
+            );
+        }
+        // Markdown code blocks labeled for Docker, or as `shell`.
+        assert!(syntax.by_token("shell").is_some());
         assert!(syntax.by_token("dockerfile").is_some());
         assert!(syntax.by_token("Containerfile").is_some());
+    }
+
+    #[test]
+    fn scripts_without_an_extension_are_highlighted_by_their_first_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("deploy");
+        std::fs::write(&path, "echo hi\n").unwrap();
+        let mut buffer = Buffer::open(&path).unwrap();
+        let mut syntax = Syntax::new(&config::Theme::default());
+        assert_eq!(syntax.language(&buffer), "Plain text");
+        syntax.prepare(0, &buffer, 10);
+        let styles = |syntax: &Syntax| {
+            let mut seen: Vec<Style> = Vec::new();
+            for (style, _) in &syntax.cache[&0].lines[1] {
+                if !seen.contains(style) {
+                    seen.push(*style);
+                }
+            }
+            seen.len()
+        };
+        // Typing its #! line makes it a shell script, colored as one at once.
+        buffer.set_index(0);
+        buffer.insert("#!/usr/bin/env bash\n");
+        assert_eq!(syntax.language(&buffer), "Bourne Again Shell (bash)");
+        syntax.prepare(0, &buffer, 10);
+        assert!(styles(&syntax) > 1, "echo is colored");
+        // Other languages' #! lines too.
+        std::fs::write(&path, "#!/usr/bin/env python3\nprint(1)\n").unwrap();
+        assert_eq!(syntax.language(&Buffer::open(&path).unwrap()), "Python");
     }
 
     #[test]

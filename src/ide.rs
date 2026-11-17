@@ -520,7 +520,10 @@ fn call(app: &mut App, params: &Value) -> Result<Value, Failure> {
                         "uri": lsp::uri(b.path.as_ref()?),
                         "isActive": active == Some(id),
                         "label": b.name(),
-                        "languageId": app.syntax.language(b).to_lowercase(),
+                        "languageId": match crate::language::Lang::of(b) {
+                            crate::language::Lang::Shell => "shellscript".to_string(),
+                            _ => app.syntax.language(b).to_lowercase(),
+                        },
                         "isDirty": b.dirty,
                     }))
                 })

@@ -2,8 +2,8 @@
 # Build and install Raido with everything it needs on this machine (macOS or Linux):
 # a C compiler and linker, Git, curl, Rust (via rustup), the language servers for
 # the languages Raido's editor understands (rust-analyzer, clangd, gopls when Go is
-# installed, a Python server; Docker's when Docker and Go are) from the system's
-# package manager, JetBrains Mono Nerd
+# installed, a Python server, bash-language-server with ShellCheck and shfmt; Docker's
+# when Docker and Go are) from the system's package manager, JetBrains Mono Nerd
 # Font, Raido itself (~/.cargo/bin/raido, made runnable by name from PATH), and the
 # Raido skill that teaches AI agents how to use Raido. On Omarchy, packages come
 # through `omarchy pkg add`, Raido follows the desktop's theme, and it gets an app
@@ -19,7 +19,8 @@ usage="Usage: install.sh [--no-font] [--no-lsp] [--no-skill] [--no-launcher]
 Installs a C compiler, Git, curl, Rust, language servers, JetBrains Mono Nerd Font,
 Raido and its AI agent skill on macOS or Linux.
   --no-font      skip JetBrains Mono Nerd Font
-  --no-lsp       skip the language servers (rust-analyzer, clangd, gopls, Python, Docker)
+  --no-lsp       skip the language servers (rust-analyzer, clangd, gopls, Python,
+                 bash-language-server with ShellCheck and shfmt, Docker)
   --no-skill     skip the Raido skill for AI agents
   --no-launcher  Omarchy: skip Raido's app launcher entry (SUPER + SPACE)"
 
@@ -263,11 +264,11 @@ pm_install() {
 why() { tail -n 1 "$scratch/packages.log" 2>/dev/null; }
 
 # Folders Raido also finds a server in when it isn't on PATH (off_path in
-# src/lsp.rs): go install's for gopls and docker-language-server; Homebrew's LLVM
-# and Apple's Command Line Tools for clangd on macOS.
+# src/lsp.rs): go install's for gopls, shfmt and docker-language-server; Homebrew's
+# LLVM and Apple's Command Line Tools for clangd on macOS.
 off_path() {
     case "$1" in
-        gopls | docker-language-server)
+        gopls | shfmt | docker-language-server)
             [ -n "${GOBIN:-}" ] && echo "$GOBIN"
             [ -n "${GOPATH:-}" ] && echo "${GOPATH%%:*}/bin"
             echo "$HOME/go/bin"
@@ -309,6 +310,11 @@ package_for() {
         python:pacman | python:brew) echo pyright ;;
         python:zypper) echo python3-python-lsp-server ;;
         python:apk) echo py3-lsp-server ;;
+        shellcheck:apt-get | shellcheck:pacman | shellcheck:apk | shellcheck:brew) echo shellcheck ;;
+        shellcheck:dnf | shellcheck:yum | shellcheck:zypper) echo ShellCheck ;;
+        shfmt:apt-get | shfmt:dnf | shfmt:yum | shfmt:pacman | shfmt:zypper | shfmt:apk | shfmt:brew) echo shfmt ;;
+        bash-language-server:pacman | bash-language-server:brew) echo bash-language-server ;;
+        bash-language-server:dnf) echo nodejs-bash-language-server ;;
     esac
 }
 
@@ -342,7 +348,7 @@ python_server() {
 
 install_language_servers() {
     pm="$(package_manager)"
-    step "Language servers for Rust, C/C++, Go, Python and Docker ($(system_name)${pm:+, $(pm_name)})"
+    step "Language servers for Rust, C/C++, Go, Python, shell and Docker ($(system_name)${pm:+, $(pm_name)})"
     if [ -z "$pm" ]; then
         if [ "$os" = Darwin ]; then
             note "Homebrew (https://brew.sh) is missing: only rust-analyzer and servers already here"
@@ -408,6 +414,40 @@ install_language_servers() {
         ok "$python (Python)"
     else
         note "no Python language server; later: npm install -g pyright, or pipx install python-lsp-server"
+    fi
+
+    # Shell scripts: the Bash language server, with ShellCheck for its warnings and
+    # shfmt for :format (it quietly does without them). The tools come from the
+    # system's packages, shfmt else from go install; the server from Homebrew, Arch or
+    # Fedora, else npm.
+    if found shellcheck; then
+        ok "shellcheck (shell script warnings)"
+    elif from_packages "$(package_for shellcheck)" && found shellcheck; then
+        ok "shellcheck (shell script warnings)"
+    else
+        note "shellcheck skipped${pm:+ ($(why))}; shell scripts go without its warnings"
+    fi
+    if found shfmt; then
+        ok "shfmt (shell script formatting)"
+    elif from_packages "$(package_for shfmt)" && found shfmt; then
+        ok "shfmt (shell script formatting)"
+    elif have go && note "installing shfmt with go install" &&
+        go install mvdan.cc/sh/v3/cmd/shfmt@latest >"$scratch/packages.log" 2>&1 &&
+        found shfmt; then
+        ok "shfmt (shell script formatting)"
+    else
+        note "shfmt skipped${pm:+ ($(why))}; later: go install mvdan.cc/sh/v3/cmd/shfmt@latest"
+    fi
+    if found bash-language-server; then
+        ok "bash-language-server (shell scripts)"
+    elif from_packages "$(package_for bash-language-server)" && found bash-language-server; then
+        ok "bash-language-server (shell scripts)"
+    elif have npm && note "installing bash-language-server with npm" &&
+        npm install -g bash-language-server >"$scratch/packages.log" 2>&1 &&
+        found bash-language-server; then
+        ok "bash-language-server (shell scripts)"
+    else
+        note "bash-language-server skipped; later: npm install -g bash-language-server (Node.js 20 or later)"
     fi
 
     # Docker: Docker's own server, for Dockerfiles and Compose files. No package has

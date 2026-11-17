@@ -1622,10 +1622,7 @@ impl App {
                 Err(error) => format!(" · not formatted, {error}"),
             });
         }
-        let key = self.buffers[id]
-            .path
-            .as_deref()
-            .and_then(lsp::language_key)?;
+        let key = lsp::language_key(&self.buffers[id])?;
         if !self.config.lsp_enabled || !self.config.format_on_save.iter().any(|l| l == key) {
             return None;
         }
@@ -4110,11 +4107,11 @@ impl App {
         if word.is_empty() && !any_length {
             return false;
         }
-        let lang = language::Lang::detect(self.buffers[id].path.as_deref());
+        let lang = language::Lang::of(&self.buffers[id]);
         let texts: Vec<String> = self
             .buffers
             .iter()
-            .filter(|b| language::Lang::detect(b.path.as_deref()) == lang)
+            .filter(|b| language::Lang::of(b) == lang)
             .map(|b| b.text.slice(..b.text.len_chars().min(400_000)).to_string())
             .collect();
         let items: Vec<lsp::Completion> = language::suggestions(lang, &texts, &word)

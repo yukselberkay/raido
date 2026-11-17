@@ -449,10 +449,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                             .path
                             .as_deref()
                             .is_some_and(crate::language::is_compose);
-                        let language = if compose {
-                            "Docker Compose".to_string()
-                        } else {
-                            app.syntax.language(buffer)
+                        let shell = crate::language::shell(
+                            buffer.path.as_deref(),
+                            &crate::language::first_line(buffer),
+                        );
+                        let language = match shell {
+                            _ if compose => "Docker Compose".to_string(),
+                            Some(shell) => format!("Shell ({})", shell.name()),
+                            None => app.syntax.language(buffer),
                         };
                         let errors = diagnostics.iter().filter(|d| d.severity == 1).count();
                         let warnings = diagnostics.iter().filter(|d| d.severity == 2).count();
@@ -3275,7 +3279,7 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         ("Ctrl-a", "Select the whole file"),
         (
             "LANGUAGE SERVERS",
-            "Rust, Go, Python, C/C++, Docker — :lsp shows status",
+            "Rust, Go, Python, C/C++, shell, Docker — :lsp shows status",
         ),
         (
             "K / gd / Ctrl-o",

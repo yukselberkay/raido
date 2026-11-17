@@ -10,6 +10,18 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **Shell script support.** Scripts are known by extension, by name (`.bashrc`,
+  `.zshrc`, `.envrc`, `PKGBUILD`) and, without an extension, by their `#!` line, for
+  highlighting, typing and the status line (`Shell (bash)`). `fi`, `done`, `esac`,
+  `else` and `elif` line up with the block they close, case patterns indent and `;;`
+  goes back, and commands that go on over lines indent them. With
+  `bash-language-server`: ShellCheck's warnings, completion, hover, go to
+  definition, and `:format` with shfmt in the file's own indentation (also on save
+  with `format_on_save = ["shell"]`). The install scripts set up all three.
+- `:format` asks every server for the file's own indentation, tabs included.
+- Scripts without an extension are highlighted by their `#!` line
+  (`#!/usr/bin/env python3` too).
+
 - **Docker support.** Dockerfiles and Containerfiles (`Dockerfile.dev`,
   `api.dockerfile` too) are highlighted by Raido's own grammar: instructions, images
   and build stages, flags, variables, strings, comments, and `RUN` / `CMD` read as
