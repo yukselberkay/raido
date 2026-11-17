@@ -20,7 +20,9 @@ pub struct Clipboard {
 }
 
 impl Clipboard {
+    /// Copied text leaves with `\n` line breaks only, whatever the file uses.
     pub fn copy(&mut self, text: String, linewise: bool) {
+        let text = crate::editor::line_breaks(&text, false);
         if !cfg!(test) {
             system_copy(&text);
         }
@@ -53,7 +55,7 @@ impl Clipboard {
     pub fn paste(&self) -> (String, bool) {
         if !cfg!(test) {
             if let Some(text) = system_paste() {
-                let text = text.replace("\r\n", "\n");
+                let text = crate::editor::line_breaks(&text, false);
                 if !text.is_empty() && text != self.text {
                     return (text, false);
                 }

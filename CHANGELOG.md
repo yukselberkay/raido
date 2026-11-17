@@ -64,6 +64,13 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Fixed
 
+- **Copy and paste carry `\n` line breaks only.** A terminal sends a paste's line
+  breaks as `\r`, and the editor kept them, so pasted lines ended with CR (and
+  Windows text with CRLF). Pastes (⌘V, Ctrl-v, `p`) now take the file's own line
+  breaks (`\n`, or `\r\n` in a file kept with CRLF), copies leave Raido with `\n`,
+  and a file whose lines a paste ended with CR opens with `\n` under
+  `line_endings = "lf"`.
+
 - **A click no longer copies over your clipboard:** a click whose pointer slipped
   a cell selected and copied a character or two, replacing a screenshot you were
   about to paste into an AI pane. Selecting now takes two cells of movement, or one

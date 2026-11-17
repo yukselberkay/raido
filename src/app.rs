@@ -6877,6 +6877,35 @@ mod tests {
             .starts_with(&format!("{copied}\n")));
     }
     #[test]
+    fn pastes_and_copies_carry_only_the_files_line_breaks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, "x\n").unwrap();
+        let mut app = App::new(dir.path().into(), Some(path), false).unwrap();
+        let id = app.buffer_id().unwrap();
+        let text = |app: &App| app.buffers[id].text.to_string();
+        press(&mut app, KeyCode::Char('i'), KeyModifiers::NONE);
+        // A terminal sends a paste's line breaks as \r; Windows text has \r\n.
+        app.event(Event::Paste("one\rtwo\r\nthree\r".into()));
+        assert_eq!(text(&app), "one\ntwo\nthree\nx\n");
+        // Over a selection too.
+        app.buffers[id].set_index(0);
+        for _ in 0..3 {
+            press(&mut app, KeyCode::Right, KeyModifiers::SHIFT);
+        }
+        app.event(Event::Paste("1\r2".into()));
+        assert_eq!(text(&app), "1\n2\ntwo\nthree\nx\n");
+        // Copies leave Raido with \n only; Ctrl-v brings them back the same.
+        app.clipboard.copy("a\r\nb\rc".into(), false);
+        assert_eq!(app.clipboard.paste().0, "a\nb\nc");
+        // A file you keep with \r\n gets \r\n, from either paste.
+        app.buffers[id].crlf = true;
+        app.buffers[id].set_index(0);
+        press(&mut app, KeyCode::Char('v'), KeyModifiers::CONTROL);
+        app.event(Event::Paste("d\re\n".into()));
+        assert_eq!(text(&app), "a\r\nb\r\ncd\r\ne\r\n1\n2\ntwo\nthree\nx\n");
+    }
+    #[test]
     fn copy_cut_paste_with_selection_lines_and_shift_arrows() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("t.txt");

@@ -149,8 +149,7 @@ impl Buffer {
         };
         buffer.crlf = crlf;
         let text = buffer.text.to_string();
-        let lf = text.replace("\r\n", "\n");
-        let wanted = if crlf { lf.replace('\n', "\r\n") } else { lf };
+        let wanted = line_breaks(&text, crlf);
         if wanted != text {
             buffer.text = Rope::from_str(&wanted);
             buffer.saved = buffer.text.clone();
@@ -377,12 +376,7 @@ impl Buffer {
     /// `\r` many terminals paste for each one (tmux, xterm) all become `\r\n` or
     /// `\n`, whichever the file uses. Tabs and spaces are left exactly as they are.
     pub fn own_line_breaks(&self, text: &str) -> String {
-        let lf = text.replace("\r\n", "\n").replace('\r', "\n");
-        if self.crlf {
-            lf.replace('\n', "\r\n")
-        } else {
-            lf
-        }
+        line_breaks(text, self.crlf)
     }
     /// Insert whole lines below (or above) the cursor line and move onto them.
     pub fn paste_lines(&mut self, value: &str, above: bool) {
@@ -820,6 +814,18 @@ pub enum LineEndings {
     Auto,
 }
 
+/// `text` with every line break as `\n`, or `\r\n` when `crlf`: for what's pasted
+/// or copied, whatever it came with. A terminal sends a paste's line breaks as `\r`,
+/// Windows apps copy `\r\n`, and old Mac files end lines with `\r`.
+pub fn line_breaks(text: &str, crlf: bool) -> String {
+    let lf = text.replace("\r\n", "\n").replace('\r', "\n");
+    if crlf {
+        lf.replace('\n', "\r\n")
+    } else {
+        lf
+    }
+}
+
 /// Whether most of `text`'s lines end with `\r\n`: one stray line doesn't make
 /// a file Windows-style.
 fn mostly_crlf(text: &str) -> bool {
@@ -896,6 +902,11 @@ mod tests {
             "fn main() {\n    one();\n    \n}\n"
         );
         assert!(!b.eol_changed);
+        // Lines a terminal paste ended with \r (older Raido) get \n too.
+        fs::write(&windows, "one\rtwo\r\nthree\n").unwrap();
+        let b = Buffer::open_with(&windows, LineEndings::Lf).unwrap();
+        assert_eq!(b.text.to_string(), "one\ntwo\nthree\n");
+        assert!(b.eol_changed && !b.dirty);
         // "auto" keeps a file's own; "crlf" makes them \r\n.
         fs::write(&windows, "a\r\nb\r\n").unwrap();
         let b = Buffer::open_with(&windows, LineEndings::Auto).unwrap();
