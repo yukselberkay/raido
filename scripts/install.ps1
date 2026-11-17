@@ -3,7 +3,8 @@
 Build and install Raido on Windows with everything it needs: Git, the Visual Studio
 C++ build tools (Rust's linker), Rust (via rustup), the language servers for the
 languages Raido's editor understands (rust-analyzer, clangd from LLVM, gopls when Go
-is installed, a Python server), JetBrains Mono Nerd Font, Raido itself
+is installed, a Python server, Docker's when Docker and Go are), JetBrains Mono Nerd
+Font, Raido itself
 (%USERPROFILE%\.cargo\bin\raido.exe, put on your PATH), and the Raido skill that
 teaches AI agents how to use Raido.
 
@@ -20,7 +21,7 @@ winget (App Installer, built into Windows 10 and 11).
 .PARAMETER NoFont
 Skip JetBrains Mono Nerd Font.
 .PARAMETER NoLsp
-Skip the language servers (rust-analyzer, clangd, gopls, Python).
+Skip the language servers (rust-analyzer, clangd, gopls, Python, Docker).
 .PARAMETER NoSkill
 Skip the Raido skill for AI agents.
 #>
@@ -137,7 +138,7 @@ function Install-Rust {
 }
 
 # --- Language servers: diagnostics, completion and hover in Raido's editor ---
-# One for each language Raido knows: Rust, C and C++, Go, Python. Each is optional:
+# One for each language Raido knows: Rust, C and C++, Go, Python, Docker. Each is optional:
 # one that can't be installed is noted and skipped, and Raido works without it.
 
 # Run a program quietly; true when it succeeds. Windows PowerShell 5.1 would stop on
@@ -148,11 +149,12 @@ function Invoke-Quietly([scriptblock]$Command) {
 }
 
 # Whether Raido can start a server: on PATH, or where Raido also looks (off_path in
-# src/lsp.rs): go install's folder for gopls, the LLVM installer's for clangd.
+# src/lsp.rs): go install's folder for gopls and docker-language-server, the LLVM
+# installer's for clangd.
 function Test-Server([string]$Name) {
     if (Have $Name) { return $true }
     $dirs = @()
-    if ($Name -eq 'gopls') {
+    if ($Name -eq 'gopls' -or $Name -eq 'docker-language-server') {
         if ($env:GOBIN) { $dirs += $env:GOBIN }
         if ($env:GOPATH) { $dirs += (Join-Path ($env:GOPATH -split ';')[0] 'bin') }
         $dirs += (Join-Path $env:USERPROFILE 'go\bin')
@@ -171,7 +173,7 @@ function Get-PythonServer {
 }
 
 function Install-LanguageServers {
-    Step 'Language servers for Rust, C/C++, Go and Python (Windows, winget)'
+    Step 'Language servers for Rust, C/C++, Go, Python and Docker (Windows, winget)'
 
     # Rust: rustup's own. Its rust-analyzer command is there before the component
     # is, failing until it's added.
@@ -227,6 +229,24 @@ function Install-LanguageServers {
         Ok "$python (Python)"
     } else {
         Note 'no Python language server; later: install Node.js (winget install OpenJS.NodeJS.LTS), then npm install -g pyright'
+    }
+
+    # Docker: Docker's own server, for Dockerfiles and Compose files. No winget package
+    # has it, so go install builds it (fetching a newer Go when it needs one): only
+    # where Go is installed, and only where Docker (or Podman) is, as it's a long build.
+    if (Test-Server 'docker-language-server') {
+        Ok 'docker-language-server (Dockerfile, Docker Compose)'
+    } elseif (-not ((Have 'docker') -or (Have 'podman'))) {
+        Note "docker-language-server skipped: Docker isn't installed (Raido highlights Dockerfiles without it)"
+    } elseif (-not (Have 'go')) {
+        Note "docker-language-server skipped: it's built with Go (winget install GoLang.Go, then run this script again)"
+    } else {
+        Note 'installing docker-language-server with go install (a few minutes)'
+        if ((Invoke-Quietly { go install github.com/docker/docker-language-server/cmd/docker-language-server@latest }) -and (Test-Server 'docker-language-server')) {
+            Ok 'docker-language-server (Dockerfile, Docker Compose)'
+        } else {
+            Note 'docker-language-server could not be installed; later: go install github.com/docker/docker-language-server/cmd/docker-language-server@latest'
+        }
     }
 }
 

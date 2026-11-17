@@ -18,7 +18,8 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
   show as *Docker Compose* and complete Compose's keys. With Docker's
   `docker-language-server` installed, Compose files get completion, errors, hover,
   go to definition and formatting, and Dockerfiles BuildKit's warnings; Raido turns
-  the server's usage reports to Docker off.
+  the server's usage reports to Docker off. The install scripts build it with
+  `go install` where Docker (or Podman) and Go are installed.
 - Files without an extension are highlighted by their name (`Makefile`, `.bashrc`).
 
 - **`Ctrl-a` selects the whole file** in an editor, in any mode: then Backspace

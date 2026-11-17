@@ -2,7 +2,8 @@
 # Build and install Raido with everything it needs on this machine (macOS or Linux):
 # a C compiler and linker, Git, curl, Rust (via rustup), the language servers for
 # the languages Raido's editor understands (rust-analyzer, clangd, gopls when Go is
-# installed, a Python server) from the system's package manager, JetBrains Mono Nerd
+# installed, a Python server; Docker's when Docker and Go are) from the system's
+# package manager, JetBrains Mono Nerd
 # Font, Raido itself (~/.cargo/bin/raido, made runnable by name from PATH), and the
 # Raido skill that teaches AI agents how to use Raido. On Omarchy, packages come
 # through `omarchy pkg add`, Raido follows the desktop's theme, and it gets an app
@@ -18,7 +19,7 @@ usage="Usage: install.sh [--no-font] [--no-lsp] [--no-skill] [--no-launcher]
 Installs a C compiler, Git, curl, Rust, language servers, JetBrains Mono Nerd Font,
 Raido and its AI agent skill on macOS or Linux.
   --no-font      skip JetBrains Mono Nerd Font
-  --no-lsp       skip the language servers (rust-analyzer, clangd, gopls, Python)
+  --no-lsp       skip the language servers (rust-analyzer, clangd, gopls, Python, Docker)
   --no-skill     skip the Raido skill for AI agents
   --no-launcher  Omarchy: skip Raido's app launcher entry (SUPER + SPACE)"
 
@@ -262,11 +263,11 @@ pm_install() {
 why() { tail -n 1 "$scratch/packages.log" 2>/dev/null; }
 
 # Folders Raido also finds a server in when it isn't on PATH (off_path in
-# src/lsp.rs): go install's for gopls; Homebrew's LLVM and Apple's Command Line
-# Tools for clangd on macOS.
+# src/lsp.rs): go install's for gopls and docker-language-server; Homebrew's LLVM
+# and Apple's Command Line Tools for clangd on macOS.
 off_path() {
     case "$1" in
-        gopls)
+        gopls | docker-language-server)
             [ -n "${GOBIN:-}" ] && echo "$GOBIN"
             [ -n "${GOPATH:-}" ] && echo "${GOPATH%%:*}/bin"
             echo "$HOME/go/bin"
@@ -341,7 +342,7 @@ python_server() {
 
 install_language_servers() {
     pm="$(package_manager)"
-    step "Language servers for Rust, C/C++, Go and Python ($(system_name)${pm:+, $(pm_name)})"
+    step "Language servers for Rust, C/C++, Go, Python and Docker ($(system_name)${pm:+, $(pm_name)})"
     if [ -z "$pm" ]; then
         if [ "$os" = Darwin ]; then
             note "Homebrew (https://brew.sh) is missing: only rust-analyzer and servers already here"
@@ -407,6 +408,24 @@ install_language_servers() {
         ok "$python (Python)"
     else
         note "no Python language server; later: npm install -g pyright, or pipx install python-lsp-server"
+    fi
+
+    # Docker: Docker's own server, for Dockerfiles and Compose files. No package has
+    # it, so go install builds it (fetching a newer Go when it needs one): only where
+    # Go is installed, and only where Docker (or Podman) is, as it's a long build.
+    local docker_server=github.com/docker/docker-language-server/cmd/docker-language-server@latest
+    if found docker-language-server; then
+        ok "docker-language-server (Dockerfile, Docker Compose)"
+    elif ! have docker && ! have podman; then
+        note "docker-language-server skipped: Docker isn't installed (Raido highlights Dockerfiles without it)"
+    elif ! have go; then
+        note "docker-language-server skipped: it's built with Go (install Go, then run this script again)"
+    elif note "installing docker-language-server with go install (a few minutes)" &&
+        go install "$docker_server" >"$scratch/packages.log" 2>&1 &&
+        found docker-language-server; then
+        ok "docker-language-server (Dockerfile, Docker Compose)"
+    else
+        note "docker-language-server skipped ($(why)); later: go install $docker_server"
     fi
 }
 

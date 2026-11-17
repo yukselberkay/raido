@@ -85,9 +85,12 @@ It installs, skipping whatever is already there:
    | C / C++ | clangd | `clangd` | `clang-tools-extra` | `clang` | `clang-tools` | `clang-extra-tools` | Command Line Tools, else `llvm` |
    | Go | gopls | `gopls` | `golang-x-tools-gopls` | `gopls` | `gopls` | `gopls` | `gopls` |
    | Python | pyright or pylsp | `python3-pylsp` | `python3-lsp-server` | `pyright` | `python3-python-lsp-server` | `py3-lsp-server` | `pyright` |
+   | Dockerfile, Docker Compose | docker-language-server | `go install` | `go install` | `go install` | `go install` | `go install` | `go install` |
 
    gopls only where Go is installed (it needs Go itself), falling back to
-   `go install`. Without a system package for Python it tries `uv tool install
+   `go install`. Docker's server is in no package, so `go install` builds it, which
+   takes a few minutes: only where Docker (or Podman) and Go are installed (Go fetches
+   the newer Go it needs, 1.25, unless your Go is set to stay local). Without a system package for Python it tries `uv tool install
    basedpyright`, `pipx install python-lsp-server`, then `npm install -g pyright`.
    A server already there is kept; one that can't be installed is noted and
    skipped, never failing the install (`--no-lsp` skips them all).
@@ -170,7 +173,8 @@ On **Windows**, `scripts\install.ps1` does the same in PowerShell, using winget 
 the programs: Git, the Visual Studio C++ build tools (Rust's linker; a large
 download), Rust through rustup, the language servers (rust-analyzer; clangd from
 LLVM's winget package; gopls through `go install` when Go is installed; pyright from
-npm, else basedpyright from uv or python-lsp-server from pipx), JetBrains Mono Nerd Font (for your
+npm, else basedpyright from uv or python-lsp-server from pipx; docker-language-server
+through `go install` when Docker and Go are installed), JetBrains Mono Nerd Font (for your
 user, no administrator rights), Raido, the AI-agent skill, and `%USERPROFILE%\.cargo\bin`
 on your user PATH, so `raido` runs in that window at once and in every new one:
 
@@ -1233,7 +1237,8 @@ text, however long, without anything from the screen.
 
 Raido starts the standard language server for a file the first time you open it, in
 the project root, and talks to it in the background. The [install
-scripts](#install-script) set up the first four for your system; by hand, install a server once:
+scripts](#install-script) set them up for your system (Docker's where Docker and Go
+are installed); by hand, install a server once:
 
 ![clangd hover docs for a C function, with an error marked in the gutter and underlined](docs/raido-lsp.png)
 
