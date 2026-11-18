@@ -422,10 +422,16 @@ the history graph appears after you make commits.
   hosts at a glance, ports colored by state, script output under its port, noise
   folded away.
 - **Source highlighting:** bundled Rust, C, C++, Python, Go grammars, plus the
-  other bundled Syntect languages (JSON and YAML among them) and Raido's own TOML
-  grammar (`pyproject.toml`, `Cargo.toml`, `config.toml`, and ```` ```toml ```` blocks
-  in Markdown) and Dockerfile grammar. Files without an extension are known by name
-  (`Makefile`, `.bashrc`). Absolute/relative line numbers.
+  other bundled Syntect languages (JSON and YAML among them) and Raido's own
+  grammars: TOML (`pyproject.toml`, `Cargo.toml`, `config.toml`), Dockerfiles,
+  PowerShell (`.ps1`, `.psm1`, `.psd1`), `.env` files (`.env.local` too), INI
+  (`.ini`, `.cfg`, `.editorconfig`, `.gitconfig`, systemd units), ignore files
+  (`.gitignore`, `.dockerignore`, `.npmignore`…), SCSS, Terraform / HCL (`.tf`,
+  `.tfvars`, `.hcl`, `docker-bake.hcl`) and Protocol Buffers (`.proto`); Markdown
+  code blocks by any of their names (```` ```terraform ````, ```` ```pwsh ````). Files
+  without an extension are known by name (`Makefile`, `.bashrc`). They're loaded the
+  first time a file needs one, so Raido starts as fast. Absolute/relative line
+  numbers.
 - **Shell scripts:** `.sh`, `.bash`, `.zsh`, `.bashrc`, `.zshrc`, `PKGBUILD`, and
   scripts without an extension by their `#!` line, highlighted and indented
   (`fi`, `done` and `esac` line up with what they close); with the Bash language

@@ -1,0 +1,123 @@
+%YAML 1.2
+---
+# HCL and Terraform (.tf, .tfvars, .hcl: Terragrunt, Packer, Nomad, docker-bake),
+# written for Raido. Block types as keywords, attribute names as variables,
+# references (var., local., module., data.) and functions, strings with their
+# ${interpolation} and %{directives}, heredocs, numbers, true / false / null.
+name: HCL
+file_extensions:
+  - tf
+  - tfvars
+  - hcl
+  - nomad
+scope: source.hcl
+
+variables:
+  ident: '[A-Za-z_][A-Za-z0-9_-]*'
+
+contexts:
+  main:
+    - include: body
+
+  # A file, or a block's or object's body.
+  body:
+    - include: comments
+    # resource "aws_instance" "web" {   ·   locals {   ·   dynamic "tag" {
+    - match: '^\s*({{ident}})(?=(?:\s+(?:"[^"\n]*"|{{ident}}))*\s*\{)'
+      captures:
+        1: keyword.other.block.hcl
+    # name = value, and in objects name: value (at a line's start, or after { or ,)
+    - match: '(?:^|(?<=[{,]))\s*({{ident}}|"[^"\n]*")\s*(=|:)(?![=>])'
+      captures:
+        1: variable.other.key.hcl
+        2: keyword.operator.assignment.hcl
+    - include: expressions
+
+  comments:
+    - match: '(#|//).*$'
+      scope: comment.line.hcl
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.hcl
+      push:
+        - meta_scope: comment.block.hcl
+        - match: '\*/'
+          scope: punctuation.definition.comment.end.hcl
+          pop: true
+
+  expressions:
+    - include: comments
+    - match: '"'
+      scope: punctuation.definition.string.begin.hcl
+      push: string
+    - match: '(<<-?)\s*({{ident}})[ \t\r]*$'
+      captures:
+        1: keyword.operator.heredoc.hcl
+        2: entity.name.tag.heredoc.hcl
+      push: heredoc
+    - match: '\b(true|false|null)\b'
+      scope: constant.language.hcl
+    - match: '\b(for|in|if|else)\b'
+      scope: keyword.control.hcl
+    - match: '\b(var|local|module|data|path|terraform|each|count|self)\b(?=\.)'
+      scope: variable.language.hcl
+    - match: '({{ident}})(?=\()'
+      scope: support.function.hcl
+    - match: '\b[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\b'
+      scope: constant.numeric.hcl
+    - match: '==|!=|<=|>=|&&|\|\||=>|\.\.\.|[!<>+\-*/%?:]'
+      scope: keyword.operator.hcl
+    - match: '\{'
+      push: braces
+
+  braces:
+    - match: '\}'
+      pop: true
+    - include: body
+
+  string:
+    - meta_scope: string.quoted.double.hcl
+    - match: '"'
+      scope: punctuation.definition.string.end.hcl
+      pop: true
+    - include: template
+    - match: '$'
+      pop: true
+
+  heredoc:
+    - meta_content_scope: string.unquoted.heredoc.hcl
+    - match: '^[ \t]*(\2)[ \t\r]*$'
+      captures:
+        1: entity.name.tag.heredoc.hcl
+      pop: true
+    - include: template
+
+  # What a string or heredoc holds besides its text.
+  template:
+    - match: '\\.'
+      scope: constant.character.escape.hcl
+    - match: '\$\$\{|%%\{'
+      scope: constant.character.escape.hcl
+    - match: '\$\{~?'
+      scope: punctuation.section.interpolation.begin.hcl
+      push: interpolation
+    - match: '%\{~?'
+      scope: punctuation.section.directive.begin.hcl
+      push: directive
+
+  interpolation:
+    - clear_scopes: 1
+    - meta_scope: meta.interpolation.hcl
+    - match: '~?\}'
+      scope: punctuation.section.interpolation.end.hcl
+      pop: true
+    - include: expressions
+
+  directive:
+    - clear_scopes: 1
+    - meta_scope: meta.directive.hcl
+    - match: '~?\}'
+      scope: punctuation.section.directive.end.hcl
+      pop: true
+    - match: '\b(if|else|endif|for|in|endfor)\b'
+      scope: keyword.control.hcl
+    - include: expressions

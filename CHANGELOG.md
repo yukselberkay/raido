@@ -10,6 +10,14 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **Highlighting for PowerShell, `.env`, INI, ignore files, SCSS, Terraform / HCL
+  and Protocol Buffers**, by Raido's own grammars: `.ps1` scripts with their
+  cmdlets, parameters and `$(…)` in strings; `.env` and `.env.local`; `.ini`,
+  `.cfg`, `.editorconfig`, `.gitconfig` and systemd units; `.gitignore`,
+  `.dockerignore` and the other ignore files; SCSS with its variables, mixins and
+  nesting; `.tf`, `.tfvars` and `.hcl` with interpolation, directives and heredocs;
+  and `.proto` files. Markdown code blocks too, by any of their names.
+
 - **YAML and JSON checked against their schemas.** Red Hat's `yaml-language-server`
   and VS Code's JSON server underline what a file's published schema doesn't allow,
   and complete and explain its keys: GitHub Actions workflows, `package.json`,

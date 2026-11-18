@@ -14,10 +14,18 @@ use syntect::{
 };
 
 /// Grammars Raido adds to the bundled ones: TOML (`pyproject.toml`, `Cargo.toml`,
-/// Raido's own settings) and Dockerfiles.
-const EXTRA: [&str; 2] = [
+/// Raido's own settings), Dockerfiles, PowerShell, `.env` and INI files, ignore
+/// files, SCSS, Terraform / HCL and Protocol Buffers.
+const EXTRA: [&str; 9] = [
     include_str!("syntaxes/toml.sublime-syntax"),
     include_str!("syntaxes/dockerfile.sublime-syntax"),
+    include_str!("syntaxes/powershell.sublime-syntax"),
+    include_str!("syntaxes/dotenv.sublime-syntax"),
+    include_str!("syntaxes/ini.sublime-syntax"),
+    include_str!("syntaxes/ignore.sublime-syntax"),
+    include_str!("syntaxes/scss.sublime-syntax"),
+    include_str!("syntaxes/hcl.sublime-syntax"),
+    include_str!("syntaxes/protobuf.sublime-syntax"),
 ];
 
 pub struct Cached {
@@ -155,6 +163,14 @@ impl Syntax {
         if json_named {
             return self.by_extension("json");
         }
+        // .env.local, .env.production, .env.example
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|name| name.starts_with(".env."))
+        {
+            return self.by_extension("env");
+        }
         let keys = [
             path.file_name().and_then(|n| n.to_str()),
             path.extension().and_then(|e| e.to_str()),
@@ -189,12 +205,16 @@ impl Syntax {
     /// The grammar a Markdown code block labeled `token` (`rust`, `toml`) means,
     /// and the set to parse it with.
     pub fn by_token(&self, token: &str) -> Option<(&SyntaxReference, &SyntaxSet)> {
-        // The names GitHub knows shell blocks by too.
-        let shell = matches!(
-            token.to_ascii_lowercase().as_str(),
-            "shell" | "shellscript" | "ksh" | "dash" | "posix"
-        );
-        let token = if shell { "sh" } else { token };
+        // The other names GitHub knows these blocks by.
+        let token = match token.to_ascii_lowercase().as_str() {
+            "shell" | "shellscript" | "ksh" | "dash" | "posix" => "sh",
+            "pwsh" | "posh" => "ps1",
+            "terraform" => "tf",
+            "protobuf" => "proto",
+            "dotenv" => "env",
+            "ignore" => "gitignore",
+            _ => token,
+        };
         (self
             .syntaxes
             .find_syntax_by_token(token)
@@ -618,6 +638,45 @@ user app
                 "{file}"
             );
         }
+        // The new grammars by their files' names.
+        for (file, grammar) in [
+            ("deploy.ps1", "PowerShell"),
+            ("Module.psm1", "PowerShell"),
+            (".env", "dotenv"),
+            (".env.production", "dotenv"),
+            ("app.env", "dotenv"),
+            ("php.ini", "INI"),
+            ("setup.cfg", "INI"),
+            (".editorconfig", "INI"),
+            (".gitconfig", "INI"),
+            ("web.service", "INI"),
+            (".gitignore", "Ignore List"),
+            (".dockerignore", "Ignore List"),
+            ("Dockerfile.dockerignore", "Ignore List"),
+            ("site.scss", "SCSS"),
+            ("main.tf", "HCL"),
+            ("prod.tfvars", "HCL"),
+            ("docker-bake.hcl", "HCL"),
+            ("shop.proto", "Protocol Buffers"),
+        ] {
+            assert_eq!(name(file).as_deref(), Some(grammar), "{file}");
+        }
+        // .envrc is a shell script.
+        assert_eq!(name(".envrc").as_deref(), Some("Bourne Again Shell (bash)"));
+        for (token, grammar) in [
+            ("powershell", "PowerShell"),
+            ("pwsh", "PowerShell"),
+            ("terraform", "HCL"),
+            ("hcl", "HCL"),
+            ("protobuf", "Protocol Buffers"),
+            ("ini", "INI"),
+            ("dotenv", "dotenv"),
+            ("gitignore", "Ignore List"),
+            ("scss", "SCSS"),
+        ] {
+            let found = syntax.by_token(token).map(|(g, _)| g.name.clone());
+            assert_eq!(found.as_deref(), Some(grammar), "{token}");
+        }
         // Markdown code blocks labeled for Docker, or as `shell`.
         assert!(syntax.by_token("shell").is_some());
         assert!(syntax.by_token("dockerfile").is_some());
@@ -651,6 +710,280 @@ user app
         // Other languages' #! lines too.
         std::fs::write(&path, "#!/usr/bin/env python3\nprint(1)\n").unwrap();
         assert_eq!(syntax.language(&Buffer::open(&path).unwrap()), "Python");
+    }
+
+    /// Every (after, token, scope) holds in `text` read as file `name`.
+    fn scopes(name: &str, text: &str, expected: &[(&str, &str, &str)]) {
+        for (after, token, scope) in expected {
+            let found = scope_in(name, text, after, token);
+            assert!(
+                found.contains(scope),
+                "{name}: {token} after {after}: {found}"
+            );
+        }
+    }
+
+    #[test]
+    fn powershell_is_highlighted() {
+        let text = r#"<# Deploys the site #>
+[CmdletBinding()]
+param([string]$Name = "web", [int]$Count = 2)
+function Get-Site([string]$Path) {
+    # one site
+    $items = Get-ChildItem -Path $Path -Recurse
+    if ($items.Count -gt 10MB) { return $null }
+    foreach ($item in $items) {
+        Write-Host "Found $($item.Name) in $env:TEMP"
+    }
+    $text = @"
+Hello $Name
+"@
+    [Math]::Round(2.5)
+}
+"#;
+        scopes(
+            "deploy.ps1",
+            text,
+            &[
+                ("<#", "Deploys", "comment.block"),
+                ("[", "CmdletBinding", "entity.name.type.attribute"),
+                ("param", "param", "keyword.other"),
+                ("param(", "[string]", "storage.type"),
+                ("[string]", "$Name", "variable.other"),
+                ("= ", "\"web\"", "string.quoted.double"),
+                ("function", "function", "keyword.other.function"),
+                ("function ", "Get-Site", "entity.name.function"),
+                ("# one", "site", "comment.line"),
+                ("= ", "Get-ChildItem", "support.function.cmdlet"),
+                ("Get-ChildItem ", "-Path", "variable.parameter"),
+                ("if ", "if", "keyword.control"),
+                ("Count ", "-gt", "keyword.operator.word"),
+                ("-gt ", "10MB", "constant.numeric"),
+                ("return ", "$null", "constant.language"),
+                ("foreach", "foreach", "keyword.control"),
+                ("Write-Host", "Write-Host", "support.function.cmdlet"),
+                ("Found ", "$(", "punctuation.section.embedded"),
+                ("$($item.", "Name", "meta.embedded"),
+                ("in ", "$env:TEMP", "variable.other"),
+                ("Hello", "Hello", "string.quoted.double.heredoc"),
+                ("Hello ", "$Name", "variable.other"),
+                ("[Math]", "::", "keyword.operator"),
+            ],
+        );
+    }
+
+    #[test]
+    fn env_and_ini_files_are_highlighted() {
+        let env = "# Database\nexport DB_HOST=localhost\nDB_PORT=5432 # default\nURL=\"postgres://${DB_HOST}\"\nKEY='a b'\n";
+        scopes(
+            ".env",
+            env,
+            &[
+                ("# Database", "Database", "comment.line"),
+                ("export", "export", "keyword.other"),
+                ("export ", "DB_HOST", "variable.other.key"),
+                ("DB_HOST=", "localhost", "string.unquoted"),
+                ("5432 ", "default", "comment.line"),
+                ("URL=", "postgres", "string.quoted.double"),
+                ("postgres://", "${DB_HOST}", "variable.other.reference"),
+                ("KEY=", "a b", "string.quoted.single"),
+            ],
+        );
+        assert!(scope_in(".env.local", env, "export ", "DB_HOST").contains("variable.other.key"));
+        let ini = "; settings\n[core]\neditor = vim\ntabs: 4\nenabled = true\n# note\n";
+        scopes(
+            "setup.cfg",
+            ini,
+            &[
+                ("; settings", "settings", "comment.line"),
+                ("[", "core", "entity.name.type.section"),
+                ("editor", "editor", "variable.other.key"),
+                ("editor ", "=", "keyword.operator.assignment"),
+                ("= ", "vim", "string.unquoted"),
+                ("tabs: ", "4", "constant.numeric"),
+                ("enabled = ", "true", "constant.language"),
+                ("# note", "note", "comment.line"),
+            ],
+        );
+        assert!(scope_in(".editorconfig", ini, "[", "core").contains("entity.name.type.section"));
+    }
+
+    #[test]
+    fn ignore_files_are_highlighted() {
+        let text =
+            "# Build output\n/target/\n**/*.log\n!keep.log\nfile[0-9].txt\n\\#not-a-comment\n";
+        for name in [
+            ".gitignore",
+            ".dockerignore",
+            ".npmignore",
+            "Dockerfile.dockerignore",
+        ] {
+            scopes(
+                name,
+                text,
+                &[
+                    ("# Build", "output", "comment.line"),
+                    ("/target/\n", "**", "keyword.operator.wildcard"),
+                    ("**/", "*", "keyword.operator.wildcard"),
+                    ("log\n", "!", "keyword.operator.negation"),
+                    ("file", "[0-9]", "constant.other.character-class"),
+                    ("txt\n", "\\#", "constant.character.escape"),
+                ],
+            );
+        }
+    }
+
+    #[test]
+    fn scss_is_highlighted() {
+        let text = r#"@use "sass:math";
+// Colors
+$primary: #3366ff !default;
+@mixin card($radius: 4px) {
+  border-radius: $radius;
+}
+.nav {
+  &:hover { color: darken($primary, 10%); }
+  #logo > a.active, %plain {
+    @include card(2px);
+    margin: math.div(10px, 2) auto;
+    font: { family: "Inter", sans-serif; }
+  }
+  @if $primary == red { display: none; } @else { display: block; }
+  .item-#{$name} { width: calc(100% - 2rem); }
+}
+"#;
+        scopes(
+            "site.scss",
+            text,
+            &[
+                ("@use", "@use", "keyword.other.at-rule"),
+                ("@use ", "sass:math", "string.quoted.double"),
+                ("// Colors", "Colors", "comment.line"),
+                ("$primary", "$primary", "variable.other"),
+                ("$primary: ", "#3366ff", "constant.other.color"),
+                ("#3366ff ", "!default", "keyword.other.important"),
+                ("@mixin ", "card", "entity.name.function"),
+                (
+                    "border-radius",
+                    "border-radius",
+                    "support.type.property-name",
+                ),
+                ("border-radius: ", "$radius", "variable.other"),
+                (".nav", ".nav", "entity.name.type.class"),
+                ("&", "&", "keyword.operator.parent"),
+                ("&", ":hover", "entity.name.function.pseudo"),
+                ("color: ", "darken", "support.function"),
+                ("$primary, ", "10%", "constant.numeric"),
+                ("  #logo", "#logo", "constant.other.id"),
+                ("a", ".active", "entity.name.type.class"),
+                (", ", "%plain", "entity.name.type.placeholder"),
+                ("@include ", "card", "entity.name.function"),
+                ("margin: math.div(", "10px", "constant.numeric"),
+                ("font: { ", "family", "support.type.property-name"),
+                ("@if", "@if", "keyword.control"),
+                ("} ", "@else", "keyword.control"),
+                (".item-", "#{", "punctuation.section.interpolation"),
+                ("#{", "$name", "variable.other"),
+                ("width: ", "calc", "support.function"),
+            ],
+        );
+    }
+
+    #[test]
+    fn terraform_and_hcl_are_highlighted() {
+        let text = r#"# Web server
+resource "aws_instance" "web" {
+  ami           = var.ami_id
+  count         = 2
+  tags = {
+    Name = "web-${var.env}"
+    Plan = "%{ if var.big }large%{ else }small%{ endif }"
+  }
+  lifecycle {
+    create_before_destroy = true
+  }
+  user_data = <<-EOT
+    echo ${local.greeting}
+  EOT
+}
+locals {
+  names = [for s in var.list : upper(s) if s != ""]
+}
+"#;
+        scopes(
+            "main.tf",
+            text,
+            &[
+                ("# Web", "server", "comment.line"),
+                ("resource", "resource", "keyword.other.block"),
+                ("resource ", "\"aws_instance\"", "string.quoted.double"),
+                ("ami", "ami", "variable.other.key"),
+                ("= ", "var", "variable.language"),
+                ("count", "2", "constant.numeric"),
+                ("tags", "tags", "variable.other.key"),
+                ("Name", "Name", "variable.other.key"),
+                ("\"web-", "${", "punctuation.section.interpolation"),
+                ("${", "var", "variable.language"),
+                ("%{ ", "if", "keyword.control"),
+                ("lifecycle", "lifecycle", "keyword.other.block"),
+                ("create_before_destroy = ", "true", "constant.language"),
+                ("<<-", "EOT", "entity.name.tag.heredoc"),
+                ("echo", "echo", "string.unquoted.heredoc"),
+                ("echo ${", "local", "variable.language"),
+                ("  EOT\n}\n", "locals", "keyword.other.block"),
+                ("[", "for", "keyword.control"),
+                (": ", "upper", "support.function"),
+                ("s ", "!=", "keyword.operator"),
+            ],
+        );
+        // docker-bake.hcl and .tfvars too.
+        assert!(scope_in("docker-bake.hcl", text, "resource", "resource")
+            .contains("keyword.other.block"));
+        assert!(scope_in("prod.tfvars", text, "ami", "ami").contains("variable.other.key"));
+    }
+
+    #[test]
+    fn protocol_buffers_are_highlighted() {
+        let text = r#"syntax = "proto3";
+package shop.v1;
+import "google/protobuf/timestamp.proto";
+// An order.
+message Order {
+  string id = 1;
+  repeated Item items = 2;
+  google.protobuf.Timestamp created = 3;
+  map<string, int32> counts = 4;
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+  }
+}
+service Orders {
+  rpc Get(GetRequest) returns (stream Order);
+}
+"#;
+        scopes(
+            "shop.proto",
+            text,
+            &[
+                ("syntax", "syntax", "keyword.other"),
+                ("= ", "\"proto3\"", "string.quoted.double"),
+                ("package", "package", "keyword.other"),
+                ("// An", "order", "comment.line"),
+                ("message", "message", "keyword.other.declaration"),
+                ("message ", "Order", "entity.name.type"),
+                ("  ", "string", "storage.type"),
+                ("id = ", "1", "constant.numeric"),
+                ("repeated", "repeated", "storage.modifier"),
+                ("repeated ", "Item", "support.type"),
+                ("2;\n  ", "google.protobuf.Timestamp", "support.type"),
+                ("map<string, ", "int32", "storage.type"),
+                ("enum ", "Status", "entity.name.type"),
+                ("    ", "STATUS_UNSPECIFIED", "constant.other.enum"),
+                ("rpc ", "Get", "entity.name.function"),
+                (") ", "returns", "keyword.other"),
+                ("(", "stream", "keyword.other"),
+            ],
+        );
     }
 
     #[test]

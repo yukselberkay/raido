@@ -43,6 +43,8 @@ pub fn file(path: &Path) -> Icon {
             Some(("\u{e702}", rgb(0xf14c28)))
         }
         ".env" | ".envrc" => Some(("\u{f462}", rgb(0xfaf743))),
+        // .env.local, .env.production
+        name if name.starts_with(".env.") => Some(("\u{f462}", rgb(0xfaf743))),
         "readme" | "readme.md" => Some(("\u{f48a}", rgb(0x42a5f5))),
         _ => None,
     };
@@ -95,7 +97,8 @@ pub fn file(path: &Path) -> Icon {
         "sql" => ("\u{e706}", rgb(0xdad8d8)),
         "vue" => ("\u{e6a0}", rgb(0x8dc149)),
         "svelte" => ("\u{e697}", rgb(0xff3e00)),
-        "tf" | "tfvars" => ("\u{e69a}", rgb(0x5f43e9)),
+        "tf" | "tfvars" | "hcl" => ("\u{e69a}", rgb(0x5f43e9)),
+        "ps1" | "psm1" | "psd1" => ("\u{f0a0a}", rgb(0x4273ca)),
         "lock" => ("\u{f023}", rgb(0xbbbbbb)),
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "avif" => {
             ("\u{e60d}", rgb(0xa074c4))

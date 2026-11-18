@@ -1,0 +1,157 @@
+%YAML 1.2
+---
+# SCSS (Sass with braces), written for Raido. Selectors: classes and placeholders
+# as types, ids as constants, pseudo-classes as functions; properties as types too,
+# their values as numbers, colors, strings and functions; $variables, @rules (the
+# control ones, @if @each…, as control), #{interpolation}, // and /* */ comments.
+name: SCSS
+file_extensions:
+  - scss
+scope: source.scss
+
+variables:
+  ident: '-?[A-Za-z_][A-Za-z0-9_-]*'
+
+contexts:
+  main:
+    - include: body
+
+  # A stylesheet, or the inside of a rule: selectors, declarations, at-rules.
+  body:
+    - include: comments
+    - include: at-rules
+    # $name: value
+    - match: '(\$[A-Za-z0-9_-]+)\s*(:)'
+      captures:
+        1: variable.other.scss
+        2: punctuation.separator.key-value.scss
+      push: value
+    # property: value — a colon with no { before the ; or }, else it's a selector
+    # (`a:hover {`).
+    - match: '(?<![\w-])((?:{{ident}}|#\{[^}\n]*\})+)\s*(:)(?=[^;{}]*(?:;|\}|$))'
+      captures:
+        1: support.type.property-name.scss
+        2: punctuation.separator.key-value.scss
+      push: value
+    - match: '\{'
+      scope: punctuation.section.block.begin.scss
+      push: block
+    - include: selectors
+
+  block:
+    - match: '\}'
+      scope: punctuation.section.block.end.scss
+      pop: true
+    - include: body
+
+  comments:
+    - match: '//.*$'
+      scope: comment.line.double-slash.scss
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.scss
+      push:
+        - meta_scope: comment.block.scss
+        - match: '\*/'
+          scope: punctuation.definition.comment.end.scss
+          pop: true
+
+  at-rules:
+    - match: '(@(?:mixin|function|include))\s+({{ident}})'
+      captures:
+        1: keyword.other.at-rule.scss
+        2: entity.name.function.scss
+    - match: '@(?:if|else if|else|each|for|while|return)\b'
+      scope: keyword.control.at-rule.scss
+    - match: '@[A-Za-z-]+'
+      scope: keyword.other.at-rule.scss
+
+  selectors:
+    - include: interpolation
+    - match: '&'
+      scope: keyword.operator.parent.scss
+    - match: '%{{ident}}'
+      scope: entity.name.type.placeholder.scss
+    - match: '\.{{ident}}'
+      scope: entity.name.type.class.scss
+    - match: '#{{ident}}'
+      scope: constant.other.id.scss
+    - match: '::?{{ident}}'
+      scope: entity.name.function.pseudo.scss
+    - match: '\$[A-Za-z0-9_-]+'
+      scope: variable.other.scss
+    - include: strings
+    - include: numbers
+    - match: '[>+~,]'
+      scope: keyword.operator.combinator.scss
+
+  value:
+    - match: ';'
+      scope: punctuation.terminator.scss
+      pop: true
+    - match: '(?=\})'
+      pop: true
+    # Nested properties: font: { family: …; size: … }
+    - match: '(?=\{)'
+      pop: true
+    - include: comments
+    - include: interpolation
+    - include: strings
+    - match: '\$[A-Za-z0-9_-]+'
+      scope: variable.other.scss
+    - match: '#[0-9A-Fa-f]{3,8}\b'
+      scope: constant.other.color.scss
+    - match: '!(?:important|default|global|optional)\b'
+      scope: keyword.other.important.scss
+    - match: '({{ident}})(?=\()'
+      scope: support.function.scss
+    - include: numbers
+    - match: '\b(true|false|null)\b'
+      scope: constant.language.scss
+    - match: '{{ident}}'
+    - match: '==|!=|<=|>=|[+*/%<>]|(?<=\s)-(?=\s)'
+      scope: keyword.operator.scss
+
+  numbers:
+    - match: '(?<![\w-])-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:%|[A-Za-z]+)?'
+      scope: constant.numeric.scss
+
+  interpolation:
+    - match: '#\{'
+      scope: punctuation.section.interpolation.begin.scss
+      push:
+        - meta_scope: meta.interpolation.scss
+        - match: '\}'
+          scope: punctuation.section.interpolation.end.scss
+          pop: true
+        - include: strings
+        - match: '\$[A-Za-z0-9_-]+'
+          scope: variable.other.scss
+        - match: '({{ident}})(?=\()'
+          scope: support.function.scss
+        - include: numbers
+
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.scss
+      push:
+        - meta_scope: string.quoted.double.scss
+        - match: '"'
+          scope: punctuation.definition.string.end.scss
+          pop: true
+        - match: '\\.'
+          scope: constant.character.escape.scss
+        - include: interpolation
+        - match: '$'
+          pop: true
+    - match: "'"
+      scope: punctuation.definition.string.begin.scss
+      push:
+        - meta_scope: string.quoted.single.scss
+        - match: "'"
+          scope: punctuation.definition.string.end.scss
+          pop: true
+        - match: '\\.'
+          scope: constant.character.escape.scss
+        - include: interpolation
+        - match: '$'
+          pop: true

@@ -1,0 +1,78 @@
+%YAML 1.2
+---
+# INI files and the settings files written like them (.editorconfig, .gitconfig,
+# setup.cfg, systemd units, desktop entries), written for Raido. Sections as types,
+# keys as variables, values as strings unless they're numbers or yes/no words.
+name: INI
+file_extensions:
+  - ini
+  - cfg
+  - cnf
+  - desktop
+  - service
+  - socket
+  - timer
+  - .editorconfig
+  - .gitconfig
+  - .gitmodules
+  - .npmrc
+  - .pypirc
+  - .flake8
+  - .pylintrc
+  - pylintrc
+  - .coveragerc
+  - .hgrc
+scope: source.ini
+
+contexts:
+  main:
+    - match: '^\s*([;#]).*$'
+      scope: comment.line.ini
+      captures:
+        1: punctuation.definition.comment.ini
+    - match: '^\s*(\[)([^\]\n]*)(\])'
+      captures:
+        1: punctuation.definition.section.begin.ini
+        2: entity.name.type.section.ini
+        3: punctuation.definition.section.end.ini
+    - match: '^\s*([^=:\s;#\[][^=:\n]*?)\s*([=:])'
+      captures:
+        1: variable.other.key.ini
+        2: keyword.operator.assignment.ini
+      push: value
+
+  value:
+    - match: '$'
+      pop: true
+    - match: '"'
+      scope: punctuation.definition.string.begin.ini
+      push: string-double
+    - match: "'"
+      scope: punctuation.definition.string.begin.ini
+      push: string-single
+    - match: '\$\{[^}\n]*\}|%\([^)\n]*\)[sd]'
+      scope: variable.other.interpolation.ini
+    - match: '(?<![\w.])-?[0-9]+(?:\.[0-9]+)?(?![\w.])'
+      scope: constant.numeric.ini
+    - match: '(?<![\w-])(?i:true|false|yes|no|on|off|none)(?![\w-])'
+      scope: constant.language.ini
+    - match: '[^\s"''$%]+'
+      scope: string.unquoted.ini
+
+  string-double:
+    - meta_scope: string.quoted.double.ini
+    - match: '"'
+      scope: punctuation.definition.string.end.ini
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.ini
+    - match: '$'
+      pop: true
+
+  string-single:
+    - meta_scope: string.quoted.single.ini
+    - match: "'"
+      scope: punctuation.definition.string.end.ini
+      pop: true
+    - match: '$'
+      pop: true

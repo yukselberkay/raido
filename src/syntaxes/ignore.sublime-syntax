@@ -1,0 +1,42 @@
+%YAML 1.2
+---
+# Ignore files (.gitignore, .dockerignore, .npmignore, .prettierignore, …), written
+# for Raido: comments, `!` that takes a file back, wildcards and [character classes]
+# as the patterns' working parts, escapes.
+name: Ignore List
+file_extensions:
+  - gitignore
+  - dockerignore
+  - .gitignore
+  - .dockerignore
+  - .containerignore
+  - .npmignore
+  - .prettierignore
+  - .eslintignore
+  - .stylelintignore
+  - .vscodeignore
+  - .helmignore
+  - .gcloudignore
+  - .slugignore
+  - .cfignore
+  - .ignore
+  - .rgignore
+  - .fdignore
+  - .hgignore
+scope: text.ignore
+
+contexts:
+  main:
+    - match: '^\s*(#).*$'
+      scope: comment.line.number-sign.ignore
+      captures:
+        1: punctuation.definition.comment.ignore
+    - match: '^\s*(!)'
+      captures:
+        1: keyword.operator.negation.ignore
+    - match: '\\.'
+      scope: constant.character.escape.ignore
+    - match: '\*\*|\*|\?'
+      scope: keyword.operator.wildcard.ignore
+    - match: '\[[^\]\n]*\]'
+      scope: constant.other.character-class.ignore

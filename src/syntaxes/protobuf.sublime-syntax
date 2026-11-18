@@ -1,0 +1,80 @@
+%YAML 1.2
+---
+# Protocol Buffers (.proto, proto2, proto3 and editions), written for Raido:
+# keywords, scalar types, message / enum / service names as types, rpc names as
+# functions, enum values as constants, field numbers, strings and comments.
+name: Protocol Buffers
+file_extensions:
+  - proto
+scope: source.proto
+
+variables:
+  ident: '[A-Za-z_][A-Za-z0-9_]*'
+
+contexts:
+  main:
+    - include: comments
+    - match: '"'
+      scope: punctuation.definition.string.begin.proto
+      push: string-double
+    - match: "'"
+      scope: punctuation.definition.string.begin.proto
+      push: string-single
+    - match: '\b(message|enum|service|extend)\s+({{ident}}(?:\.{{ident}})*)'
+      captures:
+        1: keyword.other.declaration.proto
+        2: entity.name.type.proto
+    - match: '\b(rpc)\s+({{ident}})'
+      captures:
+        1: keyword.other.declaration.proto
+        2: entity.name.function.proto
+    - match: '\b(syntax|edition|package|import|option|oneof|returns|stream|reserved|extensions|to|max|weak|public|group)\b'
+      scope: keyword.other.proto
+    - match: '\b(repeated|optional|required)\b'
+      scope: storage.modifier.proto
+    - match: '\b(double|float|int32|int64|uint32|uint64|sint32|sint64|fixed32|fixed64|sfixed32|sfixed64|bool|string|bytes|map)\b'
+      scope: storage.type.proto
+    - match: '\b(true|false|inf|nan)\b'
+      scope: constant.language.proto
+    # An enum's values: NAME = 1;
+    - match: '^\s*([A-Z][A-Z0-9_]*)\s*(?==)'
+      captures:
+        1: constant.other.enum.proto
+    - match: '\b(?:0[xX][0-9a-fA-F]+|[0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?)\b'
+      scope: constant.numeric.proto
+    # Message types named in fields: Timestamp, google.protobuf.Any, .pkg.Msg
+    - match: '\.?(?:{{ident}}\.)*[A-Z][A-Za-z0-9_]*\b'
+      scope: support.type.proto
+    - match: '='
+      scope: keyword.operator.assignment.proto
+
+  comments:
+    - match: '//.*$'
+      scope: comment.line.double-slash.proto
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.proto
+      push:
+        - meta_scope: comment.block.proto
+        - match: '\*/'
+          scope: punctuation.definition.comment.end.proto
+          pop: true
+
+  string-double:
+    - meta_scope: string.quoted.double.proto
+    - match: '"'
+      scope: punctuation.definition.string.end.proto
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.proto
+    - match: '$'
+      pop: true
+
+  string-single:
+    - meta_scope: string.quoted.single.proto
+    - match: "'"
+      scope: punctuation.definition.string.end.proto
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.proto
+    - match: '$'
+      pop: true

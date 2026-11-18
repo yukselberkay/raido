@@ -1,0 +1,138 @@
+%YAML 1.2
+---
+# PowerShell (.ps1 scripts, .psm1 modules, .psd1 manifests), written for Raido.
+# Keywords (if, foreach, try… as control), cmdlets (Get-ChildItem) and function
+# names as functions, $variables ($env:PATH, $script:x, ${a b}), -Parameters,
+# -operators (-eq, -match), [types] and [Attributes()], strings with their $(…)
+# subexpressions, here-strings, numbers (with KB / MB), # and <# #> comments.
+name: PowerShell
+file_extensions:
+  - ps1
+  - psm1
+  - psd1
+scope: source.powershell
+
+variables:
+  name: '[A-Za-z_][A-Za-z0-9_]*'
+
+contexts:
+  main:
+    - include: statements
+
+  statements:
+    - include: comments
+    - include: here-strings
+    - include: strings
+    - include: variables
+    - match: '(?i)\b(function|filter|workflow|configuration)\s+([A-Za-z_][\w-]*(?::[\w-]+)?)'
+      captures:
+        1: keyword.other.function.powershell
+        2: entity.name.function.powershell
+    - match: '(?i)(?<![\w$.-])(if|elseif|else|switch|foreach|for|while|do|until|break|continue|return|exit|throw|try|catch|finally|trap|in)(?![\w-])'
+      scope: keyword.control.powershell
+    - match: '(?i)(?<![\w$.-])(param|begin|process|end|clean|dynamicparam|class|enum|using|data|hidden|static|parallel|sequence|inlinescript)(?![\w-])'
+      scope: keyword.other.powershell
+    # -eq, -notmatch, -replace, -f… before -Parameters.
+    - match: '(?i)(?<![\w$])-(?:[ci]?(?:eq|ne|gt|ge|lt|le|like|notlike|match|notmatch|contains|notcontains|in|notin|replace|split)|join|and|or|xor|not|band|bor|bxor|bnot|shl|shr|is|isnot|as|f)(?![\w-])'
+      scope: keyword.operator.word.powershell
+    - match: '(?<![\w$])-[A-Za-z][A-Za-z0-9]*'
+      scope: variable.parameter.powershell
+    # Cmdlets and functions named Verb-Noun: Get-ChildItem, ForEach-Object.
+    - match: '(?<![\w$.-])[A-Za-z]+-[A-Za-z][A-Za-z0-9]*(?![\w-])'
+      scope: support.function.cmdlet.powershell
+    # [CmdletBinding()], [Parameter(Mandatory)]
+    - match: '(\[)([A-Za-z_][\w.]*)(?=\()'
+      captures:
+        2: entity.name.type.attribute.powershell
+    # [string], [System.IO.File], [int[]]
+    - match: '\[(?:[A-Za-z_][\w.`]*)(?:\[[^\]\n]*\])*\]'
+      scope: storage.type.powershell
+    - match: '(?i)\b(?:0x[0-9a-f]+|[0-9]+(?:\.[0-9]+)?(?:e[+-]?[0-9]+)?)(?:kb|mb|gb|tb|pb)?\b'
+      scope: constant.numeric.powershell
+    - match: '::|\.\.|\+\+|--|[-+*/%]?=|[|!+*/%<>]'
+      scope: keyword.operator.powershell
+    # A backtick at the end goes on to the next line.
+    - match: '`$'
+      scope: constant.character.escape.powershell
+    - match: '\('
+      push: parens
+
+  parens:
+    - match: '\)'
+      pop: true
+    - include: statements
+
+  comments:
+    - match: '<#'
+      scope: punctuation.definition.comment.begin.powershell
+      push:
+        - meta_scope: comment.block.powershell
+        - match: '#>'
+          scope: punctuation.definition.comment.end.powershell
+          pop: true
+    - match: '#.*$'
+      scope: comment.line.number-sign.powershell
+
+  variables:
+    - match: '(?i)\$(true|false|null)\b'
+      scope: constant.language.powershell
+    - match: '\$\{[^}\n]*\}'
+      scope: variable.other.powershell
+    - match: '(?i)\$(?:(?:global|local|script|private|using|env|variable|function|alias):)?[A-Za-z0-9_?]+'
+      scope: variable.other.powershell
+    - match: '\$[$^_?]'
+      scope: variable.language.powershell
+
+  # What an expandable string holds: `escapes, $variables, $(subexpressions).
+  expansions:
+    - match: '`.'
+      scope: constant.character.escape.powershell
+    - match: '\$\('
+      scope: punctuation.section.embedded.begin.powershell
+      push:
+        - clear_scopes: 1
+        - meta_scope: meta.embedded.powershell
+        - match: '\)'
+          scope: punctuation.section.embedded.end.powershell
+          pop: true
+        - include: statements
+    - include: variables
+
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.powershell
+      push:
+        - meta_scope: string.quoted.double.powershell
+        - match: '""'
+          scope: constant.character.escape.powershell
+        - match: '"'
+          scope: punctuation.definition.string.end.powershell
+          pop: true
+        - include: expansions
+    - match: "'"
+      scope: punctuation.definition.string.begin.powershell
+      push:
+        - meta_scope: string.quoted.single.powershell
+        - match: "''"
+          scope: constant.character.escape.powershell
+        - match: "'"
+          scope: punctuation.definition.string.end.powershell
+          pop: true
+
+  # @" … "@ and @' … '@: their closing mark starts a line.
+  here-strings:
+    - match: '@"[ \t\r]*$'
+      scope: punctuation.definition.string.begin.powershell
+      push:
+        - meta_scope: string.quoted.double.heredoc.powershell
+        - match: '^"@'
+          scope: punctuation.definition.string.end.powershell
+          pop: true
+        - include: expansions
+    - match: "@'[ \\t\\r]*$"
+      scope: punctuation.definition.string.begin.powershell
+      push:
+        - meta_scope: string.quoted.single.heredoc.powershell
+        - match: "^'@"
+          scope: punctuation.definition.string.end.powershell
+          pop: true

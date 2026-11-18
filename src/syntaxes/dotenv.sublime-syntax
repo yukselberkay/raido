@@ -1,0 +1,68 @@
+%YAML 1.2
+---
+# .env files (.env, .env.local, .env.production, app.env), written for Raido: keys
+# as variables, values as strings, ${VAR} references as variables, comments.
+# Quoted values may go on over lines, as dotenv reads them.
+name: dotenv
+file_extensions:
+  - env
+  - .env
+scope: source.dotenv
+
+contexts:
+  main:
+    - match: '^\s*(#).*$'
+      scope: comment.line.number-sign.dotenv
+      captures:
+        1: punctuation.definition.comment.dotenv
+    - match: '^\s*(?:(export)\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*(=)'
+      captures:
+        1: keyword.other.export.dotenv
+        2: variable.other.key.dotenv
+        3: keyword.operator.assignment.dotenv
+      push: value
+
+  value:
+    - match: '$'
+      pop: true
+    - match: '"'
+      scope: punctuation.definition.string.begin.dotenv
+      push: string-double
+    - match: "'"
+      scope: punctuation.definition.string.begin.dotenv
+      push: string-single
+    - match: '`'
+      scope: punctuation.definition.string.begin.dotenv
+      push: string-backtick
+    - match: '(?<=\s)(#).*$'
+      scope: comment.line.number-sign.dotenv
+      captures:
+        1: punctuation.definition.comment.dotenv
+    - include: references
+    - match: '[^\s"''`$#]+'
+      scope: string.unquoted.dotenv
+
+  references:
+    - match: '\$\{[^}\n]*\}|\$[A-Za-z_][A-Za-z0-9_]*'
+      scope: variable.other.reference.dotenv
+
+  string-double:
+    - meta_scope: string.quoted.double.dotenv
+    - match: '"'
+      scope: punctuation.definition.string.end.dotenv
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.dotenv
+    - include: references
+
+  string-single:
+    - meta_scope: string.quoted.single.dotenv
+    - match: "'"
+      scope: punctuation.definition.string.end.dotenv
+      pop: true
+
+  string-backtick:
+    - meta_scope: string.quoted.other.dotenv
+    - match: '`'
+      scope: punctuation.definition.string.end.dotenv
+      pop: true
