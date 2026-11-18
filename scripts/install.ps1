@@ -3,8 +3,9 @@
 Build and install Raido on Windows with everything it needs: Git, the Visual Studio
 C++ build tools (Rust's linker), Rust (via rustup), the language servers for the
 languages Raido's editor understands (rust-analyzer, clangd from LLVM, gopls when Go
-is installed, a Python server, bash-language-server with ShellCheck and shfmt, YAML's
-and JSON's, Docker's when Docker and Go are), JetBrains Mono Nerd Font, Raido itself
+is installed, a Python server, TypeScript's, bash-language-server with ShellCheck and
+shfmt, YAML's and JSON's, Docker's when Docker and Go are), JetBrains Mono Nerd Font,
+Raido itself
 (%USERPROFILE%\.cargo\bin\raido.exe, put on your PATH), and the Raido skill that
 teaches AI agents how to use Raido.
 
@@ -21,8 +22,8 @@ winget (App Installer, built into Windows 10 and 11).
 .PARAMETER NoFont
 Skip JetBrains Mono Nerd Font.
 .PARAMETER NoLsp
-Skip the language servers (rust-analyzer, clangd, gopls, Python, bash-language-server
-with ShellCheck and shfmt, YAML, JSON, Docker).
+Skip the language servers (rust-analyzer, clangd, gopls, Python, TypeScript,
+bash-language-server with ShellCheck and shfmt, YAML, JSON, Docker).
 .PARAMETER NoSkill
 Skip the Raido skill for AI agents.
 #>
@@ -139,8 +140,8 @@ function Install-Rust {
 }
 
 # --- Language servers: diagnostics, completion and hover in Raido's editor ---
-# One for each language Raido knows: Rust, C and C++, Go, Python, shell, YAML, JSON,
-# Docker. Each is optional:
+# One for each language Raido knows: Rust, C and C++, Go, Python, TypeScript and
+# JavaScript, shell, YAML, JSON, Docker. Each is optional:
 # one that can't be installed is noted and skipped, and Raido works without it.
 
 # Run a program quietly; true when it succeeds. Windows PowerShell 5.1 would stop on
@@ -175,7 +176,7 @@ function Get-PythonServer {
 }
 
 function Install-LanguageServers {
-    Step 'Language servers for Rust, C/C++, Go, Python, shell, YAML, JSON and Docker (Windows, winget)'
+    Step 'Language servers for Rust, C/C++, Go, Python, TypeScript, shell, YAML, JSON and Docker (Windows, winget)'
 
     # Rust: rustup's own. Its rust-analyzer command is there before the component
     # is, failing until it's added.
@@ -249,21 +250,23 @@ function Install-LanguageServers {
             Note "$($tool.Name) skipped ($($_.Exception.Message))"
         }
     }
-    # npm's: the shell server, and Red Hat's YAML and VS Code's JSON servers, which
-    # check files against the schemas published for them.
+    # npm's: TypeScript's (driving TypeScript 6's tsserver; TypeScript 7 has none), the
+    # shell server, and Red Hat's YAML and VS Code's JSON servers, which check files
+    # against the schemas published for them.
     foreach ($server in @(
-            @{ Program = 'bash-language-server'; Package = 'bash-language-server'; What = 'shell scripts' },
-            @{ Program = 'yaml-language-server'; Package = 'yaml-language-server'; What = 'YAML' },
-            @{ Program = 'vscode-json-language-server'; Package = 'vscode-langservers-extracted'; What = 'JSON' })) {
+            @{ Program = 'typescript-language-server'; Packages = @('typescript-language-server', 'typescript@6'); What = 'TypeScript, JavaScript' },
+            @{ Program = 'bash-language-server'; Packages = @('bash-language-server'); What = 'shell scripts' },
+            @{ Program = 'yaml-language-server'; Packages = @('yaml-language-server'); What = 'YAML' },
+            @{ Program = 'vscode-json-language-server'; Packages = @('vscode-langservers-extracted'); What = 'JSON' })) {
         $program = $server.Program
-        $package = $server.Package
+        $packages = $server.Packages
         if (Test-Server $program) {
             Ok "$program ($($server.What))"
-        } elseif ((Have 'npm') -and (Invoke-Quietly { npm install -g $package })) {
+        } elseif ((Have 'npm') -and (Invoke-Quietly { npm install -g @packages })) {
             Update-SessionPath
             if (Test-Server $program) { Ok "$program ($($server.What))" } else { Note "$program was installed; open a new terminal to use it" }
         } else {
-            Note "$program skipped; later: install Node.js (winget install OpenJS.NodeJS.LTS), then npm install -g $package"
+            Note "$program skipped; later: install Node.js (winget install OpenJS.NodeJS.LTS), then npm install -g $($packages -join ' ')"
         }
     }
 

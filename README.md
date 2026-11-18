@@ -87,6 +87,7 @@ It installs, skipping whatever is already there:
    | Python | pyright or pylsp | `python3-pylsp` | `python3-lsp-server` | `pyright` | `python3-python-lsp-server` | `py3-lsp-server` | `pyright` |
    | Shell | bash-language-server | npm | `nodejs-bash-language-server` | `bash-language-server` | npm | npm | `bash-language-server` |
    | Shell warnings, formatting | ShellCheck, shfmt | `shellcheck`, `shfmt` | `ShellCheck`, `shfmt` | `shellcheck`, `shfmt` | `ShellCheck`, `shfmt` | `shellcheck`, `shfmt` | `shellcheck`, `shfmt` |
+   | TypeScript, JavaScript | typescript-language-server + TypeScript 6 | npm | npm | npm | npm | npm | npm |
    | YAML | yaml-language-server | npm | npm | `yaml-language-server` | npm | npm | `yaml-language-server` |
    | JSON | vscode-json-language-server | npm | npm | `vscode-json-languageserver` | npm | npm | `vscode-langservers-extracted` |
    | Dockerfile, Docker Compose | docker-language-server | `go install` | `go install` | `go install` | `go install` | `go install` | `go install` |
@@ -96,7 +97,9 @@ It installs, skipping whatever is already there:
    takes a few minutes: only where Docker (or Podman) and Go are installed (Go fetches
    the newer Go it needs, 1.25, unless your Go is set to stay local). Without a system package for Python it tries `uv tool install
    basedpyright`, `pipx install python-lsp-server`, then `npm install -g pyright`;
-   for the shell, YAML and JSON servers, `npm install -g bash-language-server`,
+   TypeScript's always from npm (`npm install -g typescript-language-server
+   typescript@6`: it drives TypeScript 6's `tsserver`, which TypeScript 7 doesn't
+   have, and Homebrew's comes with 7); for the shell, YAML and JSON servers, `npm install -g bash-language-server`,
    `yaml-language-server` and `vscode-langservers-extracted` (Node.js 20 or later);
    and for shfmt, `go install` where Go is.
    A server already there is kept; one that can't be installed is noted and
@@ -414,7 +417,8 @@ the history graph appears after you make commits.
   file; Ctrl-c/Ctrl-x/Ctrl-v and `y`/`d`/`p` share the **system clipboard** with
   your other apps.
 - **Language servers:** diagnostics, hover docs, go-to-definition, completion and
-  formatting for Rust, Go, Python, C and C++ via their standard servers.
+  formatting for Rust, Go, Python, C and C++, TypeScript and JavaScript, shell
+  scripts, YAML, JSON and Docker via their standard servers.
 - **Markdown preview:** `.md` files open rendered — headings, lists, task
   lists, tables, highlighted code blocks, quotes and GitHub alerts — with a live
   side-by-side preview that follows your cursor while you edit.
@@ -423,7 +427,8 @@ the history graph appears after you make commits.
   folded away.
 - **Source highlighting:** bundled Rust, C, C++, Python, Go grammars, plus the
   other bundled Syntect languages (JSON and YAML among them) and Raido's own
-  grammars: TOML (`pyproject.toml`, `Cargo.toml`, `config.toml`), Dockerfiles,
+  grammars: TypeScript and JavaScript with JSX (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`,
+  `.cjs`), TOML (`pyproject.toml`, `Cargo.toml`, `config.toml`), Dockerfiles,
   PowerShell (`.ps1`, `.psm1`, `.psd1`), `.env` files (`.env.local` too), INI
   (`.ini`, `.cfg`, `.editorconfig`, `.gitconfig`, systemd units), ignore files
   (`.gitignore`, `.dockerignore`, `.npmignore`…), SCSS, Terraform / HCL (`.tf`,
@@ -1272,6 +1277,7 @@ are installed); by hand, install a server once:
 | Go | `gopls` (also found in `~/go/bin`, where `go install` puts it) | `go install golang.org/x/tools/gopls@latest` |
 | Python | `pyright-langserver`, `basedpyright-langserver`, `pylsp` or `jedi-language-server` | `npm install -g pyright` or `pip install python-lsp-server` |
 | C / C++ | `clangd` (also found in Homebrew's `llvm` and the Xcode tools on macOS, `C:\Program Files\LLVM\bin` on Windows) | Arch `pacman -S clang` · Debian/Ubuntu `apt install clangd` · Fedora `dnf install clang-tools-extra` · macOS Xcode tools · Windows `winget install LLVM.LLVM` |
+| TypeScript, JavaScript | `typescript-language-server`, with the project's own TypeScript, else TypeScript 6 installed beside it | `npm install -g typescript-language-server typescript@6` |
 | YAML | `yaml-language-server` | `npm install -g yaml-language-server` (Homebrew and Arch: `yaml-language-server`) |
 | JSON | `vscode-json-language-server` (VS Code's) | `npm install -g vscode-langservers-extracted` (Homebrew: `vscode-langservers-extracted` · Arch: `vscode-json-languageserver`) |
 | Shell (sh, bash, ksh) | `bash-language-server`, with `shellcheck` for warnings and `shfmt` for formatting (also found in `~/go/bin`) | `npm install -g bash-language-server` (Homebrew and Arch: `bash-language-server`) · `brew` / `apt` / `pacman install shellcheck shfmt` (Fedora, openSUSE: `ShellCheck`) |
@@ -1331,9 +1337,29 @@ large module), the file is saved exactly as typed and the status line says why.
 `:w other.go` (a different name) also saves the text as is.
 
 The languages are listed in `format_on_save` (default `["go"]`). Add `"rust"`,
-`"python"`, `"c"`, `"shell"`, `"yaml"` or `"docker"` (Compose files) to do the same
-with their servers, `"json"` for [JSON](#json-formatting), or set `format_on_save = []`
-to turn it off.
+`"python"`, `"c"`, `"typescript"`, `"shell"`, `"yaml"` or `"docker"` (Compose files) to do
+the same with their servers, `"json"` for [JSON](#json-formatting), or set
+`format_on_save = []` to turn it off.
+
+#### TypeScript and JavaScript
+
+Raido highlights `.ts`, `.mts`, `.cts`, `.tsx`, `.js`, `.mjs`, `.cjs` and `.jsx` files
+with its own grammar: keywords, functions, classes and types (the names interfaces,
+type aliases, enums and classes declare, PascalCase names and the built-in ones),
+constants, template literals with their `${…}`, regular expressions (told apart from
+division), decorators, and JSX in `.tsx`, `.jsx` and `.js` files: tags, components,
+attributes and `{expressions}`. In a `.ts` file `<T>(x) => x` is a generic, never an
+element. ```` ```ts ````, ```` ```tsx ```` and ```` ```js ```` blocks in Markdown too.
+
+**`typescript-language-server`** serves both languages, as VS Code's TypeScript
+support does: type errors as you type, completion of members and imports, `K` for
+types and docs, `gd` across files and into `node_modules`, and `:format`; add
+`"typescript"` to `format_on_save` to organize imports and format on every save. It
+uses the project's own TypeScript (`node_modules/typescript`) when that has
+`tsserver`, else the TypeScript 6 installed beside it. TypeScript 7, the new native
+compiler, has no `tsserver`, and no documented way yet for other editors to start
+its own language server, so the server needs TypeScript 6 beside it:
+`npm install -g typescript-language-server typescript@6`.
 
 #### YAML and JSON, checked against their schemas
 

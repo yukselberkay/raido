@@ -52,6 +52,30 @@ fn line_hash(line: ropey::RopeSlice) -> u64 {
     hasher.finish()
 }
 
+/// TypeScript and JavaScript, from one grammar (its header is TypeScript's).
+const SCRIPT: &str = include_str!("syntaxes/typescript.sublime-syntax");
+const SCRIPT_HEADER: &str =
+    "name: TypeScript\nfile_extensions:\n  - ts\n  - mts\n  - cts\nscope: source.ts\n";
+
+/// The script grammar's variants: TypeScript without JSX (in .ts, `<T>(x) => x` is a
+/// generic), and TSX and JavaScript with it.
+fn script_grammars() -> [String; 3] {
+    let variant = |name: &str, extensions: &[&str], scope: &str| {
+        let extensions: String = extensions.iter().map(|e| format!("  - {e}\n")).collect();
+        let header = format!("name: {name}\nfile_extensions:\n{extensions}scope: {scope}\n");
+        SCRIPT.replacen(SCRIPT_HEADER, &header, 1)
+    };
+    [
+        SCRIPT.replacen("    - include: jsx\n", "", 1),
+        variant("TSX", &["tsx"], "source.tsx"),
+        variant("JavaScript", &["js", "mjs", "cjs", "jsx"], "source.js"),
+    ]
+}
+
+/// The extensions Raido's own script grammars take over from the bundled
+/// JavaScript one, which knows no JSX or TypeScript.
+const SCRIPTS: [&str; 8] = ["js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx"];
+
 /// Raido's own grammars, kept in a set of their own: adding them to the bundled set
 /// means rebuilding it, a tenth of a second at every start. Built once, the first
 /// time a file has no bundled grammar.
@@ -59,8 +83,8 @@ fn extra() -> &'static SyntaxSet {
     static EXTRA_SET: std::sync::OnceLock<SyntaxSet> = std::sync::OnceLock::new();
     EXTRA_SET.get_or_init(|| {
         let mut set = SyntaxSetBuilder::new();
-        for source in EXTRA {
-            set.add(SyntaxDefinition::load_from_str(source, true, None).expect("bundled grammar"));
+        for source in EXTRA.into_iter().map(String::from).chain(script_grammars()) {
+            set.add(SyntaxDefinition::load_from_str(&source, true, None).expect("bundled grammar"));
         }
         set.build()
     })
@@ -101,6 +125,9 @@ impl Syntax {
                 ("keyword.operator, punctuation.accessor", &colors.operator),
                 ("variable - variable.function", &colors.variable),
                 ("markup.heading", &palette.accent),
+                // HTML, XML and JSX tags and their attributes, as VS Code colors them.
+                ("entity.name.tag", &colors.keyword),
+                ("entity.other.attribute-name", &colors.variable),
                 ("markup.inline.raw, markup.raw", &colors.string),
                 ("markup.inserted", &colors.string),
                 ("markup.deleted, invalid", &palette.warning),
@@ -150,6 +177,15 @@ impl Syntax {
         }
         if crate::language::shell(Some(path), "").is_some() {
             return self.by_extension("sh");
+        }
+        let extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default();
+        if SCRIPTS.iter().any(|s| s.eq_ignore_ascii_case(extension)) {
+            return extra()
+                .find_syntax_by_extension(extension)
+                .map(|g| (g, extra()));
         }
         // JSON by other names: with comments (VS Code's), and tools' dotfiles.
         let json_named = path
@@ -213,8 +249,15 @@ impl Syntax {
             "protobuf" => "proto",
             "dotenv" => "env",
             "ignore" => "gitignore",
+            "javascript" | "node" => "js",
+            "typescript" => "ts",
             _ => token,
         };
+        if SCRIPTS.iter().any(|s| s.eq_ignore_ascii_case(token)) {
+            return extra()
+                .find_syntax_by_extension(token)
+                .map(|g| (g, extra()));
+        }
         (self
             .syntaxes
             .find_syntax_by_token(token)
@@ -720,6 +763,142 @@ user app
                 found.contains(scope),
                 "{name}: {token} after {after}: {found}"
             );
+        }
+    }
+
+    #[test]
+    fn typescript_is_highlighted() {
+        let text = r#"import { readFile } from "node:fs";
+// A user.
+export interface User { id: number; name?: string }
+type Id = string | number;
+enum Role { Admin = 1 }
+@Component({ selector: "app" })
+export class Store<T> extends Base implements Repo {
+  private readonly items: Map<string, T> = new Map();
+  async load(path: string): Promise<User[]> {
+    const text = await readFile(path, "utf8");
+    if (!text) return [];
+    const ratio = total / count / 2;
+    const words = text.split(/\s+/g);
+    const f = <T,>(x: T) => x;
+    const ids = useState<string>("");
+    return JSON.parse(`${text}`) as User[];
+  }
+  #secret = 0x1F;
+}
+const MAX_SIZE = 10_000n;
+"#;
+        scopes(
+            "store.ts",
+            text,
+            &[
+                ("import", "import", "keyword.control.import"),
+                ("from ", "\"node:fs\"", "string.quoted.double"),
+                ("// A", "user", "comment.line"),
+                ("export ", "interface", "keyword.declaration"),
+                ("interface ", "User", "entity.name.type"),
+                ("id: ", "number", "support.type.primitive"),
+                ("type ", "Id", "entity.name.type"),
+                ("enum ", "Role", "entity.name.type"),
+                ("Admin = ", "1", "constant.numeric"),
+                ("@", "@Component", "entity.name.function.decorator"),
+                ("class ", "Store", "entity.name.type"),
+                ("extends ", "Base", "support.class"),
+                ("private", "readonly", "keyword.declaration"),
+                ("= ", "new", "keyword.declaration"),
+                ("async", "async", "keyword.declaration"),
+                ("async ", "load", "variable.function"),
+                (": ", "Promise", "support.class"),
+                ("const", "const", "keyword.declaration"),
+                ("= ", "await", "keyword.control"),
+                ("await ", "readFile", "variable.function"),
+                ("if", "if", "keyword.control"),
+                ("text) ", "return", "keyword.control"),
+                // Division, then a regular expression.
+                ("total ", "/", "keyword.operator"),
+                ("split(", "/", "string.regexp"),
+                ("/\\s+/", "g", "keyword.other.flags"),
+                // Generics, not JSX, in TypeScript.
+                ("f = ", "<", "keyword.operator"),
+                ("useState", "<", "keyword.operator"),
+                ("`${", "text", "meta.interpolation"),
+                ("JSON.parse(", "`", "string.template"),
+                (") ", "as", "keyword.declaration"),
+                ("#secret", "#secret", "variable.other.private"),
+                ("= ", "0x1F", "constant.numeric"),
+                ("const ", "MAX_SIZE", "constant.other"),
+                ("= ", "10_000n", "constant.numeric"),
+            ],
+        );
+    }
+
+    #[test]
+    fn javascript_and_tsx_read_jsx() {
+        let text = r#"export default function App({ items }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Layout title="Shop" onClose={() => setOpen(false)}>
+      <ul className='list'>
+        {items.map((item) => <li key={item.id}>{item.name} &amp; more</li>)}
+      </ul>
+      <>Don't panic</>
+      <Modal.Body />
+    </Layout>
+  );
+}
+const after = 1 < 2;
+"#;
+        for name in ["App.jsx", "App.js", "App.tsx"] {
+            scopes(
+                name,
+                text,
+                &[
+                    ("export ", "default", "keyword.control.import"),
+                    ("function ", "App", "entity.name.function"),
+                    ("<", "Layout", "support.class.component"),
+                    ("Layout ", "title", "entity.other.attribute-name"),
+                    ("title=", "\"Shop\"", "string.quoted.double"),
+                    ("onClose={() => ", "setOpen", "variable.function"),
+                    ("<", "ul", "entity.name.tag"),
+                    ("ul ", "className", "entity.other.attribute-name"),
+                    ("{items.", "map", "variable.function"),
+                    ("=> <", "li", "entity.name.tag"),
+                    ("{item.name} ", "&amp;", "constant.character.entity"),
+                    ("Modal", ".Body", "support.class.component"),
+                    ("</", "Layout", "entity.name.tag"),
+                    // After the elements, code again.
+                    ("const ", "after", "source"),
+                    ("1 ", "<", "keyword.operator"),
+                ],
+            );
+        }
+        // Text isn't code: the apostrophe in it opens no string.
+        for name in ["App.jsx", "App.tsx"] {
+            let found = scope_in(name, text, "<>Don", "'t");
+            assert!(!found.contains("string"), "{name}: {found}");
+        }
+        // JavaScript in Markdown, and by the names it goes by.
+        let syntax = Syntax::new(&config::Theme::default());
+        for (token, grammar) in [
+            ("js", "JavaScript"),
+            ("javascript", "JavaScript"),
+            ("jsx", "JavaScript"),
+            ("ts", "TypeScript"),
+            ("typescript", "TypeScript"),
+            ("tsx", "TSX"),
+        ] {
+            let found = syntax.by_token(token).map(|(g, _)| g.name.clone());
+            assert_eq!(found.as_deref(), Some(grammar), "{token}");
+        }
+        for (file, grammar) in [
+            ("a.mjs", "JavaScript"),
+            ("a.cjs", "JavaScript"),
+            ("a.mts", "TypeScript"),
+            ("a.d.ts", "TypeScript"),
+        ] {
+            let found = syntax.grammar(file).map(|(g, _)| g.name.clone());
+            assert_eq!(found.as_deref(), Some(grammar), "{file}");
         }
     }
 

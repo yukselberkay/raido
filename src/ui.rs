@@ -3279,7 +3279,7 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         ("Ctrl-a", "Select the whole file"),
         (
             "LANGUAGE SERVERS",
-            "Rust Go Python C/C++ shell YAML JSON Docker · :lsp status",
+            "Rust Go Python C/C++ TS/JS shell YAML JSON Docker · :lsp",
         ),
         (
             "K / gd / Ctrl-o",

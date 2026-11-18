@@ -2,8 +2,9 @@
 # Build and install Raido with everything it needs on this machine (macOS or Linux):
 # a C compiler and linker, Git, curl, Rust (via rustup), the language servers for
 # the languages Raido's editor understands (rust-analyzer, clangd, gopls when Go is
-# installed, a Python server, bash-language-server with ShellCheck and shfmt, YAML's
-# and JSON's; Docker's when Docker and Go are) from the system's package manager,
+# installed, a Python server, TypeScript's, bash-language-server with ShellCheck and
+# shfmt, YAML's and JSON's; Docker's when Docker and Go are) from the system's package
+# manager,
 # JetBrains Mono Nerd
 # Font, Raido itself (~/.cargo/bin/raido, made runnable by name from PATH), and the
 # Raido skill that teaches AI agents how to use Raido. On Omarchy, packages come
@@ -21,8 +22,8 @@ Installs a C compiler, Git, curl, Rust, language servers, JetBrains Mono Nerd Fo
 Raido and its AI agent skill on macOS or Linux.
   --no-font      skip JetBrains Mono Nerd Font
   --no-lsp       skip the language servers (rust-analyzer, clangd, gopls, Python,
-                 bash-language-server with ShellCheck and shfmt, YAML, JSON,
-                 Docker)
+                 TypeScript, bash-language-server with ShellCheck and shfmt,
+                 YAML, JSON, Docker)
   --no-skill     skip the Raido skill for AI agents
   --no-launcher  Omarchy: skip Raido's app launcher entry (SUPER + SPACE)"
 
@@ -340,19 +341,20 @@ from_packages() {
     pm_install "$package"
 }
 
-# Language server PROGRAM, for WHAT: from the system's packages, else npm PACKAGE.
+# Language server PROGRAM, for WHAT: from the system's packages, else npm PACKAGES.
 npm_server() {
-    local program="$1" package="$2" what="$3"
+    local program="$1" what="$2"
+    shift 2
     if found "$program"; then
         ok "$program ($what)"
     elif from_packages "$(package_for "$program")" && found "$program"; then
         ok "$program ($what)"
-    elif have npm && note "installing $package with npm" &&
-        npm install -g "$package" >"$scratch/packages.log" 2>&1 &&
+    elif have npm && note "installing $* with npm" &&
+        npm install -g "$@" >"$scratch/packages.log" 2>&1 &&
         found "$program"; then
         ok "$program ($what)"
     else
-        note "$program skipped; later: npm install -g $package (Node.js 20 or later)"
+        note "$program skipped; later: npm install -g $* (needs a recent Node.js)"
     fi
 }
 
@@ -369,7 +371,7 @@ python_server() {
 
 install_language_servers() {
     pm="$(package_manager)"
-    step "Language servers for Rust, C/C++, Go, Python, shell, YAML, JSON and Docker ($(system_name)${pm:+, $(pm_name)})"
+    step "Language servers for Rust, C/C++, Go, Python, TypeScript, shell, YAML, JSON and Docker ($(system_name)${pm:+, $(pm_name)})"
     if [ -z "$pm" ]; then
         if [ "$os" = Darwin ]; then
             note "Homebrew (https://brew.sh) is missing: only rust-analyzer and servers already here"
@@ -459,12 +461,17 @@ install_language_servers() {
     else
         note "shfmt skipped${pm:+ ($(why))}; later: go install mvdan.cc/sh/v3/cmd/shfmt@latest"
     fi
-    npm_server bash-language-server bash-language-server "shell scripts"
+    # TypeScript and JavaScript: typescript-language-server drives TypeScript 6's
+    # tsserver (TypeScript 7 has none), so from npm, as its own docs say, where
+    # Homebrew's would come with TypeScript 7.
+    npm_server typescript-language-server "TypeScript, JavaScript" typescript-language-server typescript@6
+
+    npm_server bash-language-server "shell scripts" bash-language-server
 
     # YAML and JSON: Red Hat's server and VS Code's, which check files against the
     # schemas published for them (GitHub workflows, Kubernetes, package.json…).
-    npm_server yaml-language-server yaml-language-server "YAML"
-    npm_server vscode-json-language-server vscode-langservers-extracted "JSON"
+    npm_server yaml-language-server "YAML" yaml-language-server
+    npm_server vscode-json-language-server "JSON" vscode-langservers-extracted
 
     # Docker: Docker's own server, for Dockerfiles and Compose files. No package has
     # it, so go install builds it (fetching a newer Go when it needs one): only where

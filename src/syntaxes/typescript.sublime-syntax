@@ -1,0 +1,235 @@
+%YAML 1.2
+---
+# TypeScript and JavaScript, written for Raido. One grammar, three variants made
+# from it (highlight.rs): TypeScript (.ts .mts .cts), TSX (.tsx), and JavaScript
+# (.js .mjs .cjs .jsx); the last two read JSX, where in .ts `<T>(x) => x` is a
+# generic. Keywords (control flow as control), functions, classes and types as
+# types (PascalCase names, the built-in ones, and the names interfaces, type
+# aliases, enums and classes declare), constants, numbers, strings, template
+# literals with their ${…}, regular expressions, decorators, comments, and JSX
+# tags, attributes and {expressions}.
+name: TypeScript
+file_extensions:
+  - ts
+  - mts
+  - cts
+scope: source.ts
+
+variables:
+  ident: '[A-Za-z_$][A-Za-z0-9_$]*'
+  # What a regular expression can follow, where `/` can't be division.
+  before_regex: '[=(,:\[!&|?{};+\-*%<>~^]'
+
+contexts:
+  main:
+    - match: '^#!.*$'
+      scope: comment.line.shebang.ts
+    - include: statements
+
+  statements:
+    - include: comments
+    # JSX: the next line is `- include: jsx` (TypeScript's variant drops it).
+    - include: jsx
+    - include: literals
+    - include: declarations
+    - include: keywords
+    - match: '@{{ident}}'
+      scope: entity.name.function.decorator.ts
+    - match: '#{{ident}}'
+      scope: variable.other.private.ts
+    - match: '({{ident}})\s*(?=\()'
+      scope: variable.function.ts
+    - match: '\b[A-Z][A-Z0-9_]+\b'
+      scope: constant.other.ts
+    - match: '\b[A-Z][A-Za-z0-9_$]*'
+      scope: support.class.ts
+    - match: '=>'
+      scope: keyword.declaration.function.arrow.ts
+    - match: '===|!==|==|!=|<=|>=|&&=?|\|\|=?|\?\?=?|\?\.|\.\.\.|\*\*=?|[-+*%&|^]=?|<<=?|>>>?=?|[!~?:<>=]'
+      scope: keyword.operator.ts
+    - match: '/'
+      scope: keyword.operator.ts
+    # Braces are matched up, so a ${…} or a JSX {…} ends at its own.
+    - match: '\{'
+      push: braces
+
+  braces:
+    - match: '\}'
+      pop: true
+    - include: statements
+
+  comments:
+    - match: '//.*$'
+      scope: comment.line.double-slash.ts
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.ts
+      push:
+        - meta_scope: comment.block.ts
+        - match: '\*/'
+          scope: punctuation.definition.comment.end.ts
+          pop: true
+
+  literals:
+    - match: '"'
+      scope: punctuation.definition.string.begin.ts
+      push: string-double
+    - match: "'"
+      scope: punctuation.definition.string.begin.ts
+      push: string-single
+    - match: '`'
+      scope: punctuation.definition.string.begin.ts
+      push: template
+    # A regular expression: where `/` can't be division, after an operator or one
+    # of the words that take an expression, or at a line's start.
+    - match: '(?:^|(?<={{before_regex}}))\s*(/)(?![/*])'
+      captures:
+        1: punctuation.definition.string.begin.ts
+      push: regex
+    - match: '\b(return|typeof|case|do|else|in|of|delete|void|throw|new|yield|await|instanceof)\s+(/)(?![/*])'
+      captures:
+        1: keyword.control.ts
+        2: punctuation.definition.string.begin.ts
+      push: regex
+    - match: '\b(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|0[oO][0-7_]+|(?:[0-9][0-9_]*\.?[0-9_]*|\.[0-9][0-9_]*)(?:[eE][+-]?[0-9_]+)?)n?\b'
+      scope: constant.numeric.ts
+    - match: '\b(true|false|null|undefined|NaN|Infinity)\b'
+      scope: constant.language.ts
+    - match: '\b(this|super|arguments|globalThis)\b'
+      scope: variable.language.ts
+
+  declarations:
+    - match: '\b(function)(\s*\*)?\s+({{ident}})'
+      captures:
+        1: keyword.declaration.function.ts
+        2: keyword.generator.asterisk.ts
+        3: entity.name.function.ts
+    - match: '\b(class|interface|type|enum|namespace|module)\s+({{ident}})'
+      captures:
+        1: keyword.declaration.ts
+        2: entity.name.type.ts
+
+  keywords:
+    - match: '\b(import|export|from|default)\b'
+      scope: keyword.control.import.ts
+    - match: '\b(if|else|switch|case|for|while|do|break|continue|return|throw|try|catch|finally|await|yield|with)\b'
+      scope: keyword.control.ts
+    - match: '\b(const|let|var|using|function|class|interface|type|enum|namespace|module|declare|abstract|extends|implements|static|readonly|private|protected|public|override|accessor|async|get|set|new|delete|typeof|instanceof|in|of|void|keyof|infer|is|asserts|satisfies|as|unique|global)\b'
+      scope: keyword.declaration.ts
+    - match: '\b(string|number|boolean|any|unknown|never|object|symbol|bigint)\b'
+      scope: support.type.primitive.ts
+
+  string-double:
+    - meta_scope: string.quoted.double.ts
+    - match: '"'
+      scope: punctuation.definition.string.end.ts
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.ts
+    - match: '$'
+      pop: true
+
+  string-single:
+    - meta_scope: string.quoted.single.ts
+    - match: "'"
+      scope: punctuation.definition.string.end.ts
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.ts
+    - match: '$'
+      pop: true
+
+  template:
+    - meta_scope: string.template.ts
+    - match: '`'
+      scope: punctuation.definition.string.end.ts
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.ts
+    - match: '\$\{'
+      scope: punctuation.section.interpolation.begin.ts
+      push:
+        - clear_scopes: 1
+        - meta_scope: meta.interpolation.ts
+        - match: '\}'
+          scope: punctuation.section.interpolation.end.ts
+          pop: true
+        - include: statements
+
+  regex:
+    - meta_scope: string.regexp.ts
+    - match: '(/)([dgimsuyv]*)'
+      captures:
+        1: punctuation.definition.string.end.ts
+        2: keyword.other.flags.ts
+      pop: true
+    - match: '\\.'
+      scope: constant.character.escape.ts
+    - match: '\[(?:\\.|[^\]\\\n])*\]'
+      scope: constant.other.character-class.ts
+    - match: '$'
+      pop: true
+
+  # JSX: an element starts where an expression can, after a space or one of
+  # `( = { , : ? [ !` (not right after a name: `useState<string>` is a generic), with
+  # a tag name and then a space, `>` or `/`, or with `<>`.
+  jsx:
+    - match: '(?:^|(?<=[\s(={,:?\[!]))(<)(?=>|{{ident}}(?:[.:-]{{ident}})*(?:\s|>|/|$))'
+      captures:
+        1: punctuation.definition.tag.begin.ts
+      push: jsx-tag
+
+  jsx-tag:
+    - meta_scope: meta.tag.jsx.ts
+    - match: '/>'
+      scope: punctuation.definition.tag.end.ts
+      pop: true
+    - match: '>'
+      scope: punctuation.definition.tag.end.ts
+      set: jsx-children
+    - match: '(?<=<)[A-Z][A-Za-z0-9_$]*(?:\.{{ident}})*'
+      scope: support.class.component.ts
+    - match: '(?<=<){{ident}}(?:[.:-]{{ident}})*'
+      scope: entity.name.tag.ts
+    - match: '{{ident}}(?:[:-]{{ident}})*'
+      scope: entity.other.attribute-name.ts
+    - match: '='
+      scope: keyword.operator.assignment.ts
+    - match: '"'
+      scope: punctuation.definition.string.begin.ts
+      push:
+        - meta_scope: string.quoted.double.ts
+        - match: '"'
+          scope: punctuation.definition.string.end.ts
+          pop: true
+    - match: "'"
+      scope: punctuation.definition.string.begin.ts
+      push:
+        - meta_scope: string.quoted.single.ts
+        - match: "'"
+          scope: punctuation.definition.string.end.ts
+          pop: true
+    - include: jsx-expression
+
+  # An element's children, up to its closing tag.
+  jsx-children:
+    - match: '(</)\s*([A-Za-z_$][A-Za-z0-9_$.:-]*)?\s*(>)'
+      captures:
+        1: punctuation.definition.tag.begin.ts
+        2: entity.name.tag.ts
+        3: punctuation.definition.tag.end.ts
+      pop: true
+    - match: '<(?=>|{{ident}})'
+      scope: punctuation.definition.tag.begin.ts
+      push: jsx-tag
+    - include: jsx-expression
+    - match: '&(?:#[0-9]+|#x[0-9a-fA-F]+|[A-Za-z]+);'
+      scope: constant.character.entity.ts
+
+  jsx-expression:
+    - match: '\{'
+      scope: punctuation.section.embedded.begin.ts
+      push:
+        - match: '\}'
+          scope: punctuation.section.embedded.end.ts
+          pop: true
+        - include: statements

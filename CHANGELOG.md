@@ -10,6 +10,15 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **TypeScript and JavaScript.** `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs` and `.cjs` files,
+  plain text in Raido before, are highlighted by its own grammar, JSX included
+  (`<T>` stays a generic in `.ts`). `typescript-language-server` brings type errors,
+  completion, hover, go to definition and formatting, and with
+  `format_on_save = ["typescript"]` organizes imports on save. It needs TypeScript
+  6 beside it (`npm install -g typescript-language-server typescript@6`); the
+  install scripts set that up. HTML, XML and JSX tags and their attributes take
+  the theme's keyword and variable colors.
+
 - **Highlighting for PowerShell, `.env`, INI, ignore files, SCSS, Terraform / HCL
   and Protocol Buffers**, by Raido's own grammars: `.ps1` scripts with their
   cmdlets, parameters and `$(…)` in strings; `.env` and `.env.local`; `.ini`,

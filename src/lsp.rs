@@ -1,5 +1,6 @@
 //! A small Language Server Protocol client: diagnostics, hover, go-to-definition,
-//! completion and formatting for Rust, Go, Python, C and C++, shell scripts, YAML
+//! completion and formatting for Rust, Go, Python, C and C++, TypeScript and
+//! JavaScript, shell scripts, YAML
 //! and JSON (checked against the schemas published for them), and Dockerfiles and
 //! Docker Compose files.
 //!
@@ -158,6 +159,11 @@ fn language(path: &Path, first_line: &str) -> Option<Language> {
         "py" | "pyi" => ("python", "python"),
         "c" | "h" => ("c", "c"),
         "cc" | "cpp" | "cxx" | "c++" | "hpp" | "hh" | "hxx" | "h++" => ("c", "cpp"),
+        // One server for both, told which as VS Code tells it.
+        "ts" | "mts" | "cts" => ("typescript", "typescript"),
+        "tsx" => ("typescript", "typescriptreact"),
+        "js" | "mjs" | "cjs" => ("typescript", "javascript"),
+        "jsx" => ("typescript", "javascriptreact"),
         "yaml" | "yml" => ("yaml", "yaml"),
         "json" if json_with_comments(path, &name) => ("json", "jsonc"),
         "json" => ("json", "json"),
@@ -201,6 +207,7 @@ fn defaults(key: &str) -> &'static [(&'static str, &'static [&'static str])] {
             ("jedi-language-server", &[]),
         ],
         "c" => &[("clangd", &[])],
+        "typescript" => &[("typescript-language-server", &["--stdio"])],
         "shell" => &[("bash-language-server", &["start"])],
         "yaml" => &[("yaml-language-server", &["--stdio"])],
         // Arch's package also calls it vscode-json-languageserver.
@@ -219,6 +226,7 @@ fn install_hint(key: &str) -> &'static str {
         "go" => "go install golang.org/x/tools/gopls@latest",
         "python" => "npm install -g pyright  (or: pip install python-lsp-server)",
         "c" => "install clangd (Arch: pacman -S clang · Debian/Ubuntu: apt install clangd · macOS: xcode-select --install)",
+        "typescript" => "npm install -g typescript-language-server typescript@6  (it drives TypeScript 6's tsserver; TypeScript 7 has none)",
         "yaml" => "npm install -g yaml-language-server  (or: brew / pacman install yaml-language-server)",
         "json" => "npm install -g vscode-langservers-extracted  (or: brew install vscode-langservers-extracted · pacman -S vscode-json-languageserver)",
         "shell" => "npm install -g bash-language-server, with shellcheck and shfmt for its warnings and :format (brew / apt / dnf / pacman install shellcheck shfmt)",
@@ -290,6 +298,15 @@ fn locate_in(program: &str, dirs: &[PathBuf]) -> Option<String> {
         let found = crate::platform::which(&dir.join(program).to_string_lossy())?;
         Some(found.to_string_lossy().into_owned())
     })
+}
+
+/// A file's indentation as servers take it: the size of a level, and whether it's
+/// spaces (else tabs).
+fn indentation(buffer: &Buffer, tab_width: usize) -> (usize, bool) {
+    match crate::language::Rules::new(buffer, tab_width).unit.as_str() {
+        "\t" => (tab_width, false),
+        unit => (unit.len(), true),
+    }
 }
 
 /// The part of `settings` a server asks for by name (`yaml`, `http.proxy`), or all
@@ -652,6 +669,8 @@ pub struct Lsp {
     /// YAML and JSON files are checked against the schemas published for them
     /// (`lsp_schemas`), which their servers download; off, only their syntax is.
     pub schemas: bool,
+    /// Spaces in an indentation level for a file that doesn't show its own.
+    pub tab_width: usize,
     /// Kubernetes manifests opened (by their `apiVersion:` and `kind:` lines), as the
     /// YAML server matches files: it checks them against Kubernetes' own schemas.
     kubernetes: BTreeSet<String>,
@@ -694,6 +713,7 @@ impl Lsp {
             diagnostics: HashMap::new(),
             announced: HashSet::new(),
             schemas: true,
+            tab_width: 4,
             kubernetes: BTreeSet::new(),
             catalog: Catalog::default(),
         }
@@ -729,6 +749,33 @@ impl Lsp {
             }
             _ => Value::Null,
         }
+    }
+
+    /// The answer to a server's `workspace/configuration` request: per item, the
+    /// part of its settings it names, or for `formattingOptions` (the TypeScript
+    /// server's) the indentation of the file it names.
+    fn configuration(&self, key: &str, message: &Value, buffers: &[Buffer]) -> Value {
+        let settings = self.settings(key);
+        let items = message.pointer("/params/items").and_then(Value::as_array);
+        Value::Array(
+            items
+                .into_iter()
+                .flatten()
+                .map(|item| match item["section"].as_str() {
+                    Some("formattingOptions") => {
+                        let buffer = item["scopeUri"].as_str().and_then(|uri| {
+                            let (&id, _) = self.docs.iter().find(|(_, d)| d.uri == uri)?;
+                            buffers.get(id)
+                        });
+                        buffer.map_or(Value::Null, |b| {
+                            let (size, spaces) = indentation(b, self.tab_width);
+                            json!({ "tabSize": size, "insertSpaces": spaces })
+                        })
+                    }
+                    name => section(&settings, name),
+                })
+                .collect(),
+        )
     }
 
     /// Tell the server for `key` that its settings changed: the YAML server asks for
@@ -1063,7 +1110,7 @@ impl Lsp {
             bail!("Language servers are disabled (lsp_enabled = false)");
         }
         let lang = language_of(buffer).context(
-            "No language server for this file type (Rust, Go, Python, C, C++, shell, YAML, JSON, Docker)",
+            "No language server for this file type (Rust, Go, Python, C, C++, TypeScript, JavaScript, shell, YAML, JSON, Docker)",
         )?;
         if let Some(reason) = self.failed.get(lang.key) {
             bail!("{reason}");
@@ -1093,11 +1140,7 @@ impl Lsp {
             ),
             Kind::Format => {
                 // The file's own indentation: tabs stay tabs (shfmt, clang-format).
-                let unit = crate::language::Rules::new(buffer, tab_width).unit;
-                let (size, spaces) = match unit.as_str() {
-                    "\t" => (tab_width, false),
-                    unit => (unit.len(), true),
-                };
+                let (size, spaces) = indentation(buffer, tab_width);
                 client.request(
                     "textDocument/formatting",
                     json!({ "textDocument": document, "options": { "tabSize": size, "insertSpaces": spaces } }),
@@ -1145,7 +1188,15 @@ impl Lsp {
     pub fn report(&self) -> String {
         let mut parts = Vec::new();
         for key in [
-            "rust", "go", "python", "c", "shell", "yaml", "json", "docker",
+            "rust",
+            "go",
+            "python",
+            "c",
+            "typescript",
+            "shell",
+            "yaml",
+            "json",
+            "docker",
         ] {
             let state = if let Some(client) = self.clients.get(key) {
                 let on = match &client.python {
@@ -1287,7 +1338,8 @@ impl Lsp {
         // it has started.
         let asks = message["method"] == "workspace/configuration";
         let started = message.get("method").is_none() && message["id"] == 0;
-        let settings = (asks || (started && key == "json")).then(|| self.settings(key));
+        let settings = (started && key == "json").then(|| self.settings(key));
+        let answer = asks.then(|| self.configuration(key, &message, buffers));
         let Some(client) = self.clients.get_mut(key) else {
             return false;
         };
@@ -1320,16 +1372,7 @@ impl Lsp {
                     _ => {}
                 }
                 let result = if method == "workspace/configuration" {
-                    let settings = settings.unwrap_or(Value::Null);
-                    Value::Array(
-                        message
-                            .pointer("/params/items")
-                            .and_then(Value::as_array)
-                            .into_iter()
-                            .flatten()
-                            .map(|item| section(&settings, item["section"].as_str()))
-                            .collect(),
-                    )
+                    answer.unwrap_or(Value::Null)
                 } else {
                     Value::Null
                 };
@@ -1803,6 +1846,20 @@ mod tests {
             assert_eq!((lang.key, lang.id), ("docker", id), "{name}");
         }
         assert!(language("Dockerfile.dockerignore").is_none());
+        // TypeScript's server takes JavaScript too, each by VS Code's name for it.
+        for (name, id) in [
+            ("a.ts", "typescript"),
+            ("a.d.ts", "typescript"),
+            ("a.mts", "typescript"),
+            ("App.tsx", "typescriptreact"),
+            ("a.js", "javascript"),
+            ("a.mjs", "javascript"),
+            ("a.cjs", "javascript"),
+            ("App.jsx", "javascriptreact"),
+        ] {
+            let lang = language(name).unwrap();
+            assert_eq!((lang.key, lang.id), ("typescript", id), "{name}");
+        }
         // YAML to Red Hat's server (Compose files to Docker's); JSON to VS Code's, as
         // JSON with Comments where VS Code reads it so.
         assert_eq!(
@@ -2055,6 +2112,143 @@ while True:
         let mut lsp = start(false, None);
         said(&mut lsp, 0, &|m| m == "store=False k8s= http=None");
         said(&mut lsp, 1, &|m| m == "schemas=0 validate=True");
+    }
+
+    /// The TypeScript server asks for each file's indentation to format with.
+    #[cfg(unix)]
+    #[test]
+    fn the_typescript_server_is_told_each_files_indentation() {
+        if !on_path("python3") {
+            return;
+        }
+        const SERVER: &str = r#"
+import json, sys
+asked = {}
+def send(msg):
+    body = json.dumps(msg)
+    sys.stdout.write("Content-Length: %d\r\n\r\n%s" % (len(body.encode()), body)); sys.stdout.flush()
+def read():
+    length = 0
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line: sys.exit(0)
+        line = line.strip()
+        if not line: break
+        if line.lower().startswith(b"content-length:"): length = int(line.split(b":")[1])
+    return json.loads(sys.stdin.buffer.read(length))
+while True:
+    msg = read(); method = msg.get("method")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {"capabilities": {}}})
+    elif method == "textDocument/didOpen":
+        uri = msg["params"]["textDocument"]["uri"]
+        asked[100 + len(asked)] = uri
+        send({"jsonrpc": "2.0", "id": 99 + len(asked), "method": "workspace/configuration", "params": {"items": [{"scopeUri": uri, "section": "formattingOptions"}]}})
+    elif method is None and "result" in msg:
+        o = msg["result"][0]
+        send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {"uri": asked[msg["id"]], "diagnostics": [
+            {"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}}, "severity": 2, "message": "%s %s" % (o["tabSize"], o["insertSpaces"])}]}})
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let tabs = dir.path().join("tabs.ts");
+        let two = dir.path().join("two.js");
+        std::fs::write(&tabs, "function f() {\n\treturn 1;\n}\n").unwrap();
+        std::fs::write(&two, "function f() {\n  return 1;\n}\n").unwrap();
+        let buffers = vec![Buffer::open(&tabs).unwrap(), Buffer::open(&two).unwrap()];
+        let mut overrides = BTreeMap::new();
+        overrides.insert(
+            "typescript".to_string(),
+            CommandPlugin {
+                program: "python3".into(),
+                args: vec!["-c".into(), SERVER.into()],
+            },
+        );
+        let mut lsp = Lsp::new(dir.path().into(), true, overrides);
+        lsp.tab_width = 8;
+        lsp.sync(&buffers, &[0, 1]);
+        for _ in 0..300 {
+            lsp.poll(&buffers);
+            if lsp.diagnostics.len() == 2 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let said = |id: usize| lsp.diagnostics.get(&id).map(|d| d[0].message.clone());
+        assert_eq!(said(0).as_deref(), Some("8 False"));
+        assert_eq!(said(1).as_deref(), Some("2 True"));
+    }
+
+    /// The real TypeScript server: a type error, completion and formatting.
+    #[test]
+    #[ignore = "talks to the real server: RAIDO_TS_LS=<path> cargo test real_typescript -- --ignored (typescript installed beside it)"]
+    fn real_typescript_server_checks_completes_and_formats() {
+        let program = std::env::var("RAIDO_TS_LS").unwrap_or("typescript-language-server".into());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.ts");
+        std::fs::write(
+            &path,
+            "const count: number = \"three\";\nconst word = \"hi\";\nword.toU\nfunction f(){return 1}\n",
+        )
+        .unwrap();
+        let mut buffer = Buffer::open(&path).unwrap();
+        (buffer.row, buffer.col) = (2, 8);
+        let buffers = vec![buffer];
+        let mut overrides = BTreeMap::new();
+        overrides.insert(
+            "typescript".to_string(),
+            CommandPlugin {
+                program,
+                args: vec!["--stdio".into()],
+            },
+        );
+        let mut lsp = Lsp::new(dir.path().into(), true, overrides);
+        lsp.sync(&buffers, &[0]);
+        let ask = |lsp: &mut Lsp, kind: Kind| -> Event {
+            let mut asked = false;
+            for _ in 0..1500 {
+                if !asked {
+                    asked = lsp.request(kind, 0, &buffers[0], 4).is_ok();
+                }
+                let (events, _) = lsp.poll(&buffers);
+                if let Some(event) = events
+                    .into_iter()
+                    .find(|e| matches!(e, Event::Completion { .. } | Event::Format { .. }))
+                {
+                    return event;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            panic!("no answer to {kind:?}");
+        };
+        let Event::Completion { items, .. } = ask(&mut lsp, Kind::Completion) else {
+            panic!("completion")
+        };
+        assert!(
+            items.iter().any(|i| i.label == "toUpperCase"),
+            "{:?}",
+            items.iter().map(|i| &i.label).take(20).collect::<Vec<_>>()
+        );
+        for _ in 0..1500 {
+            lsp.poll(&buffers);
+            if lsp.diagnostics.get(&0).is_some_and(|d| !d.is_empty()) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let found: Vec<String> = lsp.diagnostics[&0]
+            .iter()
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(
+            found
+                .iter()
+                .any(|m| m.contains("not assignable to type 'number'")),
+            "{found:?}"
+        );
+        let Event::Format { edits, .. } = ask(&mut lsp, Kind::Format) else {
+            panic!("format")
+        };
+        assert!(!edits.is_empty());
     }
 
     fn language_at(name: &str, first_line: &str) -> Option<Language> {
