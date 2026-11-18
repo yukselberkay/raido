@@ -114,7 +114,7 @@ impl Search {
 
 /// The project's files: Git's list (tracked and untracked, not ignored), else a walk
 /// that skips `.git` and build output.
-fn files(root: &Path) -> Vec<PathBuf> {
+pub fn project_files(root: &Path) -> Vec<PathBuf> {
     let listed = Command::new("git")
         .args([
             "ls-files",
@@ -177,7 +177,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
 fn run(root: &Path, query: &str, cancel: &AtomicBool, sender: &Sender<(Vec<Hit>, bool)>) {
     let ignore_case = !query.chars().any(char::is_uppercase);
     let found = |text: &str| crate::editor::find_all(text, query, ignore_case, false);
-    let files = files(root);
+    let files = project_files(root);
     let mut total = 0;
     // Names first.
     let names: Vec<Hit> = files

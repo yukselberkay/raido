@@ -10,6 +10,11 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **`Ctrl-p` finds a file by a few of its letters**, as VS Code's quick open does:
+  `mnrs` opens `src/main.rs`, the best matches first and the matched letters
+  highlighted, the files you opened last first when nothing's typed, and `main.rs:42`
+  to a line. It replaces the path prompt and its Tab completion.
+
 - **Completions bring their imports.** Accepting `useState` in TypeScript adds
   `import { useState } from "react";`, and the Go, Rust, Python and C++ servers'
   suggestions do the same, as in VS Code; the status line says what was added.

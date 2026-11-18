@@ -704,6 +704,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.picker.is_some() {
         theme_picker(frame, app, area);
     }
+    if app.finder.is_some() {
+        file_finder(frame, app, area);
+    }
     if app.dock_list.is_some() {
         dock_list(frame, app, area);
     }
@@ -816,6 +819,121 @@ fn dock_list(frame: &mut Frame, app: &App, area: Rect) {
         frame.render_widget(
             Paragraph::new(row).style(style),
             Rect::new(inner.x, inner.y + n as u16, inner.width, 1),
+        );
+    }
+}
+
+/// Ctrl-p: the query, then the files that match it, best first: the name, then its
+/// folder dimmed, the matched letters in the accent color; open files marked.
+fn file_finder(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(finder) = &app.finder else {
+        return;
+    };
+    let theme = &app.theme;
+    let width = area.width.saturating_sub(4).min(96);
+    let rows = finder.shown.len().clamp(1, 18);
+    let height = (rows as u16 + 4).min(area.height.saturating_sub(2));
+    let rect = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + 1.min(area.height),
+        width,
+        height,
+    );
+    frame.render_widget(Clear, rect);
+    let count = if finder.loading() && finder.files.is_empty() {
+        "reading the files…".to_string()
+    } else {
+        format!("{} files", finder.files.len())
+    };
+    let block = panel(
+        format!(" OPEN FILE · {count} · ↑↓ · Enter open · file:42 to a line · Esc "),
+        theme,
+        true,
+    )
+    .style(Style::default().bg(color(&theme.background)));
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    if inner.height < 2 {
+        return;
+    }
+    let query = Line::from(vec![
+        Span::styled(" › ", Style::default().fg(color(&theme.accent))),
+        Span::styled(
+            printable(&finder.query),
+            Style::default().fg(color(&theme.foreground)),
+        ),
+        Span::styled("▏", Style::default().fg(color(&theme.accent))),
+    ]);
+    frame.render_widget(
+        Paragraph::new(query),
+        Rect::new(inner.x, inner.y, inner.width, 1),
+    );
+    let visible = (inner.height - 1) as usize;
+    let top = finder.selected.saturating_sub(visible.saturating_sub(1));
+    let chosen = crate::markdown::mix(color(&theme.selection), color(&theme.accent), 0.45);
+    if finder.shown.is_empty() {
+        let note = if finder.query.trim().is_empty() {
+            "No files here"
+        } else {
+            "No file matches · Enter makes a new file by that name"
+        };
+        text(
+            frame,
+            Rect::new(inner.x + 1, inner.y + 1, inner.width.saturating_sub(1), 1),
+            note,
+            color(&theme.muted),
+        );
+    }
+    let open: Vec<std::path::PathBuf> = app.buffers.iter().filter_map(|b| b.path.clone()).collect();
+    let root = app.root.canonicalize().unwrap_or_else(|_| app.root.clone());
+    for (offset, (index, at)) in finder.shown.iter().skip(top).take(visible).enumerate() {
+        let path = &finder.files[*index];
+        let selected = top + offset == finder.selected;
+        let base = if selected {
+            Style::default().bg(chosen)
+        } else {
+            Style::default()
+        };
+        let split = path.rfind('/').map_or(0, |i| i + 1);
+        let is_open = open.contains(&root.join(path));
+        let mut spans = vec![Span::styled(
+            if is_open { " ● " } else { "   " },
+            base.fg(color(&theme.accent)),
+        )];
+        // The name, then the folder: each character in its color.
+        let piece = |range: std::ops::Range<usize>, fg: Color, bold: bool| -> Vec<Span<'static>> {
+            path.chars()
+                .enumerate()
+                .skip(range.start)
+                .take(range.end - range.start)
+                .map(|(i, c)| {
+                    let mut style = base.fg(if at.contains(&i) {
+                        color(&theme.accent)
+                    } else {
+                        fg
+                    });
+                    if bold || at.contains(&i) {
+                        style = style.add_modifier(Modifier::BOLD);
+                    }
+                    Span::styled(printable(&c.to_string()), style)
+                })
+                .collect()
+        };
+        let chars = path.chars().count();
+        let name_start = path[..split].chars().count();
+        spans.extend(piece(name_start..chars, color(&theme.foreground), false));
+        if name_start > 0 {
+            spans.push(Span::styled("  ", base));
+            spans.extend(piece(0..name_start - 1, color(&theme.muted), false));
+        }
+        let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        spans.push(Span::styled(
+            " ".repeat((inner.width as usize).saturating_sub(used)),
+            base,
+        ));
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)),
+            Rect::new(inner.x, inner.y + 1 + offset as u16, inner.width, 1),
         );
     }
 }
@@ -2995,7 +3113,6 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
         let prefix = match input.kind {
             InputKind::Command => ":",
             InputKind::Search => "/",
-            InputKind::Open => "open > ",
         };
         let text = format!("{prefix}{}", input.text);
         let cols = display_width(text.chars(), 4);
@@ -3251,7 +3368,7 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
             "Fold folder / collapse all / expand all inside",
         ),
         ("r / n", "Refresh / new file"),
-        ("Ctrl-p / Tab", "Open path / complete files and folders"),
+        ("Ctrl-p", "Open a file by a few letters (file:42 to a line)"),
         ("EDITOR", "Vim-inspired, not a full Vim implementation"),
         (
             "i a I A o O / Esc",

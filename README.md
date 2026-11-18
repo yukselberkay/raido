@@ -493,7 +493,7 @@ Shift on many keyboard layouts. On macOS, **Ctrl means Control, not Command**.
 | Shortcut | Action |
 | --- | --- |
 | `Ctrl-e` | Focus the file explorer (also from the Git section); in the explorer, return to the pane |
-| `Ctrl-p` | Open a path; Tab completes files and folders, and inside folders (Enter on a folder opens it in the explorer) |
+| `Ctrl-p` | [Open a file by a few of its letters](#prompt-and-buffer-behavior) (`mnrs` → `src/main.rs`), the ones you opened last first; `main.rs:42` goes to line 42 |
 | `Ctrl-s` | Save editor buffer |
 | `Ctrl-q` | Quit, refusing unsaved buffers |
 | `Ctrl-b %` / `Ctrl-b "` | Side-by-side / stacked editor split |
@@ -562,7 +562,7 @@ stops at 2,000 results.
 
 Dotfiles and dot-directories (`.github`, `.env`, `.git`, `.raido`, …) are always shown.
 Only `target` and `node_modules` build output is left out of the tree; `Ctrl-p` still
-opens files there.
+opens files there by their full path.
 
 Like VS Code, the explorer shows what Git sees, refreshed every few seconds:
 
@@ -1530,13 +1530,22 @@ output. Try it with [examples/lab-scan.nmap](examples/lab-scan.nmap).
 
 ### Prompt and buffer behavior
 
-Command/search/path prompts support typing, Backspace, Enter and Escape. In the
-Ctrl-p path prompt, Tab completes like a shell, from the files on disk: a single
-match is filled in, folders with a trailing `/` so the next Tab completes what's
-inside; several matches fill in what they share and are listed, and more Tabs step
-through them. Hidden names complete once you type the leading `.`, and case is
-ignored when nothing matches exactly. Enter on a folder opens it in the explorer.
-It is not a fuzzy full-project index. Editor paths may be absolute or workspace-relative;
+Command and search prompts support typing, Backspace, Enter and Escape.
+
+**`Ctrl-p` opens a file by a few of its letters**, as VS Code's quick open and fzf
+do: `mnrs` finds `src/main.rs`, `srcapp` finds `src/app.rs`. The letters go in order,
+anywhere in the path; the best matches come first: letters at the start of a name or
+word, one after another, in the file's own name, shorter paths among equals. The
+matched letters are highlighted, each file shows its name and then its folder, and
+`●` marks the ones already open. With nothing typed, the files you opened last come
+first. Case is ignored unless you type a capital. ↑/↓ (`Ctrl-n`/`Ctrl-p`, Tab) choose,
+Enter opens, `Ctrl-u` clears, Escape closes, and a paste goes into the query.
+`main.rs:42` opens it on line 42. It lists the project's files as Git sees them
+(new ones too, ignored ones not), else every file but `.git`, `target` and
+`node_modules`, read in the background. A path nothing matches opens as a new file
+(in a folder that exists), and a folder's path shows it in the explorer.
+
+Editor paths may be absolute or workspace-relative;
 `~` and shell variables are not expanded there. Type paths with spaces directly,
 without shell quotes. Shell commands follow your shell's normal quoting rules.
 

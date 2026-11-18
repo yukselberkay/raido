@@ -35,42 +35,6 @@ pub struct FileTree {
     shown: Vec<(PathBuf, Option<SystemTime>)>,
 }
 
-/// Tab completion for a path typed in Ctrl-p (relative to `root`, or absolute): the
-/// entries of the folder typed so far whose names start with the rest, folders
-/// first and ending in `/` so the next Tab goes inside. Hidden ones only when the
-/// name typed starts with `.`; case is ignored when nothing matches exactly.
-pub fn complete_path(root: &Path, typed: &str) -> Vec<String> {
-    let (folder, prefix) = match typed.rfind('/') {
-        Some(at) => typed.split_at(at + 1),
-        None => ("", typed),
-    };
-    let Ok(read) = fs::read_dir(root.join(folder)) else {
-        return Vec::new();
-    };
-    let mut found: Vec<(bool, String)> = read
-        .filter_map(|e| e.ok())
-        .filter_map(|entry| {
-            let name = entry.file_name().to_str()?.to_string();
-            (prefix.starts_with('.') || !name.starts_with('.'))
-                .then(|| (entry.path().is_dir(), name))
-        })
-        .collect();
-    let exact = found.iter().any(|(_, n)| n.starts_with(prefix));
-    let lower = prefix.to_lowercase();
-    found.retain(|(_, name)| {
-        if exact {
-            name.starts_with(prefix)
-        } else {
-            name.to_lowercase().starts_with(&lower)
-        }
-    });
-    found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    found
-        .into_iter()
-        .map(|(dir, name)| format!("{folder}{name}{}", if dir { "/" } else { "" }))
-        .collect()
-}
-
 /// Whether `folder` gained, lost or renamed an entry since it read `then`, and its
 /// time now. A time changed in the last moments counts too: on file systems with
 /// coarse times, a second change within the same tick leaves the time as it was.

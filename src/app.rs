@@ -75,7 +75,6 @@ pub enum Mode {
 pub enum InputKind {
     Command,
     Search,
-    Open,
 }
 pub struct Input {
     pub kind: InputKind,
@@ -432,6 +431,13 @@ pub struct App {
     pub hover: Option<String>,
     pub menu: Option<Menu>,
     pub picker: Option<ThemePicker>,
+    /// Ctrl-p: open a file by a few of its letters.
+    pub finder: Option<crate::finder::Finder>,
+    /// The project's files as the finder last read them, shown while it reads again.
+    known_files: Vec<String>,
+    /// Files opened, most recent first, relative to the root: the finder lists them
+    /// first.
+    recent: Vec<String>,
     /// Buffer opened by browsing the sidebar, and its revision then. It is reused
     /// for the next browsed file unless it was opened with Enter or edited.
     peek: Option<(usize, u64)>,
@@ -611,6 +617,9 @@ impl App {
             hover: None,
             menu: None,
             picker: None,
+            finder: None,
+            known_files: Vec::new(),
+            recent: Vec::new(),
             peek: None,
             skill_ready: false,
             cursor_at: None,
@@ -731,6 +740,101 @@ impl App {
     /// is; or go to the pane showing it already. An empty pane is filled instead.
     pub fn open(&mut self, path: &Path) -> Result<()> {
         self.open_file(path, Open::Pane)
+    }
+    /// Remember `path` as opened just now, for the finder.
+    fn opened(&mut self, path: &Path) {
+        let root = self
+            .root
+            .canonicalize()
+            .unwrap_or_else(|_| self.root.clone());
+        let Ok(relative) = path
+            .strip_prefix(&root)
+            .or_else(|_| path.strip_prefix(&self.root))
+        else {
+            return;
+        };
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        self.recent.retain(|r| *r != relative);
+        self.recent.insert(0, relative);
+        self.recent.truncate(50);
+    }
+    /// Ctrl-p: the finder, on the project's files, those opened last first (the open
+    /// buffers' too, as a session brings them back).
+    fn open_finder(&mut self) {
+        for path in self.buffers.iter().rev().filter_map(|b| b.path.clone()) {
+            let root = self
+                .root
+                .canonicalize()
+                .unwrap_or_else(|_| self.root.clone());
+            if let Ok(relative) = path.strip_prefix(&root) {
+                let relative = relative.to_string_lossy().replace('\\', "/");
+                if !self.recent.contains(&relative) {
+                    self.recent.push(relative);
+                }
+            }
+        }
+        self.finder = Some(crate::finder::Finder::new(
+            &self.root,
+            self.known_files.clone(),
+            self.recent.clone(),
+        ));
+        self.sidebar_focus = false;
+    }
+    fn finder_key(&mut self, key: KeyEvent) -> Result<()> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        // Ctrl-q and the Ctrl-b prefix still work: close the finder, then act on them.
+        if ctrl && matches!(key.code, KeyCode::Char('q' | 'b')) {
+            self.finder = None;
+            return self.key(key);
+        }
+        let Some(finder) = self.finder.as_mut() else {
+            return Ok(());
+        };
+        match key.code {
+            KeyCode::Esc => self.finder = None,
+            KeyCode::Enter => {
+                let finder = self.finder.take().expect("finder open");
+                return self.finder_open(&finder);
+            }
+            KeyCode::Up | KeyCode::BackTab => finder.step(-1),
+            KeyCode::Char('p' | 'k') if ctrl => finder.step(-1),
+            KeyCode::Down | KeyCode::Tab => finder.step(1),
+            KeyCode::Char('n' | 'j') if ctrl => finder.step(1),
+            KeyCode::PageUp => finder.step(-10),
+            KeyCode::PageDown => finder.step(10),
+            KeyCode::Char('u') if ctrl => {
+                finder.query.clear();
+                finder.refilter();
+            }
+            KeyCode::Backspace => {
+                finder.query.pop();
+                finder.refilter();
+            }
+            KeyCode::Char(c) if !ctrl => {
+                finder.query.push(c);
+                finder.refilter();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    /// Enter in the finder: the chosen file, at the line after a `:` (`main.rs:42`);
+    /// with none, the path typed: a folder shown in the explorer, else a new file.
+    fn finder_open(&mut self, finder: &crate::finder::Finder) -> Result<()> {
+        let (typed, line) = finder.target();
+        let typed = typed.trim();
+        if !typed.is_empty() && self.root.join(typed).is_dir() {
+            return self.show_folder(&self.root.join(typed));
+        }
+        match finder.chosen() {
+            Some(file) => self.open(Path::new(file))?,
+            None if !typed.is_empty() => self.open(Path::new(typed))?,
+            None => return Ok(()),
+        }
+        if let (Some(line), Some(b)) = (line, self.active_buffer()) {
+            b.goto(line);
+        }
+        Ok(())
     }
     /// Keep the quick diff of every buffer on screen current; with `refetch`, ask Git
     /// for the index versions again (something may have been staged or committed).
@@ -1084,6 +1188,9 @@ impl App {
             }
         } else if self.peek.is_some_and(|(p, _)| p == id) {
             self.peek = None;
+        }
+        if !peek {
+            self.opened(&canonical);
         }
         // A file whose line endings `line_endings` changed says so as it opens.
         let eol = match &self.buffers[id] {
@@ -1681,6 +1788,12 @@ impl App {
     }
     pub fn tick(&mut self) {
         crate::ide::tick(self);
+        if let Some(finder) = &mut self.finder {
+            if finder.poll() {
+                self.known_files = finder.files.clone();
+                self.redraw = true;
+            }
+        }
         match self.panes.get(&self.focused) {
             Some(Pane::Terminal(t)) if t.is_agent() => self.last_ai = Some(self.focused),
             Some(Pane::Terminal(t)) if t.launch == Launch::Shell => {
@@ -2006,7 +2119,14 @@ impl App {
                 Ok(())
             }
             Event::Paste(text) => {
-                if self.explorer_search.is_some() && self.sidebar_focus && !self.git_focus {
+                if let Some(finder) = &mut self.finder {
+                    let line = text.lines().next().unwrap_or_default();
+                    finder
+                        .query
+                        .extend(line.chars().filter(|c| !c.is_control()));
+                    finder.refilter();
+                    Ok(())
+                } else if self.explorer_search.is_some() && self.sidebar_focus && !self.git_focus {
                     self.explorer_search_type(&text);
                     Ok(())
                 } else if self.find.is_some() {
@@ -2615,6 +2735,9 @@ impl App {
         if self.picker.is_some() {
             return self.picker_key(key);
         }
+        if self.finder.is_some() {
+            return self.finder_key(key);
+        }
         if self.dock_list.is_some() {
             return self.dock_list_key(key);
         }
@@ -2650,7 +2773,7 @@ impl App {
             return self.quit(false);
         }
         if ctrl && key.code == KeyCode::Char('p') {
-            self.input_start(InputKind::Open);
+            self.open_finder();
             return Ok(());
         }
         if ctrl && key.code == KeyCode::Char('e') {
@@ -5715,14 +5838,6 @@ impl App {
                             }
                         }
                     }
-                    InputKind::Open => {
-                        let path = self.root.join(&input.text);
-                        if !input.text.is_empty() && path.is_dir() {
-                            self.show_folder(&path)?;
-                        } else if !input.text.is_empty() {
-                            self.open(Path::new(&input.text))?;
-                        }
-                    }
                 }
             }
             KeyCode::Tab => {
@@ -5745,61 +5860,12 @@ impl App {
                     }
                     return Ok(());
                 }
-                if kind == InputKind::Open {
-                    self.complete_open(&text);
-                }
             }
             _ => {}
         }
         Ok(())
     }
-    /// Tab in Ctrl-p completes the path like a shell: one match is filled in (a
-    /// folder with `/`, so the next Tab goes inside it); several fill in what they
-    /// share and are listed, and Tab again steps through them.
-    fn complete_open(&mut self, text: &str) {
-        let (typed, step) = match self.completion.take() {
-            Some((typed, index)) => (typed, Some(index + 1)),
-            None => (text.to_string(), None),
-        };
-        let found = workspace::complete_path(&self.root, &typed);
-        let mut fill = |value: &str| {
-            if let Some(input) = self.input.as_mut() {
-                input.text = value.to_string();
-            }
-        };
-        match (found.len(), step) {
-            (0, _) => self.notice(format!("Nothing matches {}", workspace::printable(&typed))),
-            (1, _) => fill(&found[0]),
-            (n, Some(index)) => {
-                fill(&found[index % n]);
-                self.completion = Some((typed, index));
-            }
-            (n, None) => {
-                let shared = found.iter().skip(1).fold(found[0].clone(), |shared, next| {
-                    shared
-                        .chars()
-                        .zip(next.chars())
-                        .take_while(|(a, b)| a == b)
-                        .map(|(a, _)| a)
-                        .collect()
-                });
-                if shared.chars().count() > typed.chars().count() {
-                    fill(&shared);
-                } else {
-                    fill(&found[0]);
-                    self.completion = Some((typed.clone(), 0));
-                }
-                let folder = typed.rfind('/').map_or(0, |at| at + 1);
-                let names: Vec<&str> = found.iter().map(|f| &f[folder..]).take(12).collect();
-                let more = if n > 12 { "  …" } else { "" };
-                self.notice(format!(
-                    "{n} matches · Tab steps through: {}{more}",
-                    names.join("  ")
-                ));
-            }
-        }
-    }
-    /// Enter on a folder in Ctrl-p: show it, opened, in the explorer.
+    /// A folder typed in Ctrl-p: show it, opened, in the explorer.
     fn show_folder(&mut self, path: &Path) -> Result<()> {
         let dir = path.canonicalize()?;
         if !dir.starts_with(&self.root) {
@@ -6531,59 +6597,91 @@ mod tests {
         assert_eq!(col(&app), (0, 3));
     }
     #[test]
-    fn ctrl_p_tab_completes_folders_and_what_is_inside_them() {
+    fn ctrl_p_finds_files_by_a_few_letters_recent_ones_first() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
-        for file in ["src/main.rs", "src/model/user.rs", "scripts/run.sh", ".env"] {
+        for file in [
+            "src/main.rs",
+            "src/model/user.rs",
+            "src/markdown.rs",
+            "scripts/run.sh",
+            "notes.md",
+        ] {
             let path = root.join(file);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(&path, "x\n").unwrap();
+            std::fs::write(&path, "one\ntwo\nthree\n").unwrap();
         }
         let mut app = App::new(root.clone(), None, false).unwrap();
-        let text = |app: &App| app.input.as_ref().unwrap().text.clone();
         let typed = |app: &mut App, keys: &str| {
             for c in keys.chars() {
                 let code = match c {
-                    '\t' => KeyCode::Tab,
                     '\n' => KeyCode::Enter,
                     c => KeyCode::Char(c),
                 };
                 press(app, code, KeyModifiers::NONE);
             }
         };
+        let settle = |app: &mut App| {
+            for _ in 0..300 {
+                app.tick();
+                if app.finder.as_ref().is_some_and(|f| !f.loading()) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            panic!("the file list never came");
+        };
+        let name = |app: &App| app.buffers[app.buffer_id().unwrap()].name();
         press(&mut app, KeyCode::Char('p'), KeyModifiers::CONTROL);
-        // Two folders start with s: listed, and Tab steps through them.
-        typed(&mut app, "s\t");
-        assert_eq!(text(&app), "scripts/");
-        assert!(app.message.contains("2 matches"), "{}", app.message);
-        typed(&mut app, "\t");
-        assert_eq!(text(&app), "src/");
-        // Into the folder: what they share is filled in, then one is left.
-        typed(&mut app, "mo\t");
-        assert_eq!(text(&app), "src/model/");
-        typed(&mut app, "\t");
-        assert_eq!(text(&app), "src/model/user.rs");
+        settle(&mut app);
+        assert_eq!(app.finder.as_ref().unwrap().files.len(), 5);
+        // A few letters in order: src/main.rs, not markdown or model.
+        typed(&mut app, "mnrs");
+        assert_eq!(app.finder.as_ref().unwrap().chosen(), Some("src/main.rs"));
+        // Drawn over the editor: the query, then the name and, dimmed, its folder.
+        let drawn = screen(&mut app, 100, 24).join("\n");
+        assert!(drawn.contains("OPEN FILE · 5 files"), "{drawn}");
+        assert!(drawn.contains("› mnrs"), "{drawn}");
+        assert!(drawn.contains("main.rs  src"), "{drawn}");
         typed(&mut app, "\n");
-        assert!(app.buffers[app.buffer_id().unwrap()]
-            .name()
-            .contains("user.rs"));
-        // Case is ignored when nothing matches exactly; hidden names need a dot.
+        assert!(app.finder.is_none());
+        assert!(name(&app).contains("main.rs"));
+        // To a line: user.rs:3.
         press(&mut app, KeyCode::Char('p'), KeyModifiers::CONTROL);
-        typed(&mut app, "src/MA\t");
-        assert_eq!(text(&app), "src/main.rs");
-        assert!(workspace::complete_path(&root, "")
-            .iter()
-            .all(|p| !p.starts_with('.')));
-        assert_eq!(workspace::complete_path(&root, ".e"), vec![".env"]);
-        assert!(workspace::complete_path(&root, "nothing/").is_empty());
-        // Enter on a folder shows it, opened, in the explorer.
+        settle(&mut app);
+        typed(&mut app, "user:3\n");
+        assert!(name(&app).contains("user.rs"));
+        assert_eq!(app.buffers[app.buffer_id().unwrap()].row, 2);
+        // With nothing typed, the files opened last come first; ↓ and Esc.
+        press(&mut app, KeyCode::Char('p'), KeyModifiers::CONTROL);
+        settle(&mut app);
+        let finder = app.finder.as_ref().unwrap();
+        assert_eq!(finder.chosen(), Some("src/model/user.rs"));
+        press(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.finder.as_ref().unwrap().chosen(), Some("src/main.rs"));
         press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert!(app.finder.is_none());
+        assert!(name(&app).contains("user.rs"));
+        // A paste goes into the query; a name nothing matches makes a new file.
         press(&mut app, KeyCode::Char('p'), KeyModifiers::CONTROL);
+        settle(&mut app);
+        app.event(Event::Paste("src/new.rs".into()));
+        assert_eq!(app.finder.as_ref().unwrap().query, "src/new.rs");
+        assert_eq!(app.finder.as_ref().unwrap().chosen(), None);
+        typed(&mut app, "\n");
+        assert!(
+            name(&app).contains("new.rs"),
+            "{} · {}",
+            name(&app),
+            app.message
+        );
+        // A folder typed shows in the explorer, opened.
+        press(&mut app, KeyCode::Char('p'), KeyModifiers::CONTROL);
+        settle(&mut app);
         typed(&mut app, "src/model\n");
         let model = root.join("src/model");
         assert!(app.sidebar_focus && !app.git_focus);
         assert!(app.tree.expanded.contains(&model));
-        assert_eq!(app.tree.entries[app.tree.selected].path, model);
     }
     #[test]
     fn typing_python_indents_after_a_colon_and_closes_brackets() {
