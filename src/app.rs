@@ -4506,6 +4506,18 @@ impl App {
             lsp::Event::Notice(text) => self.notice(text),
             lsp::Event::Error(text) => self.fail(text),
             lsp::Event::Hover(text) => self.hover = Some(text),
+            // The import a completion needs, asked for once it was accepted: added
+            // with the cursor kept on its text.
+            lsp::Event::Imports { buffer, edits } => {
+                let Some(b) = self.buffers.get_mut(buffer) else {
+                    return;
+                };
+                let cursor = b.index();
+                let shift: isize = edits.iter().filter(|e| e.1 <= cursor).map(grows).sum();
+                b.apply_edits(edits.clone());
+                b.set_index(cursor.saturating_add_signed(shift));
+                self.notice_imports(&edits);
+            }
             lsp::Event::Definition {
                 path,
                 line,
@@ -4642,12 +4654,42 @@ impl App {
         let Some(menu) = self.menu.take() else {
             return;
         };
-        let item = &menu.items[menu.shown[menu.selected]];
+        let item = menu.items[menu.shown[menu.selected]].clone();
         let b = &mut self.buffers[menu.buffer];
         let start_col = item.start.unwrap_or(menu.start).min(b.col);
         let start = b.char_index(menu.row, start_col);
         let end = b.index();
-        b.replace(start, end, &item.insert);
+        if item.extra.is_empty() {
+            b.replace(start, end, &item.insert);
+        } else {
+            // With the import it needs, as one undo step; the cursor after it.
+            let mut edits: Vec<_> = item
+                .extra
+                .iter()
+                .filter(|e| e.1 <= start || e.0 >= end)
+                .cloned()
+                .collect();
+            let before: isize = edits.iter().filter(|e| e.1 <= start).map(grows).sum();
+            edits.push((start, end, item.insert.clone()));
+            b.apply_edits(edits);
+            b.set_index(start.saturating_add_signed(before) + item.insert.chars().count());
+            self.notice_imports(&item.extra);
+        }
+        if let Some(raw) = item.resolve {
+            self.lsp
+                .resolve(menu.buffer, &self.buffers[menu.buffer], raw);
+        }
+    }
+    /// Say which import a completion added: its first line.
+    fn notice_imports(&mut self, edits: &[(usize, usize, String)]) {
+        let added = edits
+            .iter()
+            .flat_map(|e| e.2.lines())
+            .map(str::trim)
+            .find(|line| !line.is_empty());
+        if let Some(line) = added {
+            self.notice(format!("Added {line}"));
+        }
     }
     fn next_diagnostic(&mut self, backwards: bool) {
         let Some(id) = self.buffer_id() else {
@@ -6288,6 +6330,11 @@ fn is_motion(code: KeyCode) -> bool {
 }
 
 /// Normal-mode motions that also extend a `v`/`V` selection.
+/// How much an edit `(start, end, text)` lengthens the text before what follows it.
+fn grows(edit: &(usize, usize, String)) -> isize {
+    edit.2.chars().count() as isize - (edit.1 - edit.0) as isize
+}
+
 /// The key `gc` waits on: a second `c` comments out lines (`gcc`).
 const COMMENT_LINES: char = '\u{1}';
 
@@ -7212,6 +7259,192 @@ mod tests {
         assert_eq!(text(&mut app), "Z");
         assert_eq!(app.mode, Mode::Insert);
     }
+    /// Accepting a completion adds the import it needs: with it (gopls, rust-analyzer),
+    /// or once it's asked for (TypeScript's server, `completionItem/resolve`).
+    #[cfg(unix)]
+    #[test]
+    fn accepted_completions_bring_their_imports() {
+        if std::process::Command::new("python3")
+            .arg("-V")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        const SERVER: &str = r#"
+import json, sys
+def send(msg):
+    body = json.dumps(msg)
+    sys.stdout.write("Content-Length: %d\r\n\r\n%s" % (len(body.encode()), body)); sys.stdout.flush()
+def read():
+    length = 0
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line: sys.exit(0)
+        line = line.strip()
+        if not line: break
+        if line.lower().startswith(b"content-length:"): length = int(line.split(b":")[1])
+    return json.loads(sys.stdin.buffer.read(length))
+top = {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}}
+while True:
+    msg = read(); method = msg.get("method"); id = msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": id, "result": {"capabilities": {"completionProvider": {"resolveProvider": True}}}})
+    elif method == "textDocument/completion":
+        send({"jsonrpc": "2.0", "id": id, "result": {"items": [
+            {"label": "useState", "sortText": "1", "data": {"file": "a.ts"}},
+            {"label": "useMemo", "sortText": "2", "additionalTextEdits": [{"range": top, "newText": "import { useMemo } from \"react\";\n"}]}]}})
+    elif method == "completionItem/resolve":
+        item = dict(msg["params"])
+        if item["label"] == "useState":
+            item["additionalTextEdits"] = [{"range": top, "newText": "import { useState } from \"react\";\n"}]
+        send({"jsonrpc": "2.0", "id": id, "result": item})
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.ts");
+        std::fs::write(&path, "const a = 1;\n").unwrap();
+        let mut app = App::new(dir.path().into(), Some(path), false).unwrap();
+        let mut servers = BTreeMap::new();
+        servers.insert(
+            "typescript".to_string(),
+            crate::config::CommandPlugin {
+                program: "python3".into(),
+                args: vec!["-c".into(), SERVER.into()],
+            },
+        );
+        app.lsp = Lsp::new(dir.path().into(), true, servers);
+        let settle = |app: &mut App, done: &dyn Fn(&App) -> bool| {
+            for _ in 0..300 {
+                app.tick();
+                if done(app) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            panic!("timed out: {}", app.message);
+        };
+        let text = |app: &App| app.buffers[app.buffer_id().unwrap()].text.to_string();
+        let id = app.buffer_id().unwrap();
+        settle(&mut app, &|a| {
+            a.lsp.status(id, &a.buffers[id]).as_deref() == Some("python3")
+        });
+        // useState: its import comes once it's asked for.
+        press(&mut app, KeyCode::Char('o'), KeyModifiers::NONE);
+        for c in "use".chars() {
+            press(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        press(&mut app, KeyCode::Char(' '), KeyModifiers::CONTROL);
+        settle(&mut app, &|a| a.menu.is_some());
+        press(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(text(&app), "const a = 1;\nuseState\n");
+        settle(&mut app, &|a| text(a).starts_with("import { useState }"));
+        assert_eq!(
+            text(&app),
+            "import { useState } from \"react\";\nconst a = 1;\nuseState\n"
+        );
+        assert!(
+            app.message.contains("Added import { useState }"),
+            "{}",
+            app.message
+        );
+        // The cursor stayed after what was typed.
+        let b = &app.buffers[id];
+        assert_eq!((b.row, b.col), (2, 8));
+        // useMemo: its import comes with it, in the same undo step.
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        for c in "use".chars() {
+            press(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        press(&mut app, KeyCode::Char(' '), KeyModifiers::CONTROL);
+        settle(&mut app, &|a| a.menu.is_some());
+        press(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        press(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(
+            text(&app),
+            "import { useMemo } from \"react\";\nimport { useState } from \"react\";\nconst a = 1;\nuseState\nuseMemo\n"
+        );
+        let b = &app.buffers[id];
+        assert_eq!((b.row, b.col), (4, 7));
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('u'), KeyModifiers::NONE);
+        assert_eq!(
+            text(&app),
+            "import { useState } from \"react\";\nconst a = 1;\nuseState\nuse\n"
+        );
+    }
+
+    /// The real TypeScript server: accepting `helper`, exported by another file,
+    /// imports it.
+    #[test]
+    #[ignore = "talks to the real server: RAIDO_TS_LS=<path> cargo test real_typescript_auto -- --ignored (typescript@6 beside it)"]
+    fn real_typescript_auto_import() {
+        let dir = tempfile::Builder::new().prefix("raido").tempdir().unwrap();
+        std::fs::write(dir.path().join("tsconfig.json"), "{}\n").unwrap();
+        std::fs::write(
+            dir.path().join("a.ts"),
+            "export function helper() {\n  return 1;\n}\n",
+        )
+        .unwrap();
+        let path = dir.path().join("b.ts");
+        std::fs::write(&path, "const n = 1;\n").unwrap();
+        let mut app = App::new(dir.path().into(), Some(path), false).unwrap();
+        let mut servers = BTreeMap::new();
+        servers.insert(
+            "typescript".to_string(),
+            crate::config::CommandPlugin {
+                program: std::env::var("RAIDO_TS_LS")
+                    .unwrap_or("typescript-language-server".into()),
+                args: vec!["--stdio".into()],
+            },
+        );
+        app.lsp = Lsp::new(dir.path().into(), true, servers);
+        app.config.lsp_enabled = true;
+        let settle = |app: &mut App, done: &dyn Fn(&App) -> bool| {
+            for _ in 0..1500 {
+                app.tick();
+                if done(app) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            panic!("timed out: {}", app.message);
+        };
+        let id = app.buffer_id().unwrap();
+        settle(&mut app, &|a| {
+            a.lsp
+                .status(id, &a.buffers[id])
+                .is_some_and(|s| !s.contains('…'))
+        });
+        press(&mut app, KeyCode::Char('o'), KeyModifiers::NONE);
+        for c in "helpe".chars() {
+            press(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        let mut found = None;
+        for _ in 0..20 {
+            press(&mut app, KeyCode::Char(' '), KeyModifiers::CONTROL);
+            settle(&mut app, &|a| a.menu.is_some());
+            let menu = app.menu.as_ref().unwrap();
+            found = menu
+                .shown
+                .iter()
+                .position(|&i| menu.items[i].label == "helper");
+            if found.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        app.menu.as_mut().unwrap().selected = found.expect("helper offered");
+        press(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        let text = |app: &App| app.buffers[id].text.to_string();
+        settle(&mut app, &|a| text(a).contains("import { helper }"));
+        assert!(text(&app).contains("helper\n"), "{}", text(&app));
+        assert!(
+            app.message.contains("Added import { helper }"),
+            "{}",
+            app.message
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn lsp_diagnostics_completion_menu_and_format_through_the_app() {

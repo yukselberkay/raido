@@ -31,6 +31,8 @@ pub enum Kind {
     Format,
     /// The `source.organizeImports` code action (gopls: goimports).
     OrganizeImports,
+    /// `completionItem/resolve` for an accepted completion: the import it needs.
+    Resolve,
 }
 
 #[derive(Clone, Debug)]
@@ -52,6 +54,12 @@ pub struct Completion {
     /// Start column of the server's replacement range, when it gave one.
     pub start: Option<usize>,
     filter: String,
+    /// Edits that come with it (`additionalTextEdits`): the import it needs, as char
+    /// ranges of the buffer it was asked for in.
+    pub extra: Vec<(usize, usize, String)>,
+    /// The item as the server sent it, when its import comes only once it's asked
+    /// for (`completionItem/resolve`, TypeScript's server).
+    pub resolve: Option<Value>,
 }
 
 impl Completion {
@@ -63,6 +71,8 @@ impl Completion {
             insert: label.into(),
             start: None,
             filter: label.into(),
+            extra: Vec::new(),
+            resolve: None,
         }
     }
     pub fn matches(&self, prefix: &str) -> bool {
@@ -91,6 +101,11 @@ pub enum Event {
     },
     /// Edits that organize the imports of `buffer`.
     Organized {
+        buffer: usize,
+        edits: Vec<(usize, usize, String)>,
+    },
+    /// The import an accepted completion needs, once the server said which.
+    Imports {
         buffer: usize,
         edits: Vec<(usize, usize, String)>,
     },
@@ -509,6 +524,8 @@ struct Client {
     queue: Vec<Value>,
     utf32: bool,
     triggers: Vec<String>,
+    /// The server fills in a completion's details when asked (`resolveProvider`).
+    resolves: bool,
     pending: HashMap<u64, (Kind, usize)>,
 }
 
@@ -592,6 +609,7 @@ impl Client {
             queue: Vec::new(),
             utf32: false,
             triggers: Vec::new(),
+            resolves: false,
             pending: HashMap::new(),
         })
     }
@@ -1069,6 +1087,15 @@ impl Lsp {
         Some(client)
     }
 
+    /// Ask for the details of the completion just accepted in buffer `id`: the
+    /// import it needs comes back as `Event::Imports`.
+    pub fn resolve(&mut self, id: usize, buffer: &Buffer, item: Value) {
+        if let Some(client) = self.flush(id, buffer) {
+            let request = client.request("completionItem/resolve", item);
+            client.pending.insert(request, (Kind::Resolve, id));
+        }
+    }
+
     pub fn saved(&mut self, id: usize, buffer: &Buffer) {
         let Some(uri) = self.docs.get(&id).map(|d| d.uri.clone()) else {
             return;
@@ -1126,6 +1153,8 @@ impl Lsp {
             json!({ "line": buffer.row, "character": encode(&line, buffer.col, client.utf32) });
         let document = json!({ "uri": uri });
         let request = match kind {
+            // Asked for with the item itself: `Lsp::resolve`.
+            Kind::Resolve => bail!("A completion is resolved with Lsp::resolve"),
             Kind::Hover => client.request(
                 "textDocument/hover",
                 json!({ "textDocument": document, "position": position }),
@@ -1452,6 +1481,10 @@ impl Lsp {
                         .flatten()
                         .filter_map(|t| t.as_str().map(String::from))
                         .collect();
+                    client.resolves = caps
+                        .pointer("/completionProvider/resolveProvider")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
                     client.ready = true;
                     client
                         .write(&json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }));
@@ -1473,9 +1506,16 @@ impl Lsp {
                     events.push(Event::Error(format!("{}: {text}", client.program)));
                     return false;
                 }
-                let utf32 = client.utf32;
+                let (utf32, resolves) = (client.utf32, client.resolves);
                 if let Some(buffer) = buffers.get(buffer_id) {
-                    events.extend(reply(kind, buffer_id, buffer, &message["result"], utf32));
+                    events.extend(reply(
+                        kind,
+                        buffer_id,
+                        buffer,
+                        &message["result"],
+                        utf32,
+                        resolves,
+                    ));
                 }
                 false
             }
@@ -1484,7 +1524,14 @@ impl Lsp {
     }
 }
 
-fn reply(kind: Kind, id: usize, buffer: &Buffer, result: &Value, utf32: bool) -> Option<Event> {
+fn reply(
+    kind: Kind,
+    id: usize,
+    buffer: &Buffer,
+    result: &Value,
+    utf32: bool,
+    resolves: bool,
+) -> Option<Event> {
     match kind {
         Kind::Hover => {
             let text = hover_text(&result["contents"]);
@@ -1557,9 +1604,16 @@ fn reply(kind: Kind, id: usize, buffer: &Buffer, result: &Value, utf32: bool) ->
                         insert = strip_snippet(&insert);
                     }
                     let sort = item["sortText"].as_str().unwrap_or(&label).to_string();
+                    // The import it needs: with it (gopls, rust-analyzer, clangd), or
+                    // once it's asked for (TypeScript's server).
+                    let extra = text_edits(&item["additionalTextEdits"], buffer, utf32);
+                    let resolve = (extra.is_empty() && resolves && item.get("data").is_some())
+                        .then(|| item.clone());
                     Some((
                         sort,
                         Completion {
+                            extra,
+                            resolve,
                             filter: item["filterText"].as_str().unwrap_or(&label).to_string(),
                             detail: item["detail"]
                                 .as_str()
@@ -1575,7 +1629,21 @@ fn reply(kind: Kind, id: usize, buffer: &Buffer, result: &Value, utf32: bool) ->
                     ))
                 })
                 .collect();
-            items.sort_by(|a, b| a.0.cmp(&b.0));
+            // The ones for the word being typed first, then the server's order, before
+            // keeping 300: a long list (TypeScript's globals) would otherwise leave
+            // out what's typed, its auto-imports last of all.
+            let word: String = line
+                .chars()
+                .take(buffer.col)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            items.sort_by(|a, b| (!a.1.matches(&word), &a.0).cmp(&(!b.1.matches(&word), &b.0)));
             items.truncate(300);
             Some(Event::Completion {
                 buffer: id,
@@ -1587,6 +1655,10 @@ fn reply(kind: Kind, id: usize, buffer: &Buffer, result: &Value, utf32: bool) ->
             buffer: id,
             edits: text_edits(result, buffer, utf32),
         }),
+        Kind::Resolve => {
+            let edits = text_edits(&result["additionalTextEdits"], buffer, utf32);
+            (!edits.is_empty()).then_some(Event::Imports { buffer: id, edits })
+        }
         Kind::OrganizeImports => {
             // Code actions carry a workspace edit; keep the edits for this file.
             let this = buffer.path.as_deref();
@@ -1912,6 +1984,32 @@ mod tests {
         assert!(off_path("docker-language-server")
             .iter()
             .any(|d| d.ends_with("go/bin")));
+    }
+
+    #[test]
+    fn completions_for_the_typed_word_survive_a_long_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("b.ts");
+        std::fs::write(&path, "helpe").unwrap();
+        let mut buffer = Buffer::open(&path).unwrap();
+        (buffer.row, buffer.col) = (0, 5);
+        // 400 globals first in the server's order, the auto-import last.
+        let mut items: Vec<Value> = (0..400)
+            .map(|i| json!({ "label": format!("global{i}"), "sortText": "11" }))
+            .collect();
+        items.push(json!({ "label": "helper", "sortText": "16" }));
+        let Some(Event::Completion { items, .. }) = reply(
+            Kind::Completion,
+            0,
+            &buffer,
+            &json!({ "items": items }),
+            false,
+            false,
+        ) else {
+            panic!()
+        };
+        assert_eq!(items.len(), 300);
+        assert_eq!(items[0].label, "helper");
     }
 
     #[test]

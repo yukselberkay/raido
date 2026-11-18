@@ -1122,7 +1122,10 @@ also pop up after `.`, and `Ctrl-Space` or `Ctrl-n` asks any time (macOS keeps
 Ctrl-Space for switching keyboard languages when you have more than one). Up/Down or `Ctrl-n`/`Ctrl-p`
 choose, **Tab** accepts, Escape closes the list, and typing keeps filtering it. Enter
 accepts a suggestion you picked with Up/Down (or one you asked for); otherwise it
-starts a new line, so a list that popped up never eats a newline.
+starts a new line, so a list that popped up never eats a newline. A suggestion
+that needs an import brings it, as in VS Code: accepting `useState` in TypeScript adds
+`import { useState } from "react";`, and Go, Rust, Python and C++ servers do the
+same; the status line says what was added, and `u` takes both back.
 The list stays inside the pane you're typing in, never over another, and one that
 pops up by itself shows at most six suggestions. It opens below the line you're on
 (above only when there's hardly any room below), so the code you just read stays in
@@ -1297,7 +1300,7 @@ are installed); by hand, install a server once:
 | Diagnostics | A `●` in the gutter, underlined code, and the message at the bottom of the pane when the cursor is on that line; `]d` / `[d` jump between them. The underline takes the problem's color in terminals that color underlines (iTerm2, Ghostty, kitty, WezTerm, foot, VS Code, tmux); elsewhere, including macOS Terminal.app, it's plain and the `●` keeps the color |
 | Hover | `K` shows types and docs in a popup; any key closes it |
 | Go to definition | `gd` opens the definition (even in another file); `Ctrl-o` jumps back |
-| Completion | Pops up after two letters or `.`; `Ctrl-Space` or `Ctrl-n` asks; keywords and words from your files without a server |
+| Completion | Pops up after two letters or `.`; `Ctrl-Space` or `Ctrl-n` asks; keywords and words from your files without a server. Accepting one that needs an import adds it (`useState` → `import { useState } from "react"`), as VS Code does |
 | Format | `:format` formats the file with the server's formatter (rustfmt, gofmt, clang-format…); a `.json` file is laid out by Raido itself, no server needed ([JSON](#json-formatting)) |
 | Tidy on save | Go files are tidied every time you save, as in VS Code: [details below](#go-tidy-on-save) |
 | Status | The pane footer names the server and counts errors/warnings; `:lsp` lists every language; `:lsp restart` restarts them |

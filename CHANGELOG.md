@@ -10,6 +10,10 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **Completions bring their imports.** Accepting `useState` in TypeScript adds
+  `import { useState } from "react";`, and the Go, Rust, Python and C++ servers'
+  suggestions do the same, as in VS Code; the status line says what was added.
+
 - **Comment out lines** with `Ctrl-/` in any mode, `gcc` (`3gcc` for three lines) or
   `gc` on a selection, and back in with the same keys, as in VS Code: each
   language's own mark at the lines' shared indentation, blank lines left alone,
@@ -130,6 +134,9 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
   `key_env` names the variable with its API key.
 
 ### Fixed
+
+- A long completion list (TypeScript's globals) no longer leaves out what you're
+  typing: the suggestions for the word come first before the list is cut at 300.
 
 - **Copy and paste carry `\n` line breaks only.** A terminal sends a paste's line
   breaks as `\r`, and the editor kept them, so pasted lines ended with CR (and
