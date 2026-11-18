@@ -214,6 +214,10 @@ pub struct Config {
     pub plugins: BTreeMap<String, CommandPlugin>,
     /// Language servers (diagnostics, hover, definition, completion, format).
     pub lsp_enabled: bool,
+    /// YAML and JSON files are checked against the schemas published for them
+    /// (SchemaStore's, Kubernetes'), which their servers download; false keeps them
+    /// offline, checking only the syntax.
+    pub lsp_schemas: bool,
     /// Languages whose files get their imports organized and are formatted by their
     /// language server on save, as VS Code does for Go (keys: go, rust, python, c),
     /// and `json`, which Raido lays out itself.
@@ -260,6 +264,7 @@ impl Default for Config {
             model_server: None,
             plugins: BTreeMap::new(),
             lsp_enabled: true,
+            lsp_schemas: true,
             format_on_save: vec!["go".into()],
             line_endings: crate::editor::LineEndings::Lf,
             lsp: BTreeMap::new(),

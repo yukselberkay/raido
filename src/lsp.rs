@@ -1,6 +1,7 @@
 //! A small Language Server Protocol client: diagnostics, hover, go-to-definition,
-//! completion and formatting for Rust, Go, Python, C and C++, shell scripts, and
-//! Dockerfiles and Docker Compose files.
+//! completion and formatting for Rust, Go, Python, C and C++, shell scripts, YAML
+//! and JSON (checked against the schemas published for them), and Dockerfiles and
+//! Docker Compose files.
 //!
 //! Each server runs as a child process speaking JSON-RPC over stdio. Reader and
 //! writer threads keep the UI loop non-blocking; `Lsp::poll` drains replies on
@@ -9,7 +10,7 @@ use crate::{config::CommandPlugin, editor::Buffer};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -124,6 +125,19 @@ fn language(path: &Path, first_line: &str) -> Option<Language> {
             id: "shellscript",
         });
     }
+    // JSON files without an extension, and ones that allow comments (JSON with
+    // Comments, as VS Code reads them).
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if matches!(name.as_str(), ".babelrc" | ".swcrc" | ".jshintrc") {
+        return Some(Language {
+            key: "json",
+            id: "jsonc",
+        });
+    }
     // One server for both: Docker's own.
     if crate::language::is_dockerfile(path) {
         return Some(Language {
@@ -144,9 +158,35 @@ fn language(path: &Path, first_line: &str) -> Option<Language> {
         "py" | "pyi" => ("python", "python"),
         "c" | "h" => ("c", "c"),
         "cc" | "cpp" | "cxx" | "c++" | "hpp" | "hh" | "hxx" | "h++" => ("c", "cpp"),
+        "yaml" | "yml" => ("yaml", "yaml"),
+        "json" if json_with_comments(path, &name) => ("json", "jsonc"),
+        "json" => ("json", "json"),
+        "jsonc" | "code-workspace" => ("json", "jsonc"),
         _ => return None,
     };
     Some(Language { key, id })
+}
+
+/// JSON files that allow comments and trailing commas, as VS Code reads them: the
+/// TypeScript and JavaScript project files, Babel's and ESLint's, dev containers,
+/// and VS Code's own settings.
+fn json_with_comments(path: &Path, name: &str) -> bool {
+    let tool = ["tsconfig", "jsconfig"]
+        .iter()
+        .any(|kind| name == format!("{kind}.json") || name.starts_with(&format!("{kind}.")));
+    tool || matches!(
+        name,
+        ".eslintrc.json"
+            | ".babelrc.json"
+            | "devcontainer.json"
+            | ".devcontainer.json"
+            | "typedoc.json"
+            | "tslint.json"
+            | "api-extractor.json"
+    ) || path
+        .parent()
+        .and_then(Path::file_name)
+        .is_some_and(|folder| folder == ".vscode")
 }
 
 /// Default servers per language, first one found on PATH wins.
@@ -162,6 +202,12 @@ fn defaults(key: &str) -> &'static [(&'static str, &'static [&'static str])] {
         ],
         "c" => &[("clangd", &[])],
         "shell" => &[("bash-language-server", &["start"])],
+        "yaml" => &[("yaml-language-server", &["--stdio"])],
+        // Arch's package also calls it vscode-json-languageserver.
+        "json" => &[
+            ("vscode-json-language-server", &["--stdio"]),
+            ("vscode-json-languageserver", &["--stdio"]),
+        ],
         "docker" => &[("docker-language-server", &["start", "--stdio"])],
         _ => &[],
     }
@@ -173,6 +219,8 @@ fn install_hint(key: &str) -> &'static str {
         "go" => "go install golang.org/x/tools/gopls@latest",
         "python" => "npm install -g pyright  (or: pip install python-lsp-server)",
         "c" => "install clangd (Arch: pacman -S clang · Debian/Ubuntu: apt install clangd · macOS: xcode-select --install)",
+        "yaml" => "npm install -g yaml-language-server  (or: brew / pacman install yaml-language-server)",
+        "json" => "npm install -g vscode-langservers-extracted  (or: brew install vscode-langservers-extracted · pacman -S vscode-json-languageserver)",
         "shell" => "npm install -g bash-language-server, with shellcheck and shfmt for its warnings and :format (brew / apt / dnf / pacman install shellcheck shfmt)",
         "docker" => "go install github.com/docker/docker-language-server/cmd/docker-language-server@latest  (or a release binary from github.com/docker/docker-language-server)",
         _ => "see the README",
@@ -242,6 +290,101 @@ fn locate_in(program: &str, dirs: &[PathBuf]) -> Option<String> {
         let found = crate::platform::which(&dir.join(program).to_string_lossy())?;
         Some(found.to_string_lossy().into_owned())
     })
+}
+
+/// The part of `settings` a server asks for by name (`yaml`, `http.proxy`), or all
+/// of them; null for one Raido doesn't set.
+fn section(settings: &Value, name: Option<&str>) -> Value {
+    let Some(name) = name.filter(|n| !n.is_empty()) else {
+        return settings.clone();
+    };
+    name.split('.')
+        .try_fold(settings, |value, part| value.get(part))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+/// A Kubernetes manifest: a YAML file with top-level `apiVersion:` and `kind:` keys
+/// (a kustomization has a schema of its own, by its name).
+fn is_kubernetes(path: &Path, buffer: &Buffer) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if name.starts_with("kustomization.") {
+        return false;
+    }
+    let (mut version, mut kind) = (false, false);
+    for line in buffer.text.lines().take(400) {
+        let line = line.chars().take(20).collect::<String>();
+        version |= line.starts_with("apiVersion:");
+        kind |= line.starts_with("kind:");
+        if version && kind {
+            return true;
+        }
+    }
+    false
+}
+
+/// The schemas Raido knows the JSON server needs most, for when SchemaStore's
+/// catalog can't be had.
+fn known_json_schemas() -> Value {
+    json!([
+        { "fileMatch": ["package.json"], "url": "https://json.schemastore.org/package.json" },
+        { "fileMatch": ["tsconfig.json", "tsconfig.*.json"], "url": "https://json.schemastore.org/tsconfig.json" },
+        { "fileMatch": ["jsconfig.json", "jsconfig.*.json"], "url": "https://json.schemastore.org/jsconfig.json" },
+    ])
+}
+
+/// Where SchemaStore lists the schemas published for each kind of file.
+const SCHEMASTORE: &str = "https://www.schemastore.org/api/json/catalog.json";
+
+/// SchemaStore's catalog as the JSON server takes it, kept in `cache` for a week and
+/// fetched with curl when older (an old one serves while the new can't be had).
+fn schemastore_catalog(cache: &Path) -> Option<Value> {
+    const WEEK: Duration = Duration::from_secs(7 * 24 * 3600);
+    let file = cache.join("schemastore-catalog.json");
+    let fresh = std::fs::metadata(&file)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|time| time.elapsed().ok())
+        .is_some_and(|age| age < WEEK);
+    if !fresh && std::fs::create_dir_all(cache).is_ok() {
+        let part = cache.join("schemastore-catalog.json.part");
+        let fetched = Command::new("curl")
+            .args(["-fsSL", "--max-time", "30", "-o"])
+            .arg(&part)
+            .arg(SCHEMASTORE)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        if fetched {
+            let _ = std::fs::rename(&part, &file);
+        }
+    }
+    let catalog: Value = serde_json::from_str(&std::fs::read_to_string(&file).ok()?).ok()?;
+    let schemas = catalog_schemas(&catalog);
+    (!schemas.as_array().is_some_and(Vec::is_empty)).then_some(schemas)
+}
+
+/// The catalog's schemas that name the files they're for, as the JSON server's
+/// `json.schemas`: `{ fileMatch, url }`.
+fn catalog_schemas(catalog: &Value) -> Value {
+    Value::Array(
+        catalog["schemas"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|schema| {
+                let url = schema["url"].as_str()?;
+                let files = schema["fileMatch"].as_array().filter(|f| !f.is_empty())?;
+                Some(json!({ "fileMatch": files, "url": url }))
+            })
+            .collect(),
+    )
 }
 
 pub fn uri(path: &Path) -> String {
@@ -506,6 +649,37 @@ pub struct Lsp {
     docs: HashMap<usize, Doc>,
     pub diagnostics: HashMap<usize, Vec<Diagnostic>>,
     announced: HashSet<&'static str>,
+    /// YAML and JSON files are checked against the schemas published for them
+    /// (`lsp_schemas`), which their servers download; off, only their syntax is.
+    pub schemas: bool,
+    /// Kubernetes manifests opened (by their `apiVersion:` and `kind:` lines), as the
+    /// YAML server matches files: it checks them against Kubernetes' own schemas.
+    kubernetes: BTreeSet<String>,
+    /// SchemaStore's catalog, for the JSON server.
+    catalog: Catalog,
+}
+
+/// Which schema each kind of JSON file has, from SchemaStore's catalog: on its way,
+/// then here. The YAML server fetches the catalog itself; the JSON server is told.
+struct Catalog {
+    schemas: Option<Value>,
+    coming: Option<mpsc::Receiver<Option<Value>>>,
+    /// Where it's kept between runs (none in tests: they never go online).
+    cache: Option<PathBuf>,
+}
+
+impl Default for Catalog {
+    fn default() -> Self {
+        Self {
+            schemas: None,
+            coming: None,
+            cache: if cfg!(test) {
+                None
+            } else {
+                directories::BaseDirs::new().map(|d| d.cache_dir().join("raido"))
+            },
+        }
+    }
 }
 
 impl Lsp {
@@ -519,7 +693,70 @@ impl Lsp {
             docs: HashMap::new(),
             diagnostics: HashMap::new(),
             announced: HashSet::new(),
+            schemas: true,
+            kubernetes: BTreeSet::new(),
+            catalog: Catalog::default(),
         }
+    }
+
+    /// What the server for `key` is told its settings are: the YAML server asks
+    /// (`workspace/configuration`), the JSON server is told
+    /// (`workspace/didChangeConfiguration`).
+    fn settings(&self, key: &str) -> Value {
+        match key {
+            "yaml" => {
+                let mut schemas = json!({});
+                if self.schemas && !self.kubernetes.is_empty() {
+                    schemas["kubernetes"] = json!(self.kubernetes);
+                }
+                json!({ "yaml": {
+                    "validate": true,
+                    "hover": true,
+                    "completion": true,
+                    "format": { "enable": true },
+                    "schemaStore": { "enable": self.schemas },
+                    "kubernetesCRDStore": { "enable": self.schemas },
+                    "schemas": schemas,
+                } })
+            }
+            "json" => {
+                let schemas = match &self.catalog.schemas {
+                    _ if !self.schemas => json!([]),
+                    Some(schemas) => schemas.clone(),
+                    None => known_json_schemas(),
+                };
+                json!({ "json": { "validate": { "enable": true }, "schemas": schemas } })
+            }
+            _ => Value::Null,
+        }
+    }
+
+    /// Tell the server for `key` that its settings changed: the YAML server asks for
+    /// them again, the JSON server gets them.
+    fn tell_settings(&mut self, key: &'static str) {
+        let settings = match key {
+            "json" => self.settings(key),
+            _ => Value::Null,
+        };
+        if let Some(client) = self.clients.get_mut(key) {
+            client.notify(
+                "workspace/didChangeConfiguration",
+                json!({ "settings": settings }),
+            );
+        }
+    }
+
+    /// Fetch SchemaStore's catalog in the background, once, for the JSON server.
+    fn fetch_catalog(&mut self) {
+        if !self.schemas || self.catalog.coming.is_some() || self.catalog.schemas.is_some() {
+            return;
+        }
+        let (send, coming) = mpsc::channel();
+        let cache = self.catalog.cache.clone();
+        thread::spawn(move || {
+            let _ = send.send(cache.and_then(|dir| schemastore_catalog(&dir)));
+        });
+        self.catalog.coming = Some(coming);
     }
 
     /// Stop every server; they restart when their files are next shown.
@@ -603,6 +840,9 @@ impl Lsp {
             self.failed.insert(key, reason.clone());
             return Some(reason);
         };
+        if key == "json" {
+            self.fetch_catalog();
+        }
         match Client::spawn(&program, &command, &args, &self.root, venv.as_deref()) {
             Ok(mut client) => {
                 let root = uri(&self.root);
@@ -644,6 +884,10 @@ impl Lsp {
                         options["shfmt"] = json!({ "path": shfmt });
                     }
                     params["initializationOptions"] = options;
+                }
+                if key == "json" {
+                    // For JSON with Comments; .json files Raido lays out itself.
+                    params["initializationOptions"] = json!({ "provideFormatter": true });
                 }
                 if key == "docker" {
                     // Docker's server reports usage to Docker unless told not to.
@@ -688,6 +932,7 @@ impl Lsp {
         if !self.enabled {
             return events;
         }
+        let mut kubernetes = false;
         for &id in visible {
             let Some(buffer) = buffers.get(id) else {
                 continue;
@@ -707,6 +952,15 @@ impl Lsp {
             let uri = uri(path);
             if self.docs.get(&id).is_some_and(|d| d.uri != uri) {
                 self.docs.remove(&id);
+            }
+            if lang.key == "yaml"
+                && self.schemas
+                && !self.docs.contains_key(&id)
+                && is_kubernetes(path, buffer)
+            {
+                // As the YAML server matches it: the file's URI path.
+                let pattern = uri.strip_prefix("file://").unwrap_or(&uri).to_string();
+                kubernetes |= self.kubernetes.insert(pattern);
             }
             let Some(client) = self.clients.get_mut(lang.key) else {
                 continue;
@@ -738,6 +992,9 @@ impl Lsp {
                 }
                 _ => {}
             }
+        }
+        if kubernetes {
+            self.tell_settings("yaml");
         }
         events
     }
@@ -806,7 +1063,7 @@ impl Lsp {
             bail!("Language servers are disabled (lsp_enabled = false)");
         }
         let lang = language_of(buffer).context(
-            "No language server for this file type (Rust, Go, Python, C, C++, shell, Docker)",
+            "No language server for this file type (Rust, Go, Python, C, C++, shell, YAML, JSON, Docker)",
         )?;
         if let Some(reason) = self.failed.get(lang.key) {
             bail!("{reason}");
@@ -887,7 +1144,9 @@ impl Lsp {
     /// A summary of every language's server for `:lsp`.
     pub fn report(&self) -> String {
         let mut parts = Vec::new();
-        for key in ["rust", "go", "python", "c", "shell", "docker"] {
+        for key in [
+            "rust", "go", "python", "c", "shell", "yaml", "json", "docker",
+        ] {
             let state = if let Some(client) = self.clients.get(key) {
                 let on = match &client.python {
                     Some(python) => format!(" on {}", self.venv_name(python.venv.as_deref())),
@@ -933,6 +1192,18 @@ impl Lsp {
     pub fn poll(&mut self, buffers: &[Buffer]) -> (Vec<Event>, bool) {
         let mut events = Vec::new();
         let mut changed = false;
+        if let Some(catalog) = self
+            .catalog
+            .coming
+            .as_ref()
+            .and_then(|coming| coming.try_recv().ok())
+        {
+            self.catalog.coming = None;
+            if let Some(schemas) = catalog {
+                self.catalog.schemas = Some(schemas);
+                self.tell_settings("json");
+            }
+        }
         let keys: Vec<&'static str> = self.clients.keys().copied().collect();
         for key in keys {
             while let Some(client) = self.clients.get_mut(key) {
@@ -1012,6 +1283,11 @@ impl Lsp {
         buffers: &[Buffer],
         events: &mut Vec<Event>,
     ) -> bool {
+        // The settings a server asks for, and the ones the JSON server is told once
+        // it has started.
+        let asks = message["method"] == "workspace/configuration";
+        let started = message.get("method").is_none() && message["id"] == 0;
+        let settings = (asks || (started && key == "json")).then(|| self.settings(key));
         let Some(client) = self.clients.get_mut(key) else {
             return false;
         };
@@ -1044,11 +1320,16 @@ impl Lsp {
                     _ => {}
                 }
                 let result = if method == "workspace/configuration" {
-                    let count = message
-                        .pointer("/params/items")
-                        .and_then(Value::as_array)
-                        .map_or(0, Vec::len);
-                    Value::Array(vec![Value::Null; count])
+                    let settings = settings.unwrap_or(Value::Null);
+                    Value::Array(
+                        message
+                            .pointer("/params/items")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                            .map(|item| section(&settings, item["section"].as_str()))
+                            .collect(),
+                    )
                 } else {
                     Value::Null
                 };
@@ -1131,6 +1412,11 @@ impl Lsp {
                     client.ready = true;
                     client
                         .write(&json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }));
+                    if let Some(settings) = settings {
+                        client.write(&json!({ "jsonrpc": "2.0",
+                            "method": "workspace/didChangeConfiguration",
+                            "params": { "settings": settings } }));
+                    }
                     for queued in std::mem::take(&mut client.queue) {
                         client.write(&queued);
                     }
@@ -1516,8 +1802,29 @@ mod tests {
             let lang = language(name).unwrap();
             assert_eq!((lang.key, lang.id), ("docker", id), "{name}");
         }
-        assert!(language("values.yaml").is_none());
         assert!(language("Dockerfile.dockerignore").is_none());
+        // YAML to Red Hat's server (Compose files to Docker's); JSON to VS Code's, as
+        // JSON with Comments where VS Code reads it so.
+        assert_eq!(
+            language("values.yaml").map(|l| (l.key, l.id)),
+            Some(("yaml", "yaml"))
+        );
+        assert_eq!(language("ci.yml").map(|l| l.key), Some("yaml"));
+        assert_eq!(language("compose.yaml").map(|l| l.key), Some("docker"));
+        for (name, id) in [
+            ("package.json", "json"),
+            ("tsconfig.json", "jsonc"),
+            ("tsconfig.build.json", "jsonc"),
+            ("jsconfig.json", "jsonc"),
+            (".vscode/settings.json", "jsonc"),
+            ("a.jsonc", "jsonc"),
+            ("app.code-workspace", "jsonc"),
+            (".babelrc", "jsonc"),
+            ("data.json", "json"),
+        ] {
+            let lang = language(name).unwrap();
+            assert_eq!((lang.key, lang.id), ("json", id), "{name}");
+        }
         // The Bash server takes sh, bash and ksh scripts, by name or by `#!` line.
         for name in [
             "deploy.sh",
@@ -1548,6 +1855,206 @@ mod tests {
         assert!(off_path("docker-language-server")
             .iter()
             .any(|d| d.ends_with("go/bin")));
+    }
+
+    #[test]
+    fn servers_get_the_settings_they_ask_for_by_section() {
+        let settings = json!({ "yaml": { "validate": true, "schemaStore": { "enable": false } } });
+        assert_eq!(section(&settings, Some("yaml.validate")), json!(true));
+        assert_eq!(
+            section(&settings, Some("yaml"))["schemaStore"]["enable"],
+            json!(false)
+        );
+        assert_eq!(section(&settings, Some("http")), Value::Null);
+        assert_eq!(section(&settings, Some("[yaml]")), Value::Null);
+        assert_eq!(section(&settings, None), settings);
+        // Offline: no SchemaStore, no Kubernetes, no schemas for JSON.
+        let mut lsp = Lsp::new(PathBuf::from("/p"), true, BTreeMap::new());
+        lsp.kubernetes.insert("/p/deploy.yaml".into());
+        assert_eq!(
+            lsp.settings("yaml")["yaml"]["schemas"]["kubernetes"],
+            json!(["/p/deploy.yaml"])
+        );
+        assert_eq!(
+            lsp.settings("json")["json"]["schemas"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
+        lsp.schemas = false;
+        assert_eq!(
+            lsp.settings("yaml")["yaml"]["schemaStore"]["enable"],
+            json!(false)
+        );
+        assert_eq!(lsp.settings("yaml")["yaml"]["schemas"], json!({}));
+        assert_eq!(lsp.settings("json")["json"]["schemas"], json!([]));
+        assert_eq!(
+            lsp.settings("json")["json"]["validate"]["enable"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn kubernetes_manifests_are_known_by_their_apiversion_and_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let open = |name: &str, text: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, text).unwrap();
+            (path.clone(), Buffer::open(&path).unwrap())
+        };
+        let (path, b) = open(
+            "deploy.yaml",
+            "# web\napiVersion: apps/v1\nkind: Deployment\n",
+        );
+        assert!(is_kubernetes(&path, &b));
+        let (path, b) = open("multi.yaml", "---\nkind: Service\napiVersion: v1\n");
+        assert!(is_kubernetes(&path, &b));
+        // A chart has no kind; nested keys aren't the manifest's; kustomize's own.
+        for (name, text) in [
+            ("Chart.yaml", "apiVersion: v2\nname: web\n"),
+            ("values.yaml", "app:\n  apiVersion: v1\n  kind: x\n"),
+            (
+                "kustomization.yaml",
+                "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n",
+            ),
+        ] {
+            let (path, b) = open(name, text);
+            assert!(!is_kubernetes(&path, &b), "{name}");
+        }
+    }
+
+    #[test]
+    fn schemastores_catalog_is_kept_a_week_and_read_for_the_json_server() {
+        let catalog = json!({ "schemas": [
+            { "name": "package.json", "fileMatch": ["package.json"], "url": "https://json.schemastore.org/package.json" },
+            { "name": "no files", "url": "https://example.com/a.json" },
+            { "name": "workflows", "fileMatch": ["**/.github/workflows/*.yml"], "url": "https://json.schemastore.org/github-workflow.json" },
+        ] });
+        let schemas = catalog_schemas(&catalog);
+        assert_eq!(
+            schemas,
+            json!([
+                { "fileMatch": ["package.json"], "url": "https://json.schemastore.org/package.json" },
+                { "fileMatch": ["**/.github/workflows/*.yml"], "url": "https://json.schemastore.org/github-workflow.json" },
+            ])
+        );
+        // A fresh copy in the cache is read without going online.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("schemastore-catalog.json"),
+            catalog.to_string(),
+        )
+        .unwrap();
+        assert_eq!(schemastore_catalog(dir.path()), Some(schemas));
+    }
+
+    /// The YAML server asks for its settings, and again when told they changed: a
+    /// Kubernetes manifest opened is in them. The JSON server is told its settings,
+    /// SchemaStore's catalog once it's here, and nothing to download when offline.
+    #[cfg(unix)]
+    #[test]
+    fn yaml_and_json_servers_get_their_schemas() {
+        if !on_path("python3") {
+            return;
+        }
+        const SERVER: &str = r#"
+import json, sys
+config, opened, asked = None, None, 50
+def send(msg):
+    body = json.dumps(msg)
+    sys.stdout.write("Content-Length: %d\r\n\r\n%s" % (len(body.encode()), body)); sys.stdout.flush()
+def read():
+    length = 0
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line: sys.exit(0)
+        line = line.strip()
+        if not line: break
+        if line.lower().startswith(b"content-length:"): length = int(line.split(b":")[1])
+    return json.loads(sys.stdin.buffer.read(length))
+def ask():
+    global asked
+    asked += 1
+    send({"jsonrpc": "2.0", "id": asked, "method": "workspace/configuration", "params": {"items": [{"section": "yaml"}, {"section": "http"}]}})
+def tell():
+    if config is None or opened is None: return
+    if "yaml" in config:
+        said = "store=%s k8s=%s http=%s" % (config["yaml"]["schemaStore"]["enable"], ",".join(config["yaml"]["schemas"].get("kubernetes", [])), config.get("http"))
+    else:
+        said = "schemas=%d validate=%s" % (len(config["json"]["schemas"]), config["json"]["validate"]["enable"])
+    send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {"uri": opened, "diagnostics": [
+        {"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}}, "severity": 2, "message": said}]}})
+while True:
+    msg = read(); method = msg.get("method")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {"capabilities": {}}})
+    elif method == "initialized" and sys.argv[1] == "yaml":
+        ask()
+    elif method == "workspace/didChangeConfiguration":
+        if sys.argv[1] == "yaml": ask()
+        else:
+            config = msg["params"]["settings"]; tell()
+    elif method is None and "result" in msg:
+        config = {"yaml": msg["result"][0], "http": msg["result"][1]}; tell()
+    elif method == "textDocument/didOpen":
+        opened = msg["params"]["textDocument"]["uri"]; tell()
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let deploy = dir.path().join("deploy.yaml");
+        let package = dir.path().join("package.json");
+        std::fs::write(&deploy, "apiVersion: v1\nkind: Service\n").unwrap();
+        std::fs::write(&package, "{}\n").unwrap();
+        let buffers = vec![
+            Buffer::open(&deploy).unwrap(),
+            Buffer::open(&package).unwrap(),
+        ];
+        let start = |schemas: bool, cache: Option<PathBuf>| {
+            let mut overrides = BTreeMap::new();
+            for key in ["yaml", "json"] {
+                overrides.insert(
+                    key.to_string(),
+                    CommandPlugin {
+                        program: "python3".into(),
+                        args: vec!["-c".into(), SERVER.into(), key.into()],
+                    },
+                );
+            }
+            let mut lsp = Lsp::new(dir.path().into(), true, overrides);
+            lsp.schemas = schemas;
+            lsp.catalog.cache = cache;
+            lsp.sync(&buffers, &[0, 1]);
+            lsp
+        };
+        let said = |lsp: &mut Lsp, id: usize, done: &dyn Fn(&str) -> bool| -> String {
+            for _ in 0..300 {
+                lsp.poll(&buffers);
+                if let Some(message) = lsp.diagnostics.get(&id).map(|d| d[0].message.clone()) {
+                    if done(&message) {
+                        return message;
+                    }
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            panic!("{:?}", lsp.diagnostics.get(&id));
+        };
+        // SchemaStore's catalog from the cache: one schema.
+        let cache = tempfile::tempdir().unwrap();
+        let catalog = json!({ "schemas": [{ "fileMatch": ["package.json"], "url": "https://json.schemastore.org/package.json" }] });
+        std::fs::write(
+            cache.path().join("schemastore-catalog.json"),
+            catalog.to_string(),
+        )
+        .unwrap();
+        let mut lsp = start(true, Some(cache.path().into()));
+        let yaml = said(&mut lsp, 0, &|m| m.contains("deploy.yaml"));
+        assert!(yaml.starts_with("store=True k8s=/"), "{yaml}");
+        assert!(yaml.ends_with("deploy.yaml http=None"), "{yaml}");
+        said(&mut lsp, 1, &|m| m == "schemas=1 validate=True");
+        // Offline: nothing to download, and no Kubernetes schema.
+        let mut lsp = start(false, None);
+        said(&mut lsp, 0, &|m| m == "store=False k8s= http=None");
+        said(&mut lsp, 1, &|m| m == "schemas=0 validate=True");
     }
 
     fn language_at(name: &str, first_line: &str) -> Option<Language> {
@@ -1631,6 +2138,70 @@ mod tests {
                 "{edits:?}"
             );
         }
+    }
+
+    /// The real YAML and JSON servers, online: a GitHub workflow, a Kubernetes
+    /// manifest and a package.json, each with a mistake only its schema knows of.
+    #[test]
+    #[ignore = "talks to the real servers and downloads schemas: RAIDO_YAML_LS=<path> RAIDO_JSON_LS=<path> cargo test real_yaml_and_json -- --ignored"]
+    fn real_yaml_and_json_servers_check_files_against_their_schemas() {
+        let server = |var: &str, name: &str| std::env::var(var).unwrap_or(name.into());
+        // Not `.tmp…`: SchemaStore's `**/.github/workflows/*.yml` skips dot folders.
+        let dir = tempfile::Builder::new().prefix("raido").tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let workflow = dir.path().join(".github/workflows/ci.yml");
+        std::fs::create_dir_all(workflow.parent().unwrap()).unwrap();
+        std::fs::write(
+            &workflow,
+            "on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    stepz:\n      - run: make\n",
+        )
+        .unwrap();
+        let deploy = dir.path().join("deploy.yaml");
+        std::fs::write(&deploy, "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\nspec:\n  replicas: three\n").unwrap();
+        let package = dir.path().join("package.json");
+        std::fs::write(&package, "{\n  \"name\": 5\n}\n").unwrap();
+        let buffers = vec![
+            Buffer::open(&workflow).unwrap(),
+            Buffer::open(&deploy).unwrap(),
+            Buffer::open(&package).unwrap(),
+        ];
+        let mut overrides = BTreeMap::new();
+        for (key, var, name) in [
+            ("yaml", "RAIDO_YAML_LS", "yaml-language-server"),
+            ("json", "RAIDO_JSON_LS", "vscode-json-language-server"),
+        ] {
+            overrides.insert(
+                key.to_string(),
+                CommandPlugin {
+                    program: server(var, name),
+                    args: vec!["--stdio".into()],
+                },
+            );
+        }
+        let mut lsp = Lsp::new(dir.path().into(), true, overrides);
+        lsp.catalog.cache = Some(cache.path().into());
+        lsp.sync(&buffers, &[0, 1, 2]);
+        let mut said: HashMap<usize, Vec<String>> = HashMap::new();
+        for _ in 0..1500 {
+            lsp.poll(&buffers);
+            lsp.sync(&buffers, &[0, 1, 2]);
+            for id in 0..3 {
+                if let Some(list) = lsp.diagnostics.get(&id).filter(|l| !l.is_empty()) {
+                    said.insert(id, list.iter().map(|d| d.message.clone()).collect());
+                }
+            }
+            if said.len() == 3 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let any = |id: usize, text: &str| {
+            said.get(&id)
+                .is_some_and(|l| l.iter().any(|m| m.contains(text)))
+        };
+        assert!(any(0, "stepz"), "workflow: {:?}", said.get(&0));
+        assert!(any(1, "Incorrect type"), "manifest: {:?}", said.get(&1));
+        assert!(any(2, "Incorrect type"), "package.json: {:?}", said.get(&2));
     }
 
     /// Formatting goes by the file's own indentation: shfmt keeps a script's tabs.

@@ -563,7 +563,8 @@ impl App {
         let tree = FileTree::new(root.clone())?;
         let mut panes = BTreeMap::new();
         panes.insert(0, Pane::Editor(0));
-        let lsp = Lsp::new(root.clone(), config.lsp_enabled, config.lsp.clone());
+        let mut lsp = Lsp::new(root.clone(), config.lsp_enabled, config.lsp.clone());
+        lsp.schemas = config.lsp_schemas;
         let mut app = Self {
             syntax: Syntax::new(&theme),
             previews: Previews::default(),

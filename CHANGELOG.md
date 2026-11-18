@@ -10,6 +10,15 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **YAML and JSON checked against their schemas.** Red Hat's `yaml-language-server`
+  and VS Code's JSON server underline what a file's published schema doesn't allow,
+  and complete and explain its keys: GitHub Actions workflows, `package.json`,
+  `tsconfig.json` and the other files SchemaStore's catalog names, and Kubernetes
+  manifests, known by their `apiVersion:` and `kind:`. `tsconfig.json`, `.vscode`
+  settings and the like may hold comments, as in VS Code. `:format` lays out YAML
+  (`format_on_save = ["yaml"]`). `lsp_schemas = false` keeps them offline. The
+  install scripts set up both servers.
+
 - **Shell script support.** Scripts are known by extension, by name (`.bashrc`,
   `.zshrc`, `.envrc`, `PKGBUILD`) and, without an extension, by their `#!` line, for
   highlighting, typing and the status line (`Shell (bash)`). `fi`, `done`, `esac`,

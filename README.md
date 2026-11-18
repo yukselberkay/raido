@@ -87,6 +87,8 @@ It installs, skipping whatever is already there:
    | Python | pyright or pylsp | `python3-pylsp` | `python3-lsp-server` | `pyright` | `python3-python-lsp-server` | `py3-lsp-server` | `pyright` |
    | Shell | bash-language-server | npm | `nodejs-bash-language-server` | `bash-language-server` | npm | npm | `bash-language-server` |
    | Shell warnings, formatting | ShellCheck, shfmt | `shellcheck`, `shfmt` | `ShellCheck`, `shfmt` | `shellcheck`, `shfmt` | `ShellCheck`, `shfmt` | `shellcheck`, `shfmt` | `shellcheck`, `shfmt` |
+   | YAML | yaml-language-server | npm | npm | `yaml-language-server` | npm | npm | `yaml-language-server` |
+   | JSON | vscode-json-language-server | npm | npm | `vscode-json-languageserver` | npm | npm | `vscode-langservers-extracted` |
    | Dockerfile, Docker Compose | docker-language-server | `go install` | `go install` | `go install` | `go install` | `go install` | `go install` |
 
    gopls only where Go is installed (it needs Go itself), falling back to
@@ -94,7 +96,8 @@ It installs, skipping whatever is already there:
    takes a few minutes: only where Docker (or Podman) and Go are installed (Go fetches
    the newer Go it needs, 1.25, unless your Go is set to stay local). Without a system package for Python it tries `uv tool install
    basedpyright`, `pipx install python-lsp-server`, then `npm install -g pyright`;
-   for the shell server, `npm install -g bash-language-server` (Node.js 20 or later),
+   for the shell, YAML and JSON servers, `npm install -g bash-language-server`,
+   `yaml-language-server` and `vscode-langservers-extracted` (Node.js 20 or later);
    and for shfmt, `go install` where Go is.
    A server already there is kept; one that can't be installed is noted and
    skipped, never failing the install (`--no-lsp` skips them all).
@@ -178,7 +181,8 @@ the programs: Git, the Visual Studio C++ build tools (Rust's linker; a large
 download), Rust through rustup, the language servers (rust-analyzer; clangd from
 LLVM's winget package; gopls through `go install` when Go is installed; pyright from
 npm, else basedpyright from uv or python-lsp-server from pipx; bash-language-server
-from npm with ShellCheck and shfmt from winget; docker-language-server
+from npm with ShellCheck and shfmt from winget; yaml-language-server and VS Code's
+JSON server from npm; docker-language-server
 through `go install` when Docker and Go are installed), JetBrains Mono Nerd Font (for your
 user, no administrator rights), Raido, the AI-agent skill, and `%USERPROFILE%\.cargo\bin`
 on your user PATH, so `raido` runs in that window at once and in every new one:
@@ -427,6 +431,10 @@ the history graph appears after you make commits.
   (`fi`, `done` and `esac` line up with what they close); with the Bash language
   server, ShellCheck's warnings, completion, hover, go to definition and shfmt's
   formatting. [Details](#shell-scripts).
+- **YAML and JSON, checked against their schemas:** GitHub Actions workflows,
+  Kubernetes manifests, `package.json`, `tsconfig.json` and the hundreds of other
+  files SchemaStore knows, with errors, completion and hover docs from the schema.
+  [Details](#yaml-and-json-checked-against-their-schemas).
 - **Docker:** Dockerfiles and Containerfiles (`Dockerfile.dev`, `api.dockerfile`
   too) highlighted, instructions that go on over lines indented, and Docker Compose
   files (`compose.yaml`, `docker-compose.yml` and their overrides) known as Compose;
@@ -1258,6 +1266,8 @@ are installed); by hand, install a server once:
 | Go | `gopls` (also found in `~/go/bin`, where `go install` puts it) | `go install golang.org/x/tools/gopls@latest` |
 | Python | `pyright-langserver`, `basedpyright-langserver`, `pylsp` or `jedi-language-server` | `npm install -g pyright` or `pip install python-lsp-server` |
 | C / C++ | `clangd` (also found in Homebrew's `llvm` and the Xcode tools on macOS, `C:\Program Files\LLVM\bin` on Windows) | Arch `pacman -S clang` · Debian/Ubuntu `apt install clangd` · Fedora `dnf install clang-tools-extra` · macOS Xcode tools · Windows `winget install LLVM.LLVM` |
+| YAML | `yaml-language-server` | `npm install -g yaml-language-server` (Homebrew and Arch: `yaml-language-server`) |
+| JSON | `vscode-json-language-server` (VS Code's) | `npm install -g vscode-langservers-extracted` (Homebrew: `vscode-langservers-extracted` · Arch: `vscode-json-languageserver`) |
 | Shell (sh, bash, ksh) | `bash-language-server`, with `shellcheck` for warnings and `shfmt` for formatting (also found in `~/go/bin`) | `npm install -g bash-language-server` (Homebrew and Arch: `bash-language-server`) · `brew` / `apt` / `pacman install shellcheck shfmt` (Fedora, openSUSE: `ShellCheck`) |
 | Dockerfile, Docker Compose | `docker-language-server` (also found in `~/go/bin`) | `go install github.com/docker/docker-language-server/cmd/docker-language-server@latest`, or a binary from its [releases](https://github.com/docker/docker-language-server/releases) |
 
@@ -1315,9 +1325,37 @@ large module), the file is saved exactly as typed and the status line says why.
 `:w other.go` (a different name) also saves the text as is.
 
 The languages are listed in `format_on_save` (default `["go"]`). Add `"rust"`,
-`"python"`, `"c"`, `"shell"` or `"docker"` (Compose files) to do the same with their
-servers, `"json"` for [JSON](#json-formatting), or set `format_on_save = []` to turn
-it off.
+`"python"`, `"c"`, `"shell"`, `"yaml"` or `"docker"` (Compose files) to do the same
+with their servers, `"json"` for [JSON](#json-formatting), or set `format_on_save = []`
+to turn it off.
+
+#### YAML and JSON, checked against their schemas
+
+Red Hat's **YAML server** (`yaml-language-server`) and **VS Code's JSON server**
+(`vscode-json-language-server`, see the table above) check a file against the schema
+published for its kind, as VS Code does: a key that doesn't belong, a value of the
+wrong type or a required key that's missing is underlined, and completion and `K`
+offer the keys and values the schema allows, with their docs.
+
+- **Which schema:** [SchemaStore](https://www.schemastore.org)'s catalog names the
+  schema for hundreds of kinds of files by their names: GitHub Actions workflows
+  (`.github/workflows/*.yml`), GitLab CI, `package.json`, `tsconfig.json`,
+  `.eslintrc.json`, `renovate.json`, `appsettings.json`… A **Kubernetes manifest**
+  has no telling name, so Raido knows one by its top-level `apiVersion:` and `kind:`
+  and has it checked against Kubernetes' schemas (custom resources too, from
+  [Datree's CRD catalog](https://github.com/datreeio/CRDs-catalog)). Any other YAML
+  file can name its own with a first line `# yaml-language-server: $schema=<url>`.
+- **JSON with comments:** `tsconfig.json`, `jsconfig.json`, `.eslintrc.json`,
+  `.babelrc`, `devcontainer.json`, VS Code's `.vscode/*.json`, `.jsonc` and
+  `.code-workspace` files may hold comments and trailing commas, as VS Code allows.
+- **Formatting:** `:format` lays out YAML with the server (`"yaml"` in
+  `format_on_save` to do it on save) and JSON with comments with VS Code's; a
+  `.json` file Raido [lays out itself](#json-formatting).
+- **Online:** the schemas are downloaded as files need them, and SchemaStore's
+  catalog once a week (with `curl`, into Raido's cache). Set `lsp_schemas = false`
+  in config.toml to stay offline: then only the syntax is checked. A project inside
+  a folder whose name starts with a dot (`~/.config/…`) misses the catalog's
+  patterns, as in VS Code.
 
 #### Shell scripts
 

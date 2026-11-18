@@ -143,6 +143,18 @@ impl Syntax {
         if crate::language::shell(Some(path), "").is_some() {
             return self.by_extension("sh");
         }
+        // JSON by other names: with comments (VS Code's), and tools' dotfiles.
+        let json_named = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|name| {
+                matches!(name, ".babelrc" | ".swcrc" | ".jshintrc")
+                    || name.ends_with(".jsonc")
+                    || name.ends_with(".code-workspace")
+            });
+        if json_named {
+            return self.by_extension("json");
+        }
         let keys = [
             path.file_name().and_then(|n| n.to_str()),
             path.extension().and_then(|e| e.to_str()),
