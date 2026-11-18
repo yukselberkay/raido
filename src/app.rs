@@ -2720,6 +2720,12 @@ impl App {
             self.open_find(key.code == KeyCode::Char('h'));
             return Ok(());
         }
+        // Ctrl-/ comments out the line or the selected lines, or back in. Terminals
+        // send it as Ctrl-_, which arrives as Ctrl-7.
+        if ctrl && self.buffer_id().is_some() && matches!(key.code, KeyCode::Char('/' | '_' | '7'))
+        {
+            return self.toggle_comment();
+        }
         // Ctrl-Shift-A, and Caps Lock on Windows, report a capital.
         if ctrl && self.buffer_id().is_some() && matches!(key.code, KeyCode::Char('a' | 'A')) {
             self.select_all();
@@ -2965,6 +2971,33 @@ impl App {
             self.mode = mode;
         }
     }
+    /// Ctrl-/ or `gc`: comment out the selected lines, else the cursor line, or back in.
+    fn toggle_comment(&mut self) -> Result<()> {
+        let id = self.buffer_id().context("Focus an editor")?;
+        let row = self.buffers[id].row;
+        let (first, last) = match self.selection() {
+            Some((start, end)) => {
+                let text = &self.buffers[id].text;
+                let last = end.saturating_sub(1).max(start);
+                (text.char_to_line(start), text.char_to_line(last))
+            }
+            None => (row, row),
+        };
+        if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+            self.end_visual();
+        }
+        self.toggle_comment_lines(first, last)
+    }
+    /// Comment out lines `first..=last` of the focused editor, or back in.
+    fn toggle_comment_lines(&mut self, first: usize, last: usize) -> Result<()> {
+        let id = self.buffer_id().context("Focus an editor")?;
+        let Some(marks) = language::comment_marks(&self.buffers[id]) else {
+            self.notice("This file's language has no comments");
+            return Ok(());
+        };
+        language::toggle_comment(&mut self.buffers[id], first, last, marks);
+        Ok(())
+    }
     /// Ctrl-a: the whole file selected, from any mode, to delete (Backspace), copy
     /// (Ctrl-c, `y`), cut (Ctrl-x, `d`) or paste over (Ctrl-v, `p`); started while
     /// typing, typing replaces it, as in any text field.
@@ -3118,6 +3151,11 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         let from_insert = self.visual_from == Mode::Insert;
+        // gc: comment the selected lines out, or back in.
+        if key.code == KeyCode::Char('c') && !ctrl && self.pending == Some('g') {
+            self.pending = None;
+            return self.toggle_comment();
+        }
         match key.code {
             KeyCode::Esc => self.end_visual(),
             KeyCode::Char('c') if ctrl => {
@@ -4265,6 +4303,17 @@ impl App {
         if let Some(pending) = pending {
             match (pending, key.code) {
                 ('g', KeyCode::Char('g')) => b.goto(if has_count { count } else { 1 }),
+                // gc waits for a second c: gcc comments the line out (3gcc three).
+                ('g', KeyCode::Char('c')) => {
+                    self.pending = Some(COMMENT_LINES);
+                    if has_count {
+                        self.count = count.to_string();
+                    }
+                }
+                (COMMENT_LINES, KeyCode::Char('c')) => {
+                    let first = b.row;
+                    return self.toggle_comment_lines(first, first + count - 1);
+                }
                 ('g', KeyCode::Char('d')) => return self.lsp_request(lsp::Kind::Definition),
                 (']', KeyCode::Char('d')) => self.next_diagnostic(false),
                 ('[', KeyCode::Char('d')) => self.next_diagnostic(true),
@@ -6239,6 +6288,9 @@ fn is_motion(code: KeyCode) -> bool {
 }
 
 /// Normal-mode motions that also extend a `v`/`V` selection.
+/// The key `gc` waits on: a second `c` comments out lines (`gcc`).
+const COMMENT_LINES: char = '\u{1}';
+
 fn is_vim_motion(code: KeyCode) -> bool {
     matches!(
         code,
@@ -7054,6 +7106,49 @@ mod tests {
         app.event(Event::Paste("!".into()));
         assert!(text(&mut app).starts_with("!Zbeta") || text(&mut app).starts_with("Z!beta"));
     }
+    #[test]
+    fn ctrl_slash_and_gc_comment_lines_out_and_back_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.py");
+        std::fs::write(&path, "a = 1\nb = 2\nc = 3\n").unwrap();
+        let mut app = App::new(dir.path().into(), Some(path), false).unwrap();
+        let text = |app: &mut App| app.active_buffer().unwrap().text.to_string();
+        let none = KeyModifiers::NONE;
+        let ctrl = KeyModifiers::CONTROL;
+        // Ctrl-/ as terminals send it (Ctrl-_, read as Ctrl-7), and as kitty does.
+        press(&mut app, KeyCode::Char('7'), ctrl);
+        assert_eq!(text(&mut app), "# a = 1\nb = 2\nc = 3\n");
+        press(&mut app, KeyCode::Char('/'), ctrl);
+        assert_eq!(text(&mut app), "a = 1\nb = 2\nc = 3\n");
+        // 2gcc: two lines from the cursor's.
+        for c in ['2', 'g', 'c', 'c'] {
+            press(&mut app, KeyCode::Char(c), none);
+        }
+        assert_eq!(text(&mut app), "# a = 1\n# b = 2\nc = 3\n");
+        assert_eq!(app.mode, Mode::Normal);
+        // V selects lines; gc toggles them, and the selection ends.
+        press(&mut app, KeyCode::Char('V'), none);
+        press(&mut app, KeyCode::Char('j'), none);
+        press(&mut app, KeyCode::Char('g'), none);
+        press(&mut app, KeyCode::Char('c'), none);
+        assert_eq!(text(&mut app), "a = 1\nb = 2\nc = 3\n");
+        assert_eq!(app.mode, Mode::Normal);
+        // While typing, on a Shift-selection (to the start of line 3: lines 1 and 2,
+        // as in VS Code).
+        press(&mut app, KeyCode::Char('g'), none);
+        press(&mut app, KeyCode::Char('g'), none);
+        press(&mut app, KeyCode::Char('i'), none);
+        press(&mut app, KeyCode::Down, KeyModifiers::SHIFT);
+        press(&mut app, KeyCode::Down, KeyModifiers::SHIFT);
+        press(&mut app, KeyCode::Char('_'), ctrl);
+        assert_eq!(text(&mut app), "# a = 1\n# b = 2\nc = 3\n");
+        assert_eq!(app.mode, Mode::Insert);
+        // u undoes it at once.
+        press(&mut app, KeyCode::Esc, none);
+        press(&mut app, KeyCode::Char('u'), none);
+        assert_eq!(text(&mut app), "a = 1\nb = 2\nc = 3\n");
+    }
+
     #[test]
     fn ctrl_a_selects_the_whole_file_to_copy_delete_or_replace() {
         let dir = tempfile::tempdir().unwrap();

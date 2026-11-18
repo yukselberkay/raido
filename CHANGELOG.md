@@ -10,6 +10,11 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **Comment out lines** with `Ctrl-/` in any mode, `gcc` (`3gcc` for three lines) or
+  `gc` on a selection, and back in with the same keys, as in VS Code: each
+  language's own mark at the lines' shared indentation, blank lines left alone,
+  `<!-- -->` and `/* */` where a language has no line comment.
+
 - **TypeScript and JavaScript.** `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs` and `.cjs` files,
   plain text in Raido before, are highlighted by its own grammar, JSX included
   (`<T>` stays a generic in `.ts`). `typescript-language-server` brings type errors,

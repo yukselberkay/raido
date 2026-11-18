@@ -993,6 +993,7 @@ press Enter.
 | `yy` / `17yy` / `p` / `P` | Copy the line / 17 lines / paste below (after cursor) / above (at cursor) |
 | `v` / `V` | Select characters / whole lines (see [Copy and paste](#copy-and-paste)) |
 | `K` / `gd` / `Ctrl-o` | Hover docs / go to definition / jump back |
+| `gcc` / `3gcc`, `gc` on a selection, `Ctrl-/` in any mode | Comment out the line / three lines / the selected lines, or back in (see below) |
 | `]d` / `[d` | Next / previous diagnostic |
 | `]c` / `[c` | Next / previous [change from Git](#changes-in-the-gutter) |
 | `u` / `Ctrl-r` | Undo / redo |
@@ -1098,6 +1099,14 @@ its shape at a quarter of its size, in the color most of that text has.
 An editor needs room for 60 columns of code beside it, so narrow splits go without.
 `:minimap` hides and shows it until you quit; `minimap = false` in config.toml keeps
 it off.
+
+**Comment out lines** with `Ctrl-/` (in any mode, on the line or the selected
+lines), `gcc` (the line; `3gcc` three) or `gc` on a selection, as in VS Code and
+Vim's commentary: the language's mark goes at the lines' shared indentation (`//`,
+`#`, `--`, `;`…), blank lines are left alone, and the same keys comment lines back in
+once they all are. Languages without a line comment get one around each line
+(`<!-- … -->` in HTML, XML and Markdown, `/* … */` in CSS). `u` undoes it at once.
+Terminals send `Ctrl-/` as `Ctrl-_`, which works too.
 
 ### Editor: insert mode
 

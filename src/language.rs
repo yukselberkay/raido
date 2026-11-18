@@ -1071,6 +1071,138 @@ pub fn open_line(b: &mut Buffer, rules: &Rules, above: bool) {
     }
 }
 
+/// How a language comments a line out: a mark to the line's end, or a pair around it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Comment {
+    Line(&'static str),
+    Block(&'static str, &'static str),
+}
+
+/// How the file in `buffer` comments a line out, if its language has comments.
+pub fn comment_marks(buffer: &Buffer) -> Option<Comment> {
+    let path = buffer.path.as_deref();
+    let name = path
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let ext = path
+        .and_then(|p| p.extension())
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let by_extension = match ext.as_str() {
+        "css" => Some(Comment::Block("/*", "*/")),
+        "html" | "htm" | "xhtml" | "xml" | "svg" | "plist" | "md" | "markdown" | "mdx" => {
+            Some(Comment::Block("<!--", "-->"))
+        }
+        "ml" | "mli" => Some(Comment::Block("(*", "*)")),
+        "sql" | "hs" | "elm" | "ada" => Some(Comment::Line("--")),
+        "ini" => Some(Comment::Line(";")),
+        "clj" | "cljs" | "cljc" | "edn" | "el" | "lisp" | "scm" | "rkt" => Some(Comment::Line(";")),
+        "erl" | "hrl" | "tex" | "sty" => Some(Comment::Line("%")),
+        "vim" => Some(Comment::Line("\"")),
+        "bat" | "cmd" => Some(Comment::Line("REM")),
+        "proto" | "scss" | "less" | "jsonc" => Some(Comment::Line("//")),
+        "ps1" | "psm1" | "psd1" | "env" | "tf" | "tfvars" | "hcl" | "nomad" | "r" | "pl" | "pm"
+        | "cmake" | "conf" | "cfg" | "cnf" | "nix" | "ex" | "exs" | "jl" | "tcl" | "properties"
+        | "service" | "socket" | "timer" | "desktop" | "gitignore" | "dockerignore" => {
+            Some(Comment::Line("#"))
+        }
+        _ => None,
+    };
+    let by_name = (name.starts_with(".env")
+        || name.ends_with("ignore")
+        || matches!(
+            name.as_str(),
+            ".editorconfig" | ".gitconfig" | ".gitmodules" | ".gitattributes" | ".npmrc"
+        ))
+    .then_some(Comment::Line("#"));
+    by_extension
+        .or(by_name)
+        .or_else(|| Lang::of(buffer).comment().map(Comment::Line))
+}
+
+/// Comment out lines `first..=last` of `b`, or, when every one of them that isn't
+/// blank already is, comment them back in, as VS Code's Ctrl-/ does: the mark goes at
+/// the lines' shared indentation, blank lines stay as they are, and it's one undo
+/// step. The cursor stays on its text. False when there was nothing to do.
+pub fn toggle_comment(b: &mut Buffer, first: usize, last: usize, comment: Comment) -> bool {
+    let last = last.min(b.lines().saturating_sub(1));
+    if first > last {
+        return false;
+    }
+    let text = |row: usize| -> String { b.line(row).trim_end_matches(['\n', '\r']).to_string() };
+    let lines: Vec<String> = (first..=last).map(text).collect();
+    let indent = |l: &str| l.chars().take_while(|c| *c == ' ' || *c == '\t').count();
+    let filled: Vec<&String> = lines.iter().filter(|l| !l.trim().is_empty()).collect();
+    if filled.is_empty() {
+        return false;
+    }
+    let commented = |l: &str| {
+        let body = l.trim();
+        match comment {
+            Comment::Line(mark) => body.starts_with(mark),
+            Comment::Block(open, close) => {
+                body.len() >= open.len() + close.len()
+                    && body.starts_with(open)
+                    && body.ends_with(close)
+            }
+        }
+    };
+    let uncomment = filled.iter().all(|l| commented(l));
+    let at = filled.iter().map(|l| indent(l)).min().unwrap_or(0);
+    let changed: Vec<String> = lines
+        .iter()
+        .map(|l| {
+            if l.trim().is_empty() {
+                return l.clone();
+            }
+            let lead: String = l.chars().take(indent(l)).collect();
+            let body = &l[lead.len()..];
+            match (comment, uncomment) {
+                (Comment::Line(mark), true) => {
+                    let rest = &body[mark.len()..];
+                    format!("{lead}{}", rest.strip_prefix(' ').unwrap_or(rest))
+                }
+                (Comment::Block(open, close), true) => {
+                    let inner = body.trim_end();
+                    let inner = &inner[open.len()..inner.len() - close.len()];
+                    let inner = inner.strip_prefix(' ').unwrap_or(inner);
+                    format!("{lead}{}", inner.strip_suffix(' ').unwrap_or(inner))
+                }
+                (Comment::Line(mark), false) => {
+                    let (head, tail): (String, String) =
+                        (l.chars().take(at).collect(), l.chars().skip(at).collect());
+                    format!("{head}{mark} {tail}")
+                }
+                (Comment::Block(open, close), false) => {
+                    format!("{lead}{open} {} {close}", body.trim_end())
+                }
+            }
+        })
+        .collect();
+    let (row, col) = (b.row, b.col);
+    let start = b.text.line_to_char(first);
+    let end = start
+        + lines.iter().map(|l| l.chars().count()).sum::<usize>()
+        + (last - first) * eol(b).chars().count();
+    b.end_group();
+    b.replace(start, end, &changed.join(eol(b)));
+    b.end_group();
+    // The cursor stays on its character: after the text a mark went in front of.
+    b.row = row;
+    if (first..=last).contains(&row) {
+        let (old, new) = (&lines[row - first], &changed[row - first]);
+        let delta = new.chars().count() as isize - old.chars().count() as isize;
+        if col >= at.min(indent(old)) {
+            b.col = col.saturating_add_signed(delta);
+        }
+    }
+    b.clamp();
+    true
+}
+
 /// Options for typing.
 #[derive(Clone, Copy)]
 pub struct Typing {
@@ -1652,6 +1784,62 @@ mod tests {
         let rules = Rules::new(&buffer("a.sh", ""), 4);
         assert!(rules.opens_block("if [ ${#list[@]} -gt 0 ]; then"));
         assert!(rules.opens_block("if x; then # check"));
+    }
+
+    #[test]
+    fn lines_are_commented_out_and_back_in() {
+        let toggled = |name: &str, text: &str, first: usize, last: usize| {
+            let mut b = buffer(name, text);
+            let marks = comment_marks(&b).unwrap();
+            toggle_comment(&mut b, first, last, marks);
+            b.text.to_string()
+        };
+        // At the lines' shared indentation; blank lines left alone.
+        let rust = "fn main() {\n    let a = 1;\n\n        a\n}\n";
+        let out = toggled("a.rs", rust, 1, 3);
+        assert_eq!(out, "fn main() {\n    // let a = 1;\n\n    //     a\n}\n");
+        // And back, with the space after the mark.
+        let mut b = buffer("a.rs", &out);
+        toggle_comment(&mut b, 1, 3, Comment::Line("//"));
+        assert_eq!(b.text.to_string(), rust);
+        // Some lines commented and some not: all get commented.
+        assert_eq!(toggled("a.py", "# x\ny\n", 0, 1), "# # x\n# y\n");
+        assert_eq!(toggled("a.py", "#x\n# y\n", 0, 1), "x\ny\n");
+        // Each language its own mark; a pair where there's no line comment.
+        assert_eq!(toggled("a.lua", "x = 1\n", 0, 0), "-- x = 1\n");
+        assert_eq!(toggled("a.sql", "select 1\n", 0, 0), "-- select 1\n");
+        assert_eq!(toggled("Dockerfile", "RUN x\n", 0, 0), "# RUN x\n");
+        assert_eq!(
+            toggled("deploy", "#!/bin/sh\nrm -rf x\n", 1, 1),
+            "#!/bin/sh\n# rm -rf x\n"
+        );
+        assert_eq!(
+            toggled("a.html", "  <p>hi</p>\n", 0, 0),
+            "  <!-- <p>hi</p> -->\n"
+        );
+        assert_eq!(
+            toggled("a.html", "  <!-- <p>hi</p> -->\n", 0, 0),
+            "  <p>hi</p>\n"
+        );
+        assert_eq!(
+            toggled("a.css", "a { color: red; }\n", 0, 0),
+            "/* a { color: red; } */\n"
+        );
+        assert_eq!(toggled("a.ini", "key = 1\n", 0, 0), "; key = 1\n");
+        assert_eq!(toggled(".env.local", "KEY=1\n", 0, 0), "# KEY=1\n");
+        // Windows line breaks stay.
+        assert_eq!(toggled("a.rs", "a\r\nb\r\n", 0, 1), "// a\r\n// b\r\n");
+        // The cursor stays on its character.
+        let mut b = buffer("a.rs", "    let x = 1;\n");
+        (b.row, b.col) = (0, 8);
+        toggle_comment(&mut b, 0, 0, Comment::Line("//"));
+        assert_eq!((b.row, b.col), (0, 11));
+        assert_eq!(b.line(0).chars().nth(11), Some('x'));
+        // Undone at once.
+        b.undo(false);
+        assert_eq!(b.text.to_string(), "    let x = 1;\n");
+        // Plain text has no comments.
+        assert_eq!(comment_marks(&buffer("notes.txt", "x\n")), None);
     }
 
     #[test]

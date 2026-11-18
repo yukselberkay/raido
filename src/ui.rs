@@ -3278,6 +3278,10 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         ),
         ("Ctrl-a", "Select the whole file"),
         (
+            "Ctrl-/ · gcc · gc",
+            "Comment lines out / back in (line, selection)",
+        ),
+        (
             "LANGUAGE SERVERS",
             "Rust Go Python C/C++ TS/JS shell YAML JSON Docker · :lsp",
         ),
