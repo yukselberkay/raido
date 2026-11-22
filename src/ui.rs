@@ -3,11 +3,12 @@ use crate::{
     config::{color, Theme},
     editor::Buffer,
     gitgraph::{self, Focus as GitFocus, GitView, RefKind},
+    hex::HexView,
     lsp::Diagnostic,
     markdown, minimap,
     quickdiff::Change,
     review::{self, ChangesView},
-    sheet::{self, Align, Drawn, Kind, SheetView},
+    sheet::{self, Align, Drawn, Kind, SheetView, ROW_LINES},
     workspace::{printable, Mark},
 };
 use ratatui::{
@@ -279,6 +280,27 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     None => "all branches".into(),
                 }
             ),
+            Some(Pane::Hex(view)) => format!(
+                " {} {} · hex · read-only{} ",
+                number,
+                printable(
+                    &view
+                        .path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                ),
+                if view.peeked { " · preview" } else { "" }
+            ),
+            Some(Pane::Sheet(view)) if view.buffer.is_some() => {
+                let buffer = &app.buffers[view.buffer.unwrap_or_default()];
+                format!(
+                    " {} {} · grid{} ",
+                    number,
+                    printable(&buffer.name()),
+                    if buffer.dirty { " ●" } else { "" }
+                )
+            }
             Some(Pane::Sheet(view)) => format!(
                 " {} {}{} · read-only{} ",
                 number,
@@ -660,6 +682,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             ),
             Some(Pane::Git(view)) => git_view(frame, view, inner, &theme, &app.syntax),
             Some(Pane::Sheet(view)) => sheet_view(frame, view, inner, &theme, bare),
+            Some(Pane::Hex(view)) => hex_view(frame, view, inner, &theme, bare),
             Some(Pane::Changes(view)) => {
                 view.show = view.notes.unwrap_or(app.config.review_summary);
                 changes_view(frame, &app.changes, view, inner, &theme, &app.syntax)
@@ -2752,18 +2775,45 @@ fn fit_cell(text: &str, width: usize, align: Align) -> String {
     format!("{}{text}{}", " ".repeat(before), " ".repeat(after))
 }
 
-/// A spreadsheet: column letters along the top, row numbers down the side, the
-/// sheet's first row kept on screen as a header once it scrolls away, the selected
-/// cell lit; below, that cell in full (its formula, its exact number), then the
-/// sheets as tabs.
+/// `text` cut to `width` columns (a wide character that doesn't fit is left out).
+fn cut(text: &str, width: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        let w = c.width().unwrap_or(0);
+        if used + w > width {
+            break;
+        }
+        used += w;
+        out.push(c);
+    }
+    out
+}
+
+/// One cell (or a run of cells its text spills into, or a merged range) on one
+/// row: where it starts in the row's columns and how many it covers, its lines.
+struct Piece {
+    /// Index of its first column in the columns on screen, and how many it takes.
+    first: usize,
+    count: usize,
+    lines: Vec<String>,
+    style: Style,
+    /// The selected cell is in it.
+    lit: bool,
+}
+
+/// Data in a grid: column letters along the top, row numbers down the side, rows
+/// kept on screen at the top (Excel's frozen rows, else the first row as a
+/// header) and columns at the left (frozen columns), the selected cell lit. Text
+/// Excel wraps (or, in a table, any long text) wraps in its column and the row
+/// grows; other text spills into empty cells to its right, as in Excel. Below:
+/// the selected cell in full, then the sheets as tabs.
 fn sheet_view(frame: &mut Frame, view: &mut SheetView, area: Rect, theme: &Theme, bare: bool) {
-    let fg = color(&theme.foreground);
     let muted = color(&theme.muted);
     let accent = color(&theme.accent);
     let warning = color(&theme.warning);
     let background = color(&theme.background);
-    let selection = color(&theme.selection);
-    let border = color(&theme.border);
+    let fg = color(&theme.foreground);
     view.drawn = Drawn::default();
     let file = printable(
         &view
@@ -2777,12 +2827,188 @@ fn sheet_view(frame: &mut Frame, view: &mut SheetView, area: Rect, theme: &Theme
         return;
     }
     let tabs = !bare && area.height > 6;
-    let info = !bare && area.height > 3;
-    let footer = u16::from(tabs) + u16::from(info);
+    let room = match area.height {
+        _ if bare => 0,
+        0..=3 => 0,
+        4..=7 => 1,
+        8..=15 => 2,
+        _ => 4,
+    };
+    let panel = cell_panel(view, area.width as usize, room, theme);
+    let footer = u16::from(tabs) + panel.len() as u16;
     let body = Rect::new(area.x, area.y, area.width, area.height - footer);
+    if view.sheets.is_empty() {
+        let what = if view.loading() {
+            format!(" Reading {file}…")
+        } else if view.database {
+            " No tables in this database".into()
+        } else {
+            " No sheets in this workbook".into()
+        };
+        text(frame, area, what, muted);
+        return;
+    }
+    grid_body(frame, view, body, theme);
+    for (i, line) in panel.into_iter().enumerate() {
+        frame.render_widget(
+            Paragraph::new(line),
+            Rect::new(area.x, body.bottom() + i as u16, area.width, 1),
+        );
+    }
+    if tabs {
+        sheet_tabs(
+            frame,
+            view,
+            Rect::new(area.x, area.bottom() - 1, area.width, 1),
+            theme,
+        );
+    }
+    // Enter: the selected cell in full, over the grid.
+    let mut scrolled = None;
+    if let (Some(scroll), Some(grid), Some((r, c))) = (view.reading, view.grid(), view.selected()) {
+        let mut popup = Rect::new(
+            area.x + 2.min(area.width / 10),
+            area.y + 1.min(area.height / 10),
+            area.width.saturating_sub(2 * 2.min(area.width / 10)),
+            area.height.saturating_sub(2 * 1.min(area.height / 10)),
+        );
+        if popup.width < 10 || popup.height < 3 {
+            view.reading = None;
+            return;
+        }
+        let inner_width = popup.width.saturating_sub(4) as usize;
+        let mut lines: Vec<Line> = sheet::wrap_text(&grid.full(r, c), inner_width)
+            .into_iter()
+            .map(|l| Line::styled(format!(" {l}"), Style::default().fg(fg)))
+            .collect();
+        if let Some(formula) = grid.formula(r, c) {
+            lines.push(Line::raw(""));
+            for l in sheet::wrap_text(&format!("={formula}"), inner_width) {
+                lines.push(Line::styled(format!(" {l}"), Style::default().fg(muted)));
+            }
+        }
+        if let Some(exact) = grid.exact(r, c) {
+            lines.push(Line::styled(
+                format!(" exactly {exact}"),
+                Style::default().fg(muted),
+            ));
+        }
+        // As tall as the text, up to the pane.
+        popup.height = popup.height.min(lines.len() as u16 + 2).max(3);
+        let height = popup.height.saturating_sub(2) as usize;
+        let last = lines.len().saturating_sub(height);
+        let scroll = usize::from(scroll).min(last);
+        scrolled = Some(scroll as u16);
+        let more = if last > 0 {
+            format!(" {}% ", (scroll * 100).checked_div(last).unwrap_or(100))
+        } else {
+            String::new()
+        };
+        let title = format!(" {} · y copy · Esc ", grid.label(r, c));
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(lines.split_off(scroll.min(lines.len())))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
+                        .border_style(Style::default().fg(accent))
+                        .title(Span::styled(title, Style::default().fg(accent)))
+                        .title_bottom(
+                            Line::styled(more, Style::default().fg(muted)).right_aligned(),
+                        ),
+                )
+                .style(Style::default().bg(background)),
+            popup,
+        );
+    }
+    if scrolled.is_some() {
+        view.reading = scrolled;
+    }
+}
+
+/// The selected cell in full under the grid, wrapped over up to `room` lines:
+/// its name, its text, its formula and its exact number; or the search typed.
+fn cell_panel(view: &SheetView, width: usize, room: usize, theme: &Theme) -> Vec<Line<'static>> {
+    let muted = Style::default().fg(color(&theme.muted));
+    let accent = Style::default().fg(color(&theme.accent));
+    let fg = Style::default().fg(color(&theme.foreground));
+    if room == 0 {
+        return Vec::new();
+    }
+    if let Some(typed) = &view.typing {
+        return vec![Line::from(vec![
+            Span::styled(" /", accent),
+            Span::styled(printable(typed), fg),
+            Span::styled("▏", accent),
+        ])];
+    }
+    let (Some(grid), Some((r, c))) = (view.grid(), view.selected()) else {
+        return vec![Line::raw("")];
+    };
+    let label = format!(" {} ", grid.label(r, c));
+    let indent = label.width();
+    let text_width = width.saturating_sub(indent + 1).max(8);
+    let mut wrapped = sheet::wrap_text(&grid.full(r, c), text_width);
+    let mut extra = Vec::new();
+    if let Some(formula) = grid.formula(r, c) {
+        extra.push(format!("={}", printable(formula)));
+    }
+    if let Some(exact) = grid.exact(r, c) {
+        extra.push(format!("exactly {exact}"));
+    }
+    let extra = extra.join("   ");
+    // The formula and exact number go after a short text, else on a line of their
+    // own when there's room.
+    let short = wrapped.len() == 1 && wrapped[0].width() + 3 + extra.width() <= text_width;
+    let extra_line = !extra.is_empty() && !short;
+    let lines_for_text = room - usize::from(extra_line && room > 1);
+    let cut_short = wrapped.len() > lines_for_text;
+    if cut_short {
+        wrapped.truncate(lines_for_text.max(1));
+        let note = "… Enter shows it all";
+        if let Some(last) = wrapped.last_mut() {
+            let keep = text_width.saturating_sub(note.width() + 1);
+            *last = format!("{} {note}", cut(last, keep).trim_end());
+        }
+    }
+    let mut lines: Vec<Line> = wrapped
+        .into_iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let head = if i == 0 {
+                Span::styled(label.clone(), accent.add_modifier(Modifier::BOLD))
+            } else {
+                Span::raw(" ".repeat(indent))
+            };
+            let mut spans = vec![head, Span::styled(text, fg)];
+            if i == 0 && short && !extra.is_empty() {
+                spans.push(Span::styled(format!("   {extra}"), muted));
+            }
+            Line::from(spans)
+        })
+        .collect();
+    if extra_line && lines.len() < room {
+        lines.push(Line::from(vec![
+            Span::raw(" ".repeat(indent)),
+            Span::styled(extra, muted),
+        ]));
+    }
+    lines
+}
+
+/// The rows and columns of the shown sheet, in `body`.
+fn grid_body(frame: &mut Frame, view: &mut SheetView, body: Rect, theme: &Theme) {
+    let fg = color(&theme.foreground);
+    let muted = color(&theme.muted);
+    let accent = color(&theme.accent);
+    let warning = color(&theme.warning);
+    let background = color(&theme.background);
+    let selection = color(&theme.selection);
+    let border = color(&theme.border);
+    let wrap = view.wrap;
     let current = view.current;
     let Some(sheet) = view.sheets.get_mut(current) else {
-        text(frame, area, format!(" Reading {file}…"), muted);
         return;
     };
     let sheet::Sheet {
@@ -2797,259 +3023,634 @@ fn sheet_view(frame: &mut Frame, view: &mut SheetView, area: Rect, theme: &Theme
     let grid = match grid.as_ref() {
         None => {
             text(frame, body, format!(" Reading {}…", printable(name)), muted);
-            None
+            return;
         }
         Some(Err(why)) => {
             text(frame, body, format!(" {why}"), muted);
-            None
+            return;
         }
         Some(Ok(grid)) if grid.rows == 0 => {
             text(frame, body, " This sheet is empty", muted);
-            None
+            return;
         }
-        Some(Ok(grid)) => Some(grid),
+        Some(Ok(grid)) => grid,
     };
-    if let Some(grid) = grid.filter(|_| body.height > 1) {
-        let digits = grid.rows.to_string().len();
-        let gutter = digits as u16 + 1;
-        let lines = u32::from(body.height - 1);
-        // The selected row on screen, the sheet's first row pinned above the rest
-        // once it has scrolled away.
-        let can_pin = lines > 2;
-        for _ in 0..2 {
-            let pinned = can_pin && *top > grid.first;
-            let shown = lines - u32::from(pinned);
-            if *row < *top {
-                *top = *row;
-            }
-            if *row >= *top + shown {
-                *top = *row + 1 - shown;
-            }
+    if body.height < 2 || body.width < 8 {
+        return;
+    }
+    let digits = grid
+        .number(grid.rows - 1)
+        .len()
+        .max(grid.number(0).len())
+        .max(1);
+    let gutter = digits as u16 + 1;
+    let room = body.width.saturating_sub(gutter + 1);
+    let shown = |c: &u32| !grid.is_hidden(*c);
+    // Each column's width here: none wider than the pane (its text wraps there).
+    let most = room.saturating_sub(3).max(1);
+    let mut widths: Vec<u16> = grid.widths.iter().map(|&w| w.min(most)).collect();
+    // Excel's frozen columns stay at the left. When they'd take more than three
+    // quarters of the width, the widest give way (down to 24), then the last go.
+    let limit = room * 3 / 4;
+    let frozen_cols: Vec<u32> = (0..grid.frozen_cols).filter(shown).collect();
+    let taken = |widths: &[u16]| -> u16 {
+        frozen_cols
+            .iter()
+            .map(|&c| widths[c as usize].saturating_add(3))
+            .sum()
+    };
+    while taken(&widths) > limit {
+        match frozen_cols
+            .iter()
+            .copied()
+            .max_by_key(|&c| widths[c as usize])
+        {
+            Some(c) if widths[c as usize] > 24 => widths[c as usize] -= 1,
+            _ => break,
         }
-        let pinned = can_pin && *top > grid.first;
-        let shown = lines - u32::from(pinned);
-        view.page = shown;
-        // The selected column on screen: each takes its width and three more
-        // (a space each side and the line after).
-        let room = u32::from(body.width.saturating_sub(gutter + 1));
-        let slot = |c: u32| u32::from(grid.widths[c as usize]) + 3;
+    }
+    let slot = |c: u32| widths[c as usize].saturating_add(3);
+    let mut frozen = 0;
+    let mut frozen_width = 0u16;
+    for &c in &frozen_cols {
+        if frozen_width + slot(c) > limit {
+            break;
+        }
+        frozen_width += slot(c);
+        frozen = c + 1;
+    }
+    if *left < frozen {
+        *left = frozen;
+    }
+    if *col >= frozen {
         if *col < *left {
             *left = *col;
         }
-        while *left < *col && (*left..=*col).map(slot).sum::<u32>() > room {
-            *left += 1;
+        let space = room.saturating_sub(frozen_width);
+        // The selected column is on screen whole: narrower if it must be.
+        let fits = space.saturating_sub(3).max(1);
+        if let Some(w) = widths.get_mut(*col as usize) {
+            *w = (*w).min(fits);
         }
-        let mut columns = Vec::new();
-        let mut x = body.x + gutter + 1;
-        let mut c = *left;
-        while c < grid.cols && x < body.right() {
-            let width = grid.widths[c as usize];
-            columns.push((x, width, c));
-            x = x.saturating_add(width + 3);
-            c += 1;
+        let slot = |c: u32| widths[c as usize].saturating_add(3);
+        while *left < *col
+            && (*left..=*col)
+                .filter(shown)
+                .map(|c| u32::from(slot(c)))
+                .sum::<u32>()
+                > u32::from(space)
+        {
+            *left = grid.step_col(*left, 1);
         }
-        let line = Style::default().fg(border);
-        let mut letters = vec![
-            Span::raw(" ".repeat(gutter as usize)),
-            Span::styled("│", line),
-        ];
-        for &(_, width, c) in &columns {
-            let style = if c == *col {
-                Style::default().fg(accent).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(muted)
-            };
-            letters.push(Span::styled(
-                format!(
-                    " {} ",
-                    fit_cell(&sheet::column_name(c), width.into(), Align::Center)
-                ),
-                style,
-            ));
-            letters.push(Span::styled("│", line));
+    }
+    // (x, width on screen, column): a column cut by the pane's edge is narrower.
+    let mut columns: Vec<(u16, u16, u32)> = Vec::new();
+    let mut x = body.x + gutter + 1;
+    for c in (0..frozen).chain(*left..grid.cols).filter(shown) {
+        if x + 2 > body.right() {
+            break;
         }
+        let width = widths[c as usize].min(body.right() - x - 1);
+        let full = widths[c as usize];
+        // Cut by the pane's edge but still wide: its text wraps in what shows.
+        if width < full && width >= 12 {
+            widths[c as usize] = width;
+        }
+        columns.push((x, width, c));
+        x = x.saturating_add(full + 3);
+    }
+    let last_frozen = columns.iter().rposition(|&(_, _, c)| c < frozen);
+
+    // Rows: each as tall as the wrapped text of its columns on screen in full (up
+    // to half the pane; Excel's frozen rows, or the header row, up to 3 lines).
+    let height = |r: u32, most: usize| -> usize {
+        if !wrap {
+            return 1;
+        }
+        columns
+            .iter()
+            .filter(|&&(_, width, c)| {
+                width == widths[c as usize]
+                    && grid.merge_at(r, c).is_none()
+                    && grid.wraps(r, c, wrap)
+            })
+            .map(|&(_, _, c)| grid.wrapped(r, c, widths[c as usize].into(), wrap).len())
+            .max()
+            .unwrap_or(1)
+            .clamp(1, most)
+    };
+    let row_lines = ROW_LINES.max(usize::from(body.height) / 2);
+    // Column letters, unless the first row names the columns (a database's).
+    let letters_line = u16::from(!grid.named);
+    let lines = usize::from(body.height - letters_line);
+    // Rows kept at the top: no more than fit in half the grid.
+    let pins = {
+        let all = grid.pinned();
+        let mut used = 0;
+        let end = all
+            .clone()
+            .take_while(|&r| {
+                used += height(r, 3);
+                used <= lines / 2
+            })
+            .last()
+            .map_or(all.start, |r| r + 1);
+        all.start..end
+    };
+    let frozen_rows = grid.frozen_rows.is_some();
+    let pinned_rows = |top: u32| -> Vec<u32> {
+        if (frozen_rows && *row >= pins.end) || (!frozen_rows && top > pins.start) {
+            pins.clone().collect()
+        } else {
+            Vec::new()
+        }
+    };
+    if frozen_rows && *row >= pins.end && *top < pins.end {
+        *top = pins.end;
+    }
+    for _ in 0..2 {
+        let pinned: usize = pinned_rows(*top).into_iter().map(|r| height(r, 3)).sum();
+        let space = lines.saturating_sub(pinned).max(1);
+        if *row < *top {
+            *top = *row;
+            continue;
+        }
+        // Up from the selected row, as many rows as fit above it.
+        let mut used = 0;
+        let mut first = *row;
+        loop {
+            used += height(first, row_lines);
+            if used > space {
+                first = (first + 1).min(*row);
+                break;
+            }
+            if first <= *top {
+                break;
+            }
+            first -= 1;
+        }
+        *top = (*top).max(first);
+    }
+    let pinned = pinned_rows(*top);
+
+    // The column letters.
+    let line = Style::default().fg(border);
+    let mut letters = vec![
+        Span::raw(" ".repeat(gutter as usize)),
+        Span::styled("│", line),
+    ];
+    for (i, &(_, width, c)) in columns.iter().enumerate() {
+        let style = if c == *col {
+            Style::default().fg(accent).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(muted)
+        };
+        letters.push(Span::styled(
+            format!(
+                " {} ",
+                fit_cell(&sheet::column_name(c), width.into(), Align::Center)
+            ),
+            style,
+        ));
+        letters.push(separator(i, &columns, last_frozen, body, line));
+    }
+    if letters_line > 0 {
         frame.render_widget(
             Paragraph::new(Line::from(letters)),
             Rect::new(body.x, body.y, body.width, 1),
         );
-        let rows: Vec<u32> = pinned
-            .then_some(grid.first)
-            .into_iter()
-            .chain(*top..(*top + shown).min(grid.rows))
-            .collect();
-        for (i, &r) in rows.iter().enumerate() {
-            let y = body.y + 1 + i as u16;
-            let header = pinned && i == 0;
-            let lit = r == *row;
-            let number = if lit {
+    }
+
+    let mut y = body.y + letters_line;
+    let mut full = 0;
+    let order: Vec<(u32, bool)> = pinned
+        .iter()
+        .map(|&r| (r, true))
+        .chain((*top..grid.rows).map(|r| (r, false)))
+        .collect();
+    for (r, is_pinned) in order {
+        if y >= body.bottom() {
+            break;
+        }
+        let h = height(r, if is_pinned { 3 } else { row_lines });
+        let drawn = h.min(usize::from(body.bottom() - y));
+        if !is_pinned && drawn == h {
+            full += 1;
+        }
+        let lit_row = r == *row;
+        let underline = is_pinned && pinned.last() == Some(&r);
+        // The cells of this row, each spilling or merged over the columns it takes.
+        let mut pieces: Vec<Piece> = Vec::new();
+        let mut i = 0;
+        while i < columns.len() {
+            let (_, width, c) = columns[i];
+            let region_end = match last_frozen {
+                Some(f) if i <= f => f + 1,
+                _ => columns.len(),
+            };
+            let merge = grid.merge_at(r, c);
+            let cell = grid.shown(r, c);
+            let mut count = 1;
+            let lines: Vec<String>;
+            if let Some((r1, c1, _, c2)) = merge {
+                while i + count < region_end && columns[i + count].2 <= c2 {
+                    count += 1;
+                }
+                let span = span_width(&columns[i..i + count]);
+                lines = if r == r1 && c == c1 {
+                    let source = grid.shown(r1, c1);
+                    let mut wrapped = grid.wrapped(r1, c1, span, wrap);
+                    wrapped.truncate(h);
+                    wrapped
+                        .iter()
+                        .map(|l| fit_cell(l, span, source.align))
+                        .collect()
+                } else {
+                    vec![" ".repeat(span)]
+                };
+            } else if grid.wraps(r, c, wrap) {
+                let full_width = usize::from(widths[c as usize]);
+                let mut wrapped = grid.wrapped(r, c, full_width, wrap);
+                if wrapped.len() > h {
+                    wrapped.truncate(h);
+                    if let Some(last) = wrapped.last_mut() {
+                        *last = format!("{}…", cut(last, full_width.saturating_sub(1)));
+                    }
+                }
+                lines = wrapped
+                    .iter()
+                    .map(|l| cut(&fit_cell(l, full_width, cell.align), width.into()))
+                    .collect();
+            } else {
+                // Text too long for its column runs on over the empty cells to
+                // its right, as in Excel.
+                let long = cell.text.width() > usize::from(widths[c as usize]);
+                if long && cell.align == Align::Left && cell.kind == Kind::Value {
+                    while i + count < region_end {
+                        let next = columns[i + count].2;
+                        let empty = grid.shown(r, next).text.is_empty()
+                            && grid.merge_at(r, next).is_none()
+                            && !(lit_row && next == *col);
+                        if !empty || cell.text.width() <= span_width(&columns[i..i + count]) {
+                            break;
+                        }
+                        count += 1;
+                    }
+                }
+                let span = span_width(&columns[i..i + count]);
+                let full_width = if count == 1 {
+                    usize::from(widths[c as usize])
+                } else {
+                    span
+                };
+                // A number too wide for its column isn't cut short (that would
+                // read as another number): #### as in Excel.
+                let text = if cell.number && cell.text.width() > full_width {
+                    "#".repeat(full_width)
+                } else {
+                    cell.text.clone()
+                };
+                lines = vec![cut(&fit_cell(&text, full_width, cell.align), span)];
+            }
+            let source = merge.map_or(cell, |(r1, c1, _, _)| grid.shown(r1, c1));
+            let mut style = Style::default().fg(match source.kind {
+                Kind::Value => fg,
+                Kind::Error => warning,
+                Kind::Formula | Kind::Missing => muted,
+            });
+            if source.bold || is_pinned {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            if source.kind == Kind::Formula {
+                style = style.add_modifier(Modifier::ITALIC);
+            }
+            let lit = lit_row && columns[i..i + count].iter().any(|&(_, _, c)| c == *col);
+            if lit_row {
+                style = style.bg(selection);
+            }
+            if lit {
+                style = Style::default()
+                    .fg(background)
+                    .bg(accent)
+                    .add_modifier(Modifier::BOLD);
+            }
+            pieces.push(Piece {
+                first: i,
+                count,
+                lines,
+                style,
+                lit,
+            });
+            i += count;
+        }
+        for l in 0..drawn {
+            let number = if l == 0 {
+                grid.number(r)
+            } else {
+                String::new()
+            };
+            let number_style = if lit_row {
                 Style::default().fg(accent).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(muted)
             };
             let mut spans = vec![
-                Span::styled(format!("{:>digits$} ", r + 1), number),
+                Span::styled(format!("{number:>digits$} "), number_style),
                 Span::styled("│", line),
             ];
-            for &(_, width, c) in &columns {
-                let cell = grid.shown(r, c);
-                let mut style = Style::default().fg(match cell.kind {
-                    Kind::Value => fg,
-                    Kind::Error => warning,
-                    Kind::Formula => muted,
-                });
-                if cell.bold || header {
-                    style = style.add_modifier(Modifier::BOLD);
-                }
-                if header {
+            for piece in &pieces {
+                let span = span_width(&columns[piece.first..piece.first + piece.count]);
+                let content = piece.lines.get(l).map(String::as_str).unwrap_or("");
+                let mut style = piece.style;
+                if underline && l + 1 == drawn {
                     style = style.add_modifier(Modifier::UNDERLINED);
                 }
-                if cell.kind == Kind::Formula {
-                    style = style.add_modifier(Modifier::ITALIC);
-                }
-                let mut after = line;
-                if lit {
-                    style = style.bg(selection);
-                    after = after.bg(selection);
-                }
-                if lit && c == *col {
-                    style = Style::default()
-                        .fg(background)
-                        .bg(accent)
-                        .add_modifier(Modifier::BOLD);
-                }
+                let _ = piece.lit;
                 spans.push(Span::styled(
-                    format!(" {} ", fit_cell(&cell.text, width.into(), cell.align)),
+                    format!(
+                        " {}{} ",
+                        content,
+                        " ".repeat(span.saturating_sub(content.width()))
+                    ),
                     style,
                 ));
-                spans.push(Span::styled("│", after));
+                let last = piece.first + piece.count - 1;
+                let mut after = separator(last, &columns, last_frozen, body, line);
+                if lit_row {
+                    after.style = after.style.bg(selection);
+                }
+                spans.push(after);
             }
             frame.render_widget(
                 Paragraph::new(Line::from(spans)),
-                Rect::new(body.x, y, body.width, 1),
+                Rect::new(body.x, y + l as u16, body.width, 1),
             );
-            view.drawn.rows.push((y, r));
         }
-        view.drawn.columns = columns;
+        view.drawn.rows.push((y, drawn as u16, r));
+        y += drawn as u16;
     }
-    // The selected cell in full, or the search being typed.
-    if info {
-        let y = body.bottom();
-        let spans = if let Some(typed) = &view.typing {
-            vec![
+    view.page = full.max(1);
+    view.drawn.columns = columns;
+}
+
+/// The width a run of columns on screen takes, the lines between them included.
+fn span_width(columns: &[(u16, u16, u32)]) -> usize {
+    columns
+        .iter()
+        .map(|&(_, w, _)| usize::from(w))
+        .sum::<usize>()
+        + 3 * columns.len().saturating_sub(1)
+}
+
+/// The line after column `i` on screen: heavier after the frozen columns, none
+/// after one the pane's edge cuts.
+fn separator(
+    i: usize,
+    columns: &[(u16, u16, u32)],
+    last_frozen: Option<usize>,
+    body: Rect,
+    style: Style,
+) -> Span<'static> {
+    let (x, width, _) = columns[i];
+    if x + width + 3 >= body.right() {
+        return Span::raw("");
+    }
+    Span::styled(if last_frozen == Some(i) { "┃" } else { "│" }, style)
+}
+
+/// The sheets as tabs, the one shown lit, its size at the right.
+fn sheet_tabs(frame: &mut Frame, view: &mut SheetView, area: Rect, theme: &Theme) {
+    let fg = color(&theme.foreground);
+    let muted = color(&theme.muted);
+    let accent = color(&theme.accent);
+    let background = color(&theme.background);
+    let border = color(&theme.border);
+    let current = view.current;
+    let size = match view.grid() {
+        Some(grid) => format!("{} ", grid.size()),
+        None if view.loading() => "reading… ".into(),
+        None => String::new(),
+    };
+    let size_width = size.width() as u16;
+    let room = area.width.saturating_sub(size_width + 1);
+    let labels: Vec<String> = view
+        .sheets
+        .iter()
+        .map(|s| match s.note {
+            "" => format!(" {} ", printable(&s.name)),
+            note => format!(" {} ({note}) ", printable(&s.name)),
+        })
+        .collect();
+    // Leave out sheets at the start until the one shown fits.
+    let mut first = 0;
+    while first < current
+        && labels[first..=current]
+            .iter()
+            .map(|l| l.width() + 1)
+            .sum::<usize>()
+            + 1
+            > usize::from(room)
+    {
+        first += 1;
+    }
+    let mut spans = Vec::new();
+    let mut x = area.x;
+    if first > 0 {
+        spans.push(Span::styled("‹", Style::default().fg(muted)));
+        x += 1;
+    }
+    for (i, label) in labels.iter().enumerate().skip(first) {
+        let width = label.width() as u16;
+        // A tab that doesn't fit whole: › says there are more.
+        if x + width + 1 > area.x + room && i != current {
+            spans.push(Span::styled("›", Style::default().fg(muted)));
+            break;
+        }
+        let style = if i == current {
+            Style::default()
+                .fg(background)
+                .bg(accent)
+                .add_modifier(Modifier::BOLD)
+        } else if view.sheets[i].hidden {
+            Style::default().fg(muted).add_modifier(Modifier::ITALIC)
+        } else {
+            Style::default().fg(fg)
+        };
+        spans.push(Span::styled(label.clone(), style));
+        spans.push(Span::styled("│", Style::default().fg(border)));
+        view.drawn.tabs.push((x, width, i));
+        x = x.saturating_add(width + 1);
+    }
+    view.drawn.tabs_y = Some(area.y);
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)),
+        Rect::new(area.x, area.y, room, 1),
+    );
+    text(
+        frame,
+        Rect::new(
+            area.right().saturating_sub(size_width),
+            area.y,
+            size_width,
+            1,
+        ),
+        size,
+        muted,
+    );
+}
+
+/// A file as hex: what kind of file it is above; each row's offset, its bytes in
+/// hex (a gap after the eighth) and as characters, the selected byte lit in both;
+/// below, that byte's offset and value.
+fn hex_view(frame: &mut Frame, view: &mut HexView, area: Rect, theme: &Theme, bare: bool) {
+    let fg = color(&theme.foreground);
+    let muted = color(&theme.muted);
+    let accent = color(&theme.accent);
+    let secondary = color(&theme.secondary);
+    let warning = color(&theme.warning);
+    let background = color(&theme.background);
+    if let Some(error) = &view.error {
+        text(frame, area, format!(" Can't read it: {error}"), warning);
+        return;
+    }
+    let header = u16::from(!bare && area.height > 2);
+    let footer = u16::from(!bare && area.height > 4);
+    if header > 0 {
+        text(
+            frame,
+            Rect::new(area.x, area.y, area.width, 1),
+            format!(" {}", view.what),
+            accent,
+        );
+    }
+    let body = Rect::new(
+        area.x,
+        area.y + header,
+        area.width,
+        area.height.saturating_sub(header + footer),
+    );
+    // Offsets in 8 hex digits (more past 4 GB); 16 bytes a row when they fit.
+    let digits = format!("{:x}", view.len.saturating_sub(1)).len().max(8);
+    let need = |n: u64| digits as u64 + 2 + n * 3 + u64::from(n >= 16) + 1 + n + 1;
+    let per_row = [16u64, 8, 4]
+        .into_iter()
+        .find(|&n| need(n) <= u64::from(area.width))
+        .unwrap_or(4);
+    let rows = u64::from(body.height).max(1);
+    view.per_row = per_row;
+    view.page = rows;
+    let row = view.cursor / per_row;
+    if row < view.top {
+        view.top = row;
+    }
+    if row >= view.top + rows {
+        view.top = row + 1 - rows;
+    }
+    let start = view.top * per_row;
+    let bytes = view.bytes(start, (rows * per_row) as usize);
+    let hex_x = area.x + digits as u16 + 2;
+    let chars_x = hex_x + (per_row * 3) as u16 + u16::from(per_row >= 16) + 1;
+    view.drawn = (hex_x, chars_x, body.y, body.height);
+    let class = |b: u8| match b {
+        0 => muted,
+        b'\t' | b'\n' | b'\r' | b' ' => secondary,
+        0x21..=0x7e => fg,
+        0x80.. => accent,
+        _ => secondary,
+    };
+    let lit = Style::default()
+        .fg(background)
+        .bg(accent)
+        .add_modifier(Modifier::BOLD);
+    for i in 0..rows {
+        let offset = start + i * per_row;
+        if offset >= view.len {
+            break;
+        }
+        let from = (i * per_row) as usize;
+        let chunk = &bytes[from.min(bytes.len())..(from + per_row as usize).min(bytes.len())];
+        let on_row = view.cursor / per_row == offset / per_row;
+        let mut spans = vec![Span::styled(
+            format!("{offset:0digits$x}  "),
+            if on_row {
+                Style::default().fg(accent).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(muted)
+            },
+        )];
+        for j in 0..per_row as usize {
+            let gap = if per_row >= 16 && j == per_row as usize / 2 - 1 {
+                "  "
+            } else {
+                " "
+            };
+            match chunk.get(j) {
+                Some(&b) => {
+                    let style = if offset + j as u64 == view.cursor {
+                        lit
+                    } else {
+                        Style::default().fg(class(b))
+                    };
+                    spans.push(Span::styled(format!("{b:02x}"), style));
+                    spans.push(Span::raw(gap));
+                }
+                None => spans.push(Span::raw(format!("  {gap}"))),
+            }
+        }
+        spans.push(Span::raw(" "));
+        for (j, &b) in chunk.iter().enumerate() {
+            let c = match b {
+                0 => '·',
+                0x20..=0x7e => b as char,
+                _ => '.',
+            };
+            let style = if offset + j as u64 == view.cursor {
+                lit
+            } else {
+                Style::default().fg(class(b))
+            };
+            spans.push(Span::styled(c.to_string(), style));
+        }
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)),
+            Rect::new(area.x, body.y + i as u16, area.width, 1),
+        );
+    }
+    if view.len == 0 {
+        text(frame, body, " The file is empty", muted);
+    }
+    if footer > 0 {
+        let y = area.bottom() - 1;
+        let line = if let Some(typed) = &view.typing {
+            Line::from(vec![
                 Span::styled(" /", Style::default().fg(accent)),
                 Span::styled(printable(typed), Style::default().fg(fg)),
                 Span::styled("▏", Style::default().fg(accent)),
-            ]
-        } else if let (Some(grid), Some((r, c))) = (view.grid(), view.selected()) {
-            let mut spans = vec![
+            ])
+        } else if view.len > 0 {
+            let b = view.bytes(view.cursor, 1).first().copied().unwrap_or(0);
+            let shown = match b {
+                0x20..=0x7e => format!(" '{}'", b as char),
+                _ => String::new(),
+            };
+            Line::from(vec![
                 Span::styled(
-                    format!(" {} ", sheet::cell_name(r, c)),
+                    format!(" 0x{:x} ", view.cursor),
                     Style::default().fg(accent).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    printable(&sheet::one_line(&grid.copied(r, c))),
+                    format!("({})", sheet::thousands(&view.cursor.to_string())),
+                    Style::default().fg(muted),
+                ),
+                Span::styled(
+                    format!("   0x{b:02x} = {b}{shown}"),
                     Style::default().fg(fg),
                 ),
-            ];
-            if let Some(formula) = grid.formula(r, c) {
-                spans.push(Span::styled(
-                    format!("   ={}", printable(formula)),
-                    Style::default().fg(muted),
-                ));
-            }
-            if let Some(exact) = grid.exact(r, c) {
-                spans.push(Span::styled(
-                    format!("   exactly {exact}"),
-                    Style::default().fg(muted),
-                ));
-            }
-            spans
+            ])
         } else {
-            Vec::new()
+            Line::raw("")
         };
-        frame.render_widget(
-            Paragraph::new(Line::from(spans)),
-            Rect::new(area.x, y, area.width, 1),
-        );
-    }
-    // The sheets, the one shown lit; its size at the right.
-    if tabs {
-        let y = area.bottom() - 1;
-        let size = match view.grid() {
-            Some(grid) => format!(
-                "{} {} · {} {} ",
-                sheet::thousands(&grid.rows.to_string()),
-                if grid.rows == 1 { "row" } else { "rows" },
-                grid.cols,
-                if grid.cols == 1 { "column" } else { "columns" },
-            ),
-            None if view.loading() => "reading… ".into(),
-            None => String::new(),
-        };
-        let size_width = size.width() as u16;
-        let room = area.width.saturating_sub(size_width + 1);
-        let labels: Vec<String> = view
-            .sheets
-            .iter()
-            .map(|s| {
-                if s.hidden {
-                    format!(" {} (hidden) ", printable(&s.name))
-                } else {
-                    format!(" {} ", printable(&s.name))
-                }
-            })
-            .collect();
-        // Leave out sheets at the start until the one shown fits.
-        let mut first = 0;
-        while first < current
-            && labels[first..=current]
-                .iter()
-                .map(|l| l.width() + 1)
-                .sum::<usize>()
-                + 1
-                > usize::from(room)
-        {
-            first += 1;
-        }
-        let mut spans = Vec::new();
-        let mut x = area.x;
-        if first > 0 {
-            spans.push(Span::styled("‹", Style::default().fg(muted)));
-            x += 1;
-        }
-        for (i, label) in labels.iter().enumerate().skip(first) {
-            let width = label.width() as u16;
-            // A tab that doesn't fit whole: › says there are more.
-            if x + width + 1 > area.x + room && i != current {
-                spans.push(Span::styled("›", Style::default().fg(muted)));
-                break;
-            }
-            let style = if i == current {
-                Style::default()
-                    .fg(background)
-                    .bg(accent)
-                    .add_modifier(Modifier::BOLD)
-            } else if view.sheets[i].hidden {
-                Style::default().fg(muted).add_modifier(Modifier::ITALIC)
-            } else {
-                Style::default().fg(fg)
-            };
-            spans.push(Span::styled(label.clone(), style));
-            spans.push(Span::styled("│", Style::default().fg(border)));
-            view.drawn.tabs.push((x, width, i));
-            x = x.saturating_add(width + 1);
-        }
-        view.drawn.tabs_y = Some(y);
-        frame.render_widget(
-            Paragraph::new(Line::from(spans)),
-            Rect::new(area.x, y, room, 1),
-        );
-        text(
-            frame,
-            Rect::new(area.right().saturating_sub(size_width), y, size_width, 1),
-            size,
-            muted,
-        );
+        frame.render_widget(Paragraph::new(line), Rect::new(area.x, y, area.width, 1));
     }
 }
 
@@ -3424,6 +4025,7 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
             Some(Pane::Git(_)) => "GIT",
             Some(Pane::Changes(_)) => "REVIEW",
             Some(Pane::Sheet(_)) => "SHEET",
+            Some(Pane::Hex(_)) => "HEX",
             _ => match app.mode {
                 Mode::Insert => "INSERT",
                 Mode::Visual => "VISUAL",
@@ -3512,13 +4114,27 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
             && !app.sidebar_focus
         {
             " j k move   n N next change   ] [ file   y keep   x undo   Y X whole file   A keep all   U undo all   Enter open   s/S AI explains new/all   i notes   q close"
+        } else if matches!(app.panes.get(&app.focused), Some(Pane::Hex(v)) if v.typing.is_some())
+            && !app.sidebar_focus
+        {
+            " type text, or bytes in hex (ff d8 ff, 0xcafe)   Enter find   ^U clear   Esc cancel"
+        } else if matches!(app.panes.get(&app.focused), Some(Pane::Hex(_))) && !app.sidebar_focus {
+            " hjkl move   PgUp PgDn page   g G start/end   0 $ row start/end   / n N find text or hex bytes   y copy row   q close"
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Sheet(v)) if v.typing.is_some())
             && !app.sidebar_focus
         {
             " type to find in the sheet   Enter find   ^U clear   Esc cancel"
+        } else if matches!(app.panes.get(&app.focused), Some(Pane::Sheet(v)) if v.reading.is_some())
+            && !app.sidebar_focus
+        {
+            " j k scroll   space PgUp PgDn page   g G top/end   y copy   Esc close"
+        } else if matches!(app.panes.get(&app.focused), Some(Pane::Sheet(v)) if v.buffer.is_some())
+            && !app.sidebar_focus
+        {
+            " hjkl move   PgUp PgDn page   g G first/last row   0 $ first/last column   / n N find   y Y copy cell/row   Enter whole cell   w wrap   e edit   ^B m text"
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Sheet(_))) && !app.sidebar_focus
         {
-            " hjkl move   PgUp PgDn page   g G first/last row   0 $ first/last column   [ ] sheets   / n N find   y Y copy cell/row   Enter whole cell   q close"
+            " hjkl move   PgUp PgDn page   g G first/last row   0 $ first/last column   [ ] sheets   / n N find   y Y copy cell/row   Enter whole cell   w wrap   q close"
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Git(_))) && !app.sidebar_focus {
             " Tab branches/commits   j k move   Enter branch only / commit diff   d details   a all   y copy hash   e AI explains   r refresh   ^B G maximize"
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Preview(_)))
@@ -3802,8 +4418,8 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
             "Scroll / page / previous-next heading or host",
         ),
         (
-            "SPREADSHEETS",
-            ".xlsx .xlsm .xlsb .xls .ods open as a grid, read-only",
+            "SPREADSHEETS · CSV · SQLITE",
+            ".xlsx .ods and databases read-only; CSV editable",
         ),
         (
             "hjkl / g G / 0 $ / [ ]",
@@ -3811,7 +4427,16 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         ),
         (
             "/ n N / y Y / Enter",
-            "Find / copy the cell, its row / the whole cell below",
+            "Find / copy the cell, its row / the whole cell",
+        ),
+        (
+            "w / e (CSV) / ^B m",
+            "Wrap long text / edit the text / grid or text",
+        ),
+        ("HEX", "Files that aren't text open read-only as hex"),
+        (
+            "hl jk / g G / / n N / y",
+            "Byte, row / start-end / find text or ff d8 / copy",
         ),
         ("COMMANDS", "Ctrl-b : also works inside terminals"),
         (":w [path] / :wa / :wq", "Save / save all / save and close"),

@@ -9,6 +9,7 @@ mod finder;
 mod fonts;
 mod gitgraph;
 mod grab;
+mod hex;
 mod highlight;
 mod icons;
 mod ide;

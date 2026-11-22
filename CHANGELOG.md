@@ -11,12 +11,30 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 ### Added
 
 - **Spreadsheets, read-only.** `.xlsx`, `.xlsm`, `.xlsb`, `.xls` and `.ods` files,
-  refused as binary before, open as a grid: each number in its cell's format
-  (`15%`, `1,234.50`, `€ 9.99`, dates as `2024-03-15`), the first row kept as a
-  header while you scroll, the selected cell's formula and exact value below, and
-  the sheets as tabs (`]` / `[`). `/` finds text, `y` copies a cell and `Y` its
-  row, and the grid reads the file again when it changes on disk. Formulas aren't
-  recalculated: cells show what the file saved.
+  refused as binary before, open as a grid laid out as Excel left them: each
+  column's width, frozen columns and rows, merged cells, and the sheet and cell the
+  workbook was saved on. Text Excel wraps wraps in its column and the row grows;
+  other text runs on into empty cells as in Excel; `w` switches to one line per
+  row. Each number shows in its cell's format (`15%`, `1,234.50`, `€ 9.99`, dates
+  as `2024-03-15`), `####` when its column is too narrow. Below the grid is the
+  selected cell in full with its formula and exact value, and Enter opens the whole
+  cell to scroll and copy. The sheets are tabs (`]` / `[`), `/` finds text, `y`
+  copies a cell and `Y` its row, and the grid reads the file again when it changes
+  on disk. Formulas aren't recalculated: cells show what the file saved.
+
+- **SQLite databases and CSV files in the same grid.** A SQLite database (known by
+  its first bytes, whatever its name) opens read-only with a tab per table and
+  view, the column names on top, `NULL` and blobs shown as such, and the first
+  100,000 rows of each table. `.csv` and `.tsv` files open as a grid the way
+  Markdown opens rendered and stay editable text: `e` edits the text at the row,
+  `Ctrl-b m` switches back and forth, and `Ctrl-b M` puts the grid beside the text,
+  following your edits.
+
+- **Files that aren't text open as hex** instead of being refused: images, PDFs,
+  archives, executables, files in another encoding. Above the bytes Raido says
+  what the file is (`PNG image, 1200 × 800`, `ELF 64-bit executable, x86-64`,
+  `Mach-O executable, ARM64`), and `/` finds text or bytes in hex (`ff d8 ff`).
+  Only the part on screen is read, so any size opens at once.
 
 - **`Ctrl-p` finds a file by a few of its letters**, as VS Code's quick open does:
   `mnrs` opens `src/main.rs`, the best matches first and the matched letters

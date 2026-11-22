@@ -20,6 +20,7 @@ portable-pty = "0.9"
 pulldown-cmark = { version = "0.13", default-features = false }
 ratatui = "0.29"
 ropey = "1.6"
+rusqlite = { version = "0.43", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 similar = { version = "2", default-features = false }
@@ -27,10 +28,10 @@ syntect = { version = "5.3", default-features = false, features = ["default-fanc
 toml = "0.8"
 unicode-width = "0.2"
 vt100 = "0.15"
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3"
-zip = { version = "9", default-features = false }
 
 # vt100 0.15 computes `rows - scrollback_offset` when the scrollback offset exceeds
 # the screen height; the wrapped result is what it relies on, as in release builds.

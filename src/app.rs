@@ -4,6 +4,7 @@ use crate::{
     copymode,
     editor::{Buffer, FromDisk},
     gitgraph::{self, GitView},
+    hex::HexView,
     highlight::Syntax,
     language,
     layout::{Axis, Tile},
@@ -41,8 +42,48 @@ pub enum Pane {
     Git(Box<GitView>),
     /// What AI agents changed, to keep or undo (`:changes`, Ctrl-b v).
     Changes(Box<ChangesView>),
-    /// A spreadsheet, read-only: .xlsx, .xls, .ods and the like.
+    /// A spreadsheet, a database (read-only) or a CSV file's rows, as a grid.
     Sheet(Box<SheetView>),
+    /// A file that isn't text, read-only, as hex.
+    Hex(Box<HexView>),
+}
+
+impl Pane {
+    /// The buffer it shows: an editor's, a preview's, a CSV grid's.
+    pub fn buffer(&self) -> Option<usize> {
+        match self {
+            Pane::Editor(b) => Some(*b),
+            Pane::Preview(p) => Some(p.buffer),
+            Pane::Sheet(view) => view.buffer,
+            _ => None,
+        }
+    }
+
+    /// The file a read-only view shows: a spreadsheet, database or hex dump.
+    pub fn viewed(&self) -> Option<&Path> {
+        match self {
+            Pane::Sheet(view) if view.buffer.is_none() => Some(&view.path),
+            Pane::Hex(view) => Some(&view.path),
+            _ => None,
+        }
+    }
+
+    /// A read-only view opened by browsing, which the next file browsed replaces.
+    fn peeked(&mut self) -> Option<&mut bool> {
+        match self {
+            Pane::Sheet(view) if view.buffer.is_none() => Some(&mut view.peeked),
+            Pane::Hex(view) => Some(&mut view.peeked),
+            _ => None,
+        }
+    }
+
+    /// Whether it shows a file: an editor, a preview, a grid, a hex dump.
+    fn document(&self) -> bool {
+        matches!(
+            self,
+            Pane::Editor(_) | Pane::Preview(_) | Pane::Sheet(_) | Pane::Hex(_)
+        )
+    }
 }
 
 /// Rendered, read-only view of a buffer: Markdown, or an Nmap scan report.
@@ -908,7 +949,10 @@ impl App {
     /// Show PATH in a pane of its own beside the terminal (or focus the pane already
     /// showing it). A file that doesn't exist yet opens as a new buffer.
     fn open_from_terminal(&mut self, path: &Path) -> Result<String> {
-        if crate::sheet::is_spreadsheet(path) {
+        if crate::sheet::is_spreadsheet(path)
+            || crate::sheet::is_database(path)
+            || crate::hex::is_binary(path)
+        {
             self.open(path)?;
             return Ok(workspace::printable(
                 &path
@@ -931,11 +975,10 @@ impl App {
             }
         };
         let name = self.buffers[id].name();
-        let shown = self.panes.iter().find_map(|(&pane, p)| match p {
-            Pane::Editor(b) if *b == id => Some(pane),
-            Pane::Preview(p) if p.buffer == id => Some(pane),
-            _ => None,
-        });
+        let shown = self
+            .panes
+            .iter()
+            .find_map(|(&pane, p)| (p.buffer() == Some(id)).then_some(pane));
         if let Some(pane) = shown {
             self.focused = pane;
             self.sidebar_focus = false;
@@ -1137,10 +1180,19 @@ impl App {
         let preview = self.peek_slot();
         let spare = |pane: usize| {
             let buffer = match self.panes.get(&pane) {
-                Some(Pane::Editor(b)) => *b,
-                Some(Pane::Preview(p)) => p.buffer,
-                Some(Pane::Sheet(view)) => return view.peeked && self.tiles.contains(pane),
-                _ => return false,
+                Some(p) if p.viewed().is_some() => {
+                    let peeked = match p {
+                        Pane::Sheet(view) => view.peeked,
+                        Pane::Hex(view) => view.peeked,
+                        _ => false,
+                    };
+                    return peeked && self.tiles.contains(pane);
+                }
+                Some(p) => match p.buffer() {
+                    Some(b) => b,
+                    None => return false,
+                },
+                None => return false,
             };
             let b = &self.buffers[buffer];
             let blank = b.path.is_none() && !b.dirty && b.text.len_chars() == 0;
@@ -1166,11 +1218,25 @@ impl App {
         } else {
             self.root.join(path)
         };
-        if crate::sheet::is_spreadsheet(&path) {
-            return self.open_sheet(&path, how);
+        if crate::sheet::is_spreadsheet(&path) || crate::sheet::is_database(&path) {
+            return self.open_viewer(
+                &path,
+                how,
+                "[ ] sheets · / find · y copy",
+                |path, peek| Pane::Sheet(Box::new(SheetView::open(path, peek, None))),
+            );
+        }
+        // Anything else that isn't text: as hex.
+        if crate::hex::is_binary(&path) {
+            return self.open_viewer(
+                &path,
+                how,
+                "/ finds text or hex bytes · y copies a row",
+                |path, peek| Pane::Hex(Box::new(HexView::open(path, peek, 0))),
+            );
         }
         let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-        let document = |p: &Pane| matches!(p, Pane::Editor(_) | Pane::Preview(_) | Pane::Sheet(_));
+        let document = |p: &Pane| p.document();
         // Browsing previews beside an editor that's open; it never opens the first.
         if peek
             && !self
@@ -1224,9 +1290,16 @@ impl App {
         // for writing.
         let rendered =
             markdown::kind(&self.buffers[id]).is_some() && self.buffers[id].text.len_chars() > 0;
-        let view = || {
+        // CSV and TSV open as a grid, the same way.
+        let table = !rendered
+            && crate::sheet::is_table(&self.buffers[id])
+            && self.buffers[id].text.len_chars() > 0;
+        let mut grid = table.then(|| Box::new(SheetView::from_buffer(&self.buffers[id], id)));
+        let mut view = move || {
             if rendered {
                 Pane::Preview(Preview::new(id))
+            } else if let Some(grid) = grid.take() {
+                Pane::Sheet(grid)
             } else {
                 Pane::Editor(id)
             }
@@ -1243,10 +1316,7 @@ impl App {
         let shown = self
             .panes
             .iter()
-            .find(|(pane, p)| {
-                self.tiles.contains(**pane)
-                    && matches!(p, Pane::Editor(b) | Pane::Preview(Preview { buffer: b, .. }) if *b == id)
-            })
+            .find(|(pane, p)| self.tiles.contains(**pane) && p.buffer() == Some(id))
             .map(|(pane, _)| *pane);
         let mut crowded = false;
         match (how, shown, spare, target) {
@@ -1310,19 +1380,23 @@ impl App {
         let shown = self
             .panes
             .values()
-            .filter(|p| {
-                matches!(p, Pane::Editor(b) | Pane::Preview(Preview { buffer: b, .. }) if *b == id)
-            })
+            .filter(|p| p.buffer() == Some(id))
             .count();
         (buffer.revision == revision && !buffer.dirty && shown <= 1).then_some(id)
     }
-    /// Open a spreadsheet, read-only, where `open_file` would open a file: in a
-    /// pane showing nothing or only being browsed, else beside the editor. One on
-    /// screen already is focused.
-    fn open_sheet(&mut self, path: &Path, how: Open) -> Result<()> {
+    /// Open a read-only view of a file (`make` builds it) where `open_file` would
+    /// open a file: in a pane showing nothing or only being browsed, else beside
+    /// the editor. One on screen already is focused. `keys` say what to try.
+    fn open_viewer(
+        &mut self,
+        path: &Path,
+        how: Open,
+        keys: &str,
+        make: impl FnOnce(PathBuf, bool) -> Pane,
+    ) -> Result<()> {
         let peek = how == Open::Peek;
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        let document = |p: &Pane| matches!(p, Pane::Editor(_) | Pane::Preview(_) | Pane::Sheet(_));
+        let document = |p: &Pane| p.document();
         let on_screen = |app: &Self, wanted: &dyn Fn(&Pane) -> bool| {
             app.panes
                 .iter()
@@ -1339,26 +1413,19 @@ impl App {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default(),
         );
-        let shown = on_screen(
-            self,
-            &|p| matches!(p, Pane::Sheet(view) if view.path == canonical),
-        );
+        let shown = on_screen(self, &|p| p.viewed() == Some(canonical.as_path()));
         let crowded = match shown {
             Some(there) => {
                 if !peek {
-                    if let Some(Pane::Sheet(view)) = self.panes.get_mut(&there) {
-                        view.peeked = false;
+                    if let Some(peeked) = self.panes.get_mut(&there).and_then(Pane::peeked) {
+                        *peeked = false;
                     }
                     self.focused = there;
                 }
                 false
             }
             None => {
-                let view = Pane::Sheet(Box::new(SheetView::open(
-                    canonical.clone(),
-                    peek,
-                    (0, 0, 0),
-                )));
+                let view = make(canonical.clone(), peek);
                 let target = if self.panes.get(&self.focused).is_some_and(document) {
                     Some(self.focused)
                 } else {
@@ -1401,9 +1468,7 @@ impl App {
         self.tree.reveal(&canonical);
         self.sidebar_focus = false;
         self.mode = Mode::Normal;
-        self.notice(format!(
-            "Opened {name}, read-only · [ ] sheets · / find · y copy{crowded}"
-        ));
+        self.notice(format!("Opened {name}, read-only · {keys}{crowded}"));
         Ok(())
     }
     pub fn open_terminal(
@@ -1566,13 +1631,20 @@ impl App {
                         only: view.only.clone(),
                     },
                     Pane::Changes(_) => SavedPane::Changes,
+                    Pane::Hex(view) => SavedPane::Hex {
+                        path: relative(&view.path),
+                        offset: view.cursor,
+                    },
                     Pane::Sheet(view) => {
                         let (row, col) = view.selected().unwrap_or_default();
-                        SavedPane::Sheet {
-                            path: relative(&view.path),
-                            sheet: view.current,
-                            row,
-                            col,
+                        match view.buffer {
+                            Some(buffer) => SavedPane::Table { buffer, row, col },
+                            None => SavedPane::Sheet {
+                                path: relative(&view.path),
+                                sheet: view.current,
+                                row,
+                                col,
+                            },
                         }
                     }
                 };
@@ -1695,6 +1767,15 @@ impl App {
                 }
                 SavedPane::Ai => Pane::Ai(None),
                 SavedPane::Changes => Pane::Changes(Box::default()),
+                SavedPane::Hex { path, offset } => {
+                    Pane::Hex(Box::new(HexView::open(self.root.join(path), false, offset)))
+                }
+                SavedPane::Table { buffer, row, col } => {
+                    let id = buffer.min(last);
+                    let mut view = SheetView::from_buffer(&self.buffers[id], id);
+                    view.go(Some(row), Some(col));
+                    Pane::Sheet(Box::new(view))
+                }
                 SavedPane::Sheet {
                     path,
                     sheet,
@@ -1703,7 +1784,7 @@ impl App {
                 } => Pane::Sheet(Box::new(SheetView::open(
                     self.root.join(path),
                     false,
-                    (sheet, row, col),
+                    Some((sheet, row, col)),
                 ))),
                 SavedPane::Git { only } => {
                     let mut view = GitView::new(self.root.clone());
@@ -1816,12 +1897,18 @@ impl App {
         Ok(terminal)
     }
     fn save(&mut self, path: Option<PathBuf>) -> Result<()> {
-        if matches!(self.panes.get(&self.focused), Some(Pane::Sheet(_))) {
-            bail!("Spreadsheets are read-only in Raido");
-        }
+        let grid = match self.panes.get(&self.focused) {
+            Some(Pane::Sheet(view)) if view.buffer.is_none() => {
+                bail!("Spreadsheets and databases are read-only in Raido")
+            }
+            Some(Pane::Hex(_)) => bail!("Raido shows files that aren't text read-only"),
+            Some(Pane::Sheet(view)) => view.buffer,
+            _ => None,
+        };
         let id = self
             .buffer_id()
             .or_else(|| self.preview_buffer())
+            .or(grid)
             .context("Focus an editor pane to save")?;
         // Saving under another name (:w path) writes the text as it is.
         let tidied = if path.is_none() {
@@ -1929,14 +2016,7 @@ impl App {
             }
             _ => {}
         }
-        let visible: Vec<usize> = self
-            .panes
-            .values()
-            .filter_map(|p| match p {
-                Pane::Editor(id) | Pane::Preview(Preview { buffer: id, .. }) => Some(*id),
-                _ => None,
-            })
-            .collect();
+        let visible: Vec<usize> = self.panes.values().filter_map(Pane::buffer).collect();
         let mut events = self.lsp.sync(&self.buffers, &visible);
         let (replies, changed) = self.lsp.poll(&self.buffers);
         events.extend(replies);
@@ -1957,7 +2037,12 @@ impl App {
                     }
                 }
                 Pane::Git(view) => self.redraw |= view.poll(),
-                Pane::Sheet(view) => self.redraw |= view.poll(),
+                Pane::Sheet(view) => {
+                    self.redraw |= view.poll();
+                    if let Some(buffer) = view.buffer.and_then(|id| self.buffers.get(id)) {
+                        self.redraw |= view.follow(buffer);
+                    }
+                }
                 Pane::Ai(Some(choice)) => self.redraw |= choice.poll(),
                 _ => {}
             }
@@ -2175,10 +2260,7 @@ impl App {
         for id in self
             .panes
             .values()
-            .filter_map(|p| match p {
-                Pane::Editor(id) | Pane::Preview(Preview { buffer: id, .. }) => Some(*id),
-                _ => None,
-            })
+            .filter_map(Pane::buffer)
             .collect::<std::collections::BTreeSet<_>>()
         {
             let b = &mut self.buffers[id];
@@ -2234,11 +2316,16 @@ impl App {
             }
         }
         for pane in self.panes.values_mut() {
-            if let Pane::Sheet(view) = pane {
-                if view.changed_on_disk() {
+            match pane {
+                Pane::Sheet(view) if view.changed_on_disk() => {
                     view.reload();
                     self.redraw = true;
                 }
+                Pane::Hex(view) if view.changed_on_disk() => {
+                    view.reload();
+                    self.redraw = true;
+                }
+                _ => {}
             }
         }
     }
@@ -2466,8 +2553,10 @@ impl App {
                             }
                         }
                     }
-                    if let Some(Pane::Sheet(view)) = self.panes.get_mut(&id) {
-                        view.click(at.0, at.1);
+                    match self.panes.get_mut(&id) {
+                        Some(Pane::Sheet(view)) => view.click(at.0, at.1),
+                        Some(Pane::Hex(view)) => view.click(at.0, at.1),
+                        _ => {}
                     }
                 }
             }
@@ -2578,6 +2667,7 @@ impl App {
                 view.move_by(step);
             }
             Some(Pane::Sheet(view)) => view.scroll(step as i64),
+            Some(Pane::Hex(view)) => view.scroll(step as i64),
             _ => {}
         }
         Ok(())
@@ -2941,6 +3031,7 @@ impl App {
             Some(Pane::Git(_)) => return self.git_pane_key(key),
             Some(Pane::Changes(_)) => return self.changes_key(key),
             Some(Pane::Sheet(_)) => return self.sheet_key(key),
+            Some(Pane::Hex(_)) => return self.hex_key(key),
             Some(Pane::Ai(Some(_))) => return self.model_choice_key(key),
             Some(Pane::Ai(None)) => {
                 let chosen = match key.code {
@@ -3963,6 +4054,13 @@ impl App {
             Some(Pane::Terminal(t)) => t.title.clone(),
             Some(Pane::Git(_)) => "Git".into(),
             Some(Pane::Changes(_)) => "Changes".into(),
+            Some(Pane::Hex(view)) => workspace::printable(
+                &view
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            ),
             Some(Pane::Sheet(view)) => workspace::printable(
                 &view
                     .path
@@ -5034,6 +5132,14 @@ impl App {
     /// Switch the focused pane between the rendered view and its source, keeping place.
     fn toggle_preview(&mut self) -> Result<()> {
         match self.panes.get(&self.focused) {
+            Some(Pane::Editor(id)) if crate::sheet::is_table(&self.buffers[*id]) => {
+                let id = *id;
+                self.buffers[id].end_group();
+                let grid = SheetView::from_buffer(&self.buffers[id], id);
+                self.panes.insert(self.focused, Pane::Sheet(Box::new(grid)));
+                self.mode = Mode::Normal;
+                self.notice("Grid · e edits the text · w wraps long text");
+            }
             Some(Pane::Editor(id)) => {
                 let id = *id;
                 let kind = self.preview_kind(id)?;
@@ -5066,7 +5172,22 @@ impl App {
                     _ => "Editing Markdown source · Ctrl-b m or :preview renders it",
                 });
             }
-            _ => bail!("Focus a Markdown file or Nmap scan to preview it"),
+            Some(Pane::Sheet(view)) if view.buffer.is_some() => {
+                let id = view.buffer.unwrap_or_default();
+                let line = view
+                    .grid()
+                    .zip(view.selected())
+                    .and_then(|(grid, (row, _))| grid.line(row));
+                let b = &mut self.buffers[id];
+                if let Some(line) = line {
+                    b.row = line.min(b.lines().saturating_sub(1));
+                    b.col = 0;
+                    b.scroll = b.row.saturating_sub(2);
+                }
+                self.panes.insert(self.focused, Pane::Editor(id));
+                self.notice("Editing the text · Ctrl-b m or :preview shows the grid");
+            }
+            _ => bail!("Focus a Markdown file, an Nmap scan or a CSV file to preview it"),
         }
         Ok(())
     }
@@ -5074,13 +5195,24 @@ impl App {
     fn split_preview(&mut self) -> Result<()> {
         let id = match self.panes.get(&self.focused) {
             Some(Pane::Editor(id)) => *id,
-            Some(Pane::Preview(p)) => {
-                let id = p.buffer;
+            Some(p @ (Pane::Preview(_) | Pane::Sheet(_))) if p.buffer().is_some() => {
+                let id = p.buffer().unwrap_or_default();
                 self.panes.insert(self.focused, Pane::Editor(id));
                 id
             }
-            _ => bail!("Focus a Markdown file or Nmap scan to preview it"),
+            _ => bail!("Focus a Markdown file, an Nmap scan or a CSV file to preview it"),
         };
+        if crate::sheet::is_table(&self.buffers[id]) {
+            if self.panes.len() >= 12 {
+                bail!("Maximum of 12 panes");
+            }
+            let editor = self.focused;
+            let grid = SheetView::from_buffer(&self.buffers[id], id);
+            self.add_pane(Pane::Sheet(Box::new(grid)), Axis::Horizontal);
+            self.focused = editor;
+            self.notice("The grid beside the text: it follows your edits and cursor");
+            return Ok(());
+        }
         self.preview_kind(id)?;
         if self.panes.len() >= 12 {
             bail!("Maximum of 12 panes");
@@ -5405,6 +5537,86 @@ impl App {
         self.notice(note);
         Ok(())
     }
+    /// Keys in a hex dump: move by byte (h l) and row (j k), page, find text or
+    /// hex bytes (/ n N), copy a row (y).
+    fn hex_key(&mut self, key: KeyEvent) -> Result<()> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(Pane::Hex(view)) = self.panes.get_mut(&self.focused) else {
+            return Ok(());
+        };
+        if let Some(typed) = view.typing.as_mut() {
+            match key.code {
+                KeyCode::Esc => view.typing = None,
+                KeyCode::Enter => {
+                    view.query = view.typing.take().unwrap_or_default();
+                    if !view.query.trim().is_empty() && !view.find(true) {
+                        let query = view.query.clone();
+                        self.fail(format!("{query} isn't in this file"));
+                    }
+                }
+                KeyCode::Backspace => {
+                    typed.pop();
+                }
+                KeyCode::Char('u') if ctrl => typed.clear(),
+                KeyCode::Char(c) if !ctrl => typed.push(c),
+                _ => {}
+            }
+            return Ok(());
+        }
+        let row = view.per_row.max(1) as i64;
+        let page = row * view.page.max(2) as i64;
+        let mut said: Option<(bool, String)> = None;
+        match key.code {
+            KeyCode::Char('d') if ctrl => view.move_by(page / 2),
+            KeyCode::Char('u') if ctrl => view.move_by(-page / 2),
+            KeyCode::Char('f') if ctrl => view.move_by(page - row),
+            KeyCode::Char('c') if ctrl => {
+                let text = view.row_hex();
+                self.clipboard.copy(text, false);
+                said = Some((false, "Copied the row's bytes in hex".into()));
+            }
+            _ if ctrl => {}
+            KeyCode::Char('l') | KeyCode::Right => view.move_by(1),
+            KeyCode::Char('h') | KeyCode::Left => view.move_by(-1),
+            KeyCode::Char('j') | KeyCode::Down => view.move_by(row),
+            KeyCode::Char('k') | KeyCode::Up => view.move_by(-row),
+            KeyCode::Char(' ') | KeyCode::PageDown => view.move_by(page - row),
+            KeyCode::PageUp => view.move_by(row - page),
+            KeyCode::Char('g') => view.go(0),
+            KeyCode::Char('G') => view.go(u64::MAX),
+            KeyCode::Char('0' | '^') | KeyCode::Home => {
+                let start = view.cursor / row as u64 * row as u64;
+                view.go(start);
+            }
+            KeyCode::Char('$') | KeyCode::End => {
+                let end = view.cursor / row as u64 * row as u64 + row as u64 - 1;
+                view.go(end);
+            }
+            KeyCode::Char('/') => view.typing = Some(String::new()),
+            KeyCode::Char(c @ ('n' | 'N')) => {
+                if view.query.trim().is_empty() {
+                    said = Some((true, "Press / to search the file".into()));
+                } else if !view.find(c == 'n') {
+                    said = Some((true, format!("{} isn't in this file", view.query)));
+                }
+            }
+            KeyCode::Char('y') => {
+                let text = view.row_hex();
+                self.clipboard.copy(text, false);
+                said = Some((false, "Copied the row's bytes in hex".into()));
+            }
+            KeyCode::Char('r') => view.reload(),
+            KeyCode::Char(':') => self.input_start(InputKind::Command),
+            KeyCode::Char('q') => return self.close(false),
+            _ => {}
+        }
+        match said {
+            Some((true, text)) => self.fail(text),
+            Some((false, text)) => self.notice(text),
+            None => {}
+        }
+        Ok(())
+    }
     /// Keys in a spreadsheet: move like in the editor (hjkl, the arrows, g G, 0 $),
     /// page, switch sheets ([ ]), find (/ n N) and copy (y a cell, Y its row).
     fn sheet_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -5434,46 +5646,87 @@ impl App {
         let page = i64::from(view.page.max(2));
         let mut copy = None;
         let mut said: Option<(bool, String)> = None;
-        match key.code {
-            KeyCode::Char('d') if ctrl => view.move_by(page / 2, 0),
-            KeyCode::Char('u') if ctrl => view.move_by(-page / 2, 0),
-            KeyCode::Char('f') if ctrl => view.move_by(page - 1, 0),
-            KeyCode::Char('c') if ctrl => copy = view.copied_cell(),
-            KeyCode::PageDown if ctrl => view.switch(1),
-            KeyCode::PageUp if ctrl => view.switch(-1),
-            _ if ctrl => {}
-            KeyCode::Char('j') | KeyCode::Down => view.move_by(1, 0),
-            KeyCode::Char('k') | KeyCode::Up => view.move_by(-1, 0),
-            KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => view.move_by(0, -1),
-            KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => view.move_by(0, 1),
-            KeyCode::Char(' ') | KeyCode::PageDown => view.move_by(page - 1, 0),
-            KeyCode::PageUp => view.move_by(1 - page, 0),
-            KeyCode::Char('g') => view.go(Some(0), None),
-            KeyCode::Char('G') => view.go(Some(u32::MAX), None),
-            KeyCode::Char('0' | '^') | KeyCode::Home => view.go(None, Some(0)),
-            KeyCode::Char('$') | KeyCode::End => view.go(None, Some(u32::MAX)),
-            KeyCode::Char(']') => view.switch(1),
-            KeyCode::Char('[') => view.switch(-1),
-            KeyCode::Char('/') => view.typing = Some(String::new()),
-            KeyCode::Char(c @ ('n' | 'N')) => {
-                if view.query.trim().is_empty() {
-                    said = Some((true, "Press / to search the sheet".into()));
-                } else if !view.find(c == 'n') {
-                    said = Some((true, format!("No cell on this sheet has {}", view.query)));
+        // Reading a cell in full (Enter): scroll it, copy it, close it.
+        if let Some(scroll) = view.reading {
+            let by: i64 = match key.code {
+                KeyCode::Char('j') | KeyCode::Down => 1,
+                KeyCode::Char('k') | KeyCode::Up => -1,
+                KeyCode::Char(' ') | KeyCode::PageDown => 10,
+                KeyCode::Char('d') if ctrl => 10,
+                KeyCode::PageUp => -10,
+                KeyCode::Char('u') if ctrl => -10,
+                KeyCode::Char('g') | KeyCode::Home => -i64::from(u16::MAX),
+                KeyCode::Char('G') | KeyCode::End => i64::from(u16::MAX),
+                KeyCode::Char('y') => {
+                    copy = view.copied_cell();
+                    0
                 }
+                KeyCode::Char('c') if ctrl => {
+                    copy = view.copied_cell();
+                    0
+                }
+                _ => {
+                    view.reading = None;
+                    0
+                }
+            };
+            if let Some(reading) = view.reading.as_mut() {
+                *reading = (i64::from(scroll) + by).clamp(0, i64::from(u16::MAX)) as u16;
             }
-            KeyCode::Char('y') => copy = view.copied_cell(),
-            KeyCode::Char('Y') => {
-                copy = view
-                    .copied_row()
-                    .zip(view.selected())
-                    .map(|(text, (row, _))| (format!("row {}", row + 1), text))
+        } else {
+            match key.code {
+                KeyCode::Char('d') if ctrl => view.move_by(page / 2, 0),
+                KeyCode::Char('u') if ctrl => view.move_by(-page / 2, 0),
+                KeyCode::Char('f') if ctrl => view.move_by(page - 1, 0),
+                KeyCode::Char('c') if ctrl => copy = view.copied_cell(),
+                KeyCode::PageDown if ctrl => view.switch(1),
+                KeyCode::PageUp if ctrl => view.switch(-1),
+                _ if ctrl => {}
+                KeyCode::Char('j') | KeyCode::Down => view.move_by(1, 0),
+                KeyCode::Char('k') | KeyCode::Up => view.move_by(-1, 0),
+                KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => view.move_by(0, -1),
+                KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => view.move_by(0, 1),
+                KeyCode::Char(' ') | KeyCode::PageDown => view.move_by(page - 1, 0),
+                KeyCode::PageUp => view.move_by(1 - page, 0),
+                KeyCode::Char('g') => view.go(Some(0), None),
+                KeyCode::Char('G') => view.go(Some(u32::MAX), None),
+                KeyCode::Char('0' | '^') | KeyCode::Home => view.go(None, Some(0)),
+                KeyCode::Char('$') | KeyCode::End => view.go(None, Some(u32::MAX)),
+                KeyCode::Char(']') => view.switch(1),
+                KeyCode::Char('[') => view.switch(-1),
+                KeyCode::Char('/') => view.typing = Some(String::new()),
+                KeyCode::Char(c @ ('n' | 'N')) => {
+                    if view.query.trim().is_empty() {
+                        said = Some((true, "Press / to search the sheet".into()));
+                    } else if !view.find(c == 'n') {
+                        said = Some((true, format!("No cell on this sheet has {}", view.query)));
+                    }
+                }
+                KeyCode::Char('y') => copy = view.copied_cell(),
+                KeyCode::Char('Y') => {
+                    copy = view
+                        .copied_row()
+                        .zip(view.selected())
+                        .map(|(text, (row, _))| (format!("row {}", row + 1), text))
+                }
+                KeyCode::Enter if view.grid().is_some() => view.reading = Some(0),
+                KeyCode::Char('w') => {
+                    view.wrap = !view.wrap;
+                    said = Some((
+                        false,
+                        if view.wrap {
+                            "Long text wraps in its column · w for one line per row".into()
+                        } else {
+                            "One line per row · w wraps long text".into()
+                        },
+                    ));
+                }
+                KeyCode::Char('e' | 'i') if view.buffer.is_some() => return self.toggle_preview(),
+                KeyCode::Char('r') => view.reload(),
+                KeyCode::Char(':') => self.input_start(InputKind::Command),
+                KeyCode::Char('q') => return self.close(false),
+                _ => {}
             }
-            KeyCode::Enter => said = view.described().map(|text| (false, text)),
-            KeyCode::Char('r') => view.reload(),
-            KeyCode::Char(':') => self.input_start(InputKind::Command),
-            KeyCode::Char('q') => return self.close(false),
-            _ => {}
         }
         if let Some((name, text)) = copy {
             if text.is_empty() {
@@ -6197,9 +6450,16 @@ impl App {
                     format!("Loaded {} from disk", self.buffers[id].name())
                 });
             }
-            "reload" if matches!(self.panes.get(&self.focused), Some(Pane::Sheet(_))) => {
-                if let Some(Pane::Sheet(view)) = self.panes.get_mut(&self.focused) {
-                    view.reload();
+            "reload"
+                if self
+                    .panes
+                    .get(&self.focused)
+                    .is_some_and(|p| p.viewed().is_some()) =>
+            {
+                match self.panes.get_mut(&self.focused) {
+                    Some(Pane::Sheet(view)) => view.reload(),
+                    Some(Pane::Hex(view)) => view.reload(),
+                    _ => {}
                 }
             }
             "reload" => {
@@ -9969,10 +10229,12 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         assert!(app.tree.expanded.contains(&root.join("src")));
         let other = tempfile::tempdir().unwrap();
         assert_eq!(app.remote_open(other.path()), Reply::Elsewhere);
+        // A file that isn't text opens too, as hex.
         assert!(matches!(
             app.remote_open(&root.join("blob.bin")),
-            Reply::Failed(_)
+            Reply::Opened(_)
         ));
+        assert!(matches!(app.panes.get(&app.focused), Some(Pane::Hex(_))));
     }
     #[test]
     fn the_minimap_shows_the_file_where_you_are_and_what_changed() {
@@ -10451,6 +10713,172 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         app.focused = id;
         sheet_read(&mut app);
         assert_eq!(sheet(&app), (0, Some((3, 0))));
+    }
+
+    #[test]
+    fn long_text_wraps_in_its_row_and_shows_in_full_below_and_on_enter() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let path = root.join("posts.xlsx");
+        let post = "We live in a country where citizens have become wild game, without protection, at the mercy of a disastrous migration policy.";
+        crate::sheet::tests::laid_out_workbook(
+            &path,
+            &[(
+                "Coding",
+                false,
+                &[
+                    ("A1", "'Sample", 4, ""),
+                    ("B1", "'English text", 4, ""),
+                    ("C1", "'F_INV", 4, ""),
+                    ("A2", "'S001", 0, ""),
+                    ("B2", &format!("'{post}"), 5, ""),
+                    ("C2", "1", 0, ""),
+                    ("A3", "'S002", 0, ""),
+                    ("B3", "'Short one.", 5, ""),
+                    ("C3", "0", 0, ""),
+                ],
+            )],
+            &[
+                r#"<sheetViews><sheetView workbookViewId="0"><pane xSplit="2" ySplit="1" topLeftCell="C2" activePane="bottomRight" state="frozen"/><selection pane="bottomRight" activeCell="B2" sqref="B2"/></sheetView></sheetViews><cols><col min="2" max="2" width="30"/></cols>"#,
+            ],
+            None,
+        );
+        let mut app = App::new(root.clone(), Some(path), false).unwrap();
+        sheet_read(&mut app);
+        let drawn = screen(&mut app, 110, 30).join("\n");
+        // The post wraps in its 30-column cell, the row growing; the frozen
+        // columns end with a heavier line.
+        assert!(
+            drawn.contains("│ S001   │ We live in a country where     ┃     1 │"),
+            "{drawn}"
+        );
+        assert!(
+            drawn.contains("│        │ citizens have become wild      ┃       │"),
+            "{drawn}"
+        );
+        assert!(
+            drawn.contains("│ S002   │ Short one.                     ┃     0 │"),
+            "{drawn}"
+        );
+        // The selected cell in full under the grid.
+        assert!(
+            drawn.contains(" B2 We live in a country where citizens have become wild game,"),
+            "{drawn}"
+        );
+        // One line per row with w: the text runs on, cut short.
+        press(&mut app, KeyCode::Char('w'), KeyModifiers::NONE);
+        let drawn = screen(&mut app, 110, 30).join("\n");
+        assert!(
+            drawn.contains("│ S001   │ We live in a country where ci… ┃     1 │"),
+            "{drawn}"
+        );
+        press(&mut app, KeyCode::Char('w'), KeyModifiers::NONE);
+        // Enter shows it all over the grid; Esc closes it.
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        let drawn = screen(&mut app, 110, 30).join("\n");
+        assert!(drawn.contains("B2 · y copy · Esc"), "{drawn}");
+        assert!(drawn.contains("disastrous migration policy."), "{drawn}");
+        press(&mut app, KeyCode::Char('y'), KeyModifiers::NONE);
+        assert_eq!(app.clipboard.paste().0, post);
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        let Some(Pane::Sheet(view)) = app.panes.get(&app.focused) else {
+            panic!("no spreadsheet");
+        };
+        assert_eq!(view.reading, None);
+    }
+
+    #[test]
+    fn csv_files_open_as_a_grid_that_edits_as_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let path = root.join("people.csv");
+        std::fs::write(
+            &path,
+            "id,name,city\n1,Ada,London\n2,Grace,\"New\nYork\"\n3,Linus,Helsinki\n",
+        )
+        .unwrap();
+        let mut app = App::new(root.clone(), Some(path.clone()), false).unwrap();
+        let grid = |app: &App| match app.panes.get(&app.focused) {
+            Some(Pane::Sheet(view)) => view.selected(),
+            _ => None,
+        };
+        assert_eq!(grid(&app), Some((0, 0)));
+        let drawn = screen(&mut app, 100, 20).join("\n");
+        assert!(drawn.contains("people.csv · grid"), "{drawn}");
+        assert!(drawn.contains("│   2 │ Grace │ New York │"), "{drawn}");
+        // e edits the text at the row (the fourth row starts on line 5).
+        for key in "jjj".chars() {
+            press(&mut app, KeyCode::Char(key), KeyModifiers::NONE);
+        }
+        press(&mut app, KeyCode::Char('e'), KeyModifiers::NONE);
+        let id = app.buffer_id().expect("an editor");
+        assert_eq!(app.buffers[id].row, 4);
+        // An edit shows in the grid; Ctrl-b m goes back to it at the cursor's row.
+        press(&mut app, KeyCode::Char('o'), KeyModifiers::NONE);
+        for c in "4,Barbara,Boston".chars() {
+            press(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('m'), KeyModifiers::NONE);
+        assert_eq!(grid(&app), Some((4, 0)));
+        let drawn = screen(&mut app, 100, 20).join("\n");
+        assert!(drawn.contains("│ Barbara │ Boston"), "{drawn}");
+        assert!(drawn.contains("people.csv · grid ●"), "{drawn}");
+        // Ctrl-s saves the text from the grid.
+        press(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .ends_with("4,Barbara,Boston\n"));
+    }
+
+    #[test]
+    fn files_that_arent_text_open_as_hex_and_databases_as_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.extend(640u32.to_be_bytes());
+        png.extend(480u32.to_be_bytes());
+        png.extend(b"rest of the image");
+        std::fs::write(root.join("logo.png"), &png).unwrap();
+        let mut app = App::new(root.clone(), Some(root.join("logo.png")), false).unwrap();
+        assert!(matches!(app.panes.get(&app.focused), Some(Pane::Hex(_))));
+        let drawn = screen(&mut app, 120, 12).join("\n");
+        assert!(drawn.contains("PNG image, 640 × 480 · 41 bytes"), "{drawn}");
+        assert!(
+            drawn.contains(
+                "00000000  89 50 4e 47 0d 0a 1a 0a  00 00 00 0d 49 48 44 52  .PNG....···.IHDR"
+            ),
+            "{drawn}"
+        );
+        assert!(drawn.contains(" HEX "), "{drawn}");
+        for key in "/image".chars() {
+            press(&mut app, KeyCode::Char(key), KeyModifiers::NONE);
+        }
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        let Some(Pane::Hex(view)) = app.panes.get(&app.focused) else {
+            panic!("no hex view");
+        };
+        assert_eq!(view.cursor, 36);
+        press(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert!(
+            app.error && app.message.contains("read-only"),
+            "{}",
+            app.message
+        );
+        // A SQLite database, whatever its name, opens as its tables.
+        let db = root.join("cache.bin");
+        rusqlite::Connection::open(&db)
+            .unwrap()
+            .execute_batch("CREATE TABLE t(a); INSERT INTO t VALUES (1);")
+            .unwrap();
+        app.open(&db).unwrap();
+        sheet_read(&mut app);
+        let Some(Pane::Sheet(view)) = app.panes.get(&app.focused) else {
+            panic!("no grid");
+        };
+        assert!(view.database);
+        assert_eq!(view.sheets[0].name, "t");
     }
 
     #[test]

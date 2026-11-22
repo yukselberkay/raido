@@ -63,6 +63,20 @@ pub enum SavedPane {
     },
     /// The review of AI agents' changes; what it shows is found again.
     Changes,
+    /// A file that isn't text, as hex, and the byte you were on.
+    Hex {
+        path: PathBuf,
+        #[serde(default)]
+        offset: u64,
+    },
+    /// A CSV or TSV buffer as a grid, and the cell you were on.
+    Table {
+        buffer: usize,
+        #[serde(default)]
+        row: u32,
+        #[serde(default)]
+        col: u32,
+    },
     /// A spreadsheet, and the sheet and cell you were on.
     Sheet {
         path: PathBuf,

@@ -39,7 +39,8 @@ That is what this workspace is for:
 - [Keyboard reference](#keyboard)
 - [Markdown preview](#markdown-preview)
 - [Nmap scan reports](#nmap-scan-reports)
-- [Spreadsheets](#spreadsheets)
+- [Spreadsheets, CSV and databases](#spreadsheets-csv-and-databases)
+- [Files that aren't text](#files-that-arent-text)
 - [Copy and paste](#copy-and-paste)
 - [Language servers](#language-servers-lsp)
 - [Sessions: pick up where you left off](#sessions)
@@ -426,9 +427,13 @@ the history graph appears after you make commits.
 - **Nmap scan reports:** `.nmap`, `.gnmap` and Nmap XML open as a readable report —
   hosts at a glance, ports colored by state, script output under its port, noise
   folded away.
-- **Spreadsheets:** Excel and OpenDocument workbooks (`.xlsx`, `.xlsm`, `.xlsb`,
-  `.xls`, `.ods`) open read-only as a grid, numbers shown in their own formats
-  (`15%`, `1,234.50`, `€ 9.99`, dates), with the sheets as tabs, search and copy.
+- **Spreadsheets, CSV and databases:** Excel and OpenDocument workbooks (`.xlsx`,
+  `.xlsm`, `.xlsb`, `.xls`, `.ods`) and SQLite databases open read-only as a grid,
+  laid out as Excel left them, long text wrapped, numbers in their own formats
+  (`15%`, `1,234.50`, `€ 9.99`, dates); CSV and TSV files open the same way and stay
+  editable as text.
+- **Files that aren't text** open read-only as hex, with what kind of file each is
+  (`PNG image, 1200 × 800`, `Mach-O executable, ARM64`).
 - **Source highlighting:** bundled Rust, C, C++, Python, Go grammars, plus the
   other bundled Syntect languages (JSON and YAML among them) and Raido's own
   grammars: TypeScript and JavaScript with JSX (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`,
@@ -1532,29 +1537,51 @@ reading, `:preview` or `Ctrl-b m` switches back, and `Ctrl-b M` puts the report
 beside the raw file. Reports use up to 140 columns, for version strings and script
 output. Try it with [examples/lab-scan.nmap](examples/lab-scan.nmap).
 
-### Spreadsheets
+### Spreadsheets, CSV and databases
 
-Excel workbooks (`.xlsx`, `.xlsm`, `.xlsb`, `.xls`) and OpenDocument spreadsheets
-(`.ods`) open **read-only** as a grid: from the explorer (browsing previews them, as
-it does other files), `Ctrl-p`, `:e` or `raido budget.xlsx`. Column letters run
-along the top and row numbers down the side, and the sheet's first row stays on
-screen as a header once you scroll past it. Below the grid are the selected cell in
-full (its formula, and the exact number when the cell shows it rounded), then the
-sheets as tabs and the sheet's size.
+Three kinds of data open as a grid: from the explorer (browsing previews them, as it
+does other files), `Ctrl-p`, `:e` or `raido budget.xlsx`.
 
+- **Spreadsheets**, read-only: Excel workbooks (`.xlsx`, `.xlsm`, `.xlsb`, `.xls`)
+  and OpenDocument ones (`.ods`), one sheet at a time with the sheets as tabs.
+- **SQLite databases**, read-only: any file whose first bytes say it's one (`.db`,
+  `.sqlite` or any other name), each table and view as a tab, the column names on
+  top. Raido opens it read-only and never writes to it. A table's first 100,000 rows
+  are shown, and the tab says how many there are in all.
+- **CSV and TSV files** open as a grid the way Markdown opens rendered, and stay
+  editable text: `e` edits the text at the row you're on, `Ctrl-b m` (`:preview`)
+  switches back and forth, and `Ctrl-b M` (`:preview split`) puts the grid beside
+  the text, following your edits and cursor. The separator is found for you (`,`,
+  `;`, tab or `|`), and quoted fields may hold separators, quotes and line breaks.
+
+Column letters run along the top and row numbers down the side; rows kept at the
+top stay there as you scroll (Excel's frozen rows, else the first row as a header).
+Below the grid is the selected cell in full, wrapped over a few lines with its
+formula and its exact number when the cell shows it rounded; Enter opens the whole
+cell over the grid, to scroll and copy. Then come the sheets as tabs and the size.
+
+- **Laid out as Excel left it:** each column's width from the workbook, its frozen
+  columns kept at the left (narrowed when the pane is small), hidden columns left
+  out, merged cells across their columns, and the sheet and cell it was saved on.
+- **Long text wraps** in its column and the row grows, as Excel shows cells set to
+  wrap (in CSV and databases, `w` wraps any long text). Other text runs on into the
+  empty cells to its right, as in Excel, and is cut short with `…` where it meets a
+  value. `w` switches between wrapped rows and one line per row.
 - **Values as Excel shows them:** each number in its cell's format (decimals,
   thousands separators, percent, currency, scientific, negatives in parentheses),
   `General` numbers in up to 11 characters as Excel does, dates and times in ISO
   order (`2024-03-15 14:30`), durations as `37:30:00`, `TRUE`/`FALSE`, and errors
-  such as `#DIV/0!` in the warning color. Bold cells are bold.
+  such as `#DIV/0!` in the warning color. A number too wide for its column shows as
+  `####`, never cut short. Bold cells are bold.
 - **Formulas aren't recalculated.** A cell shows the value the file saved. A formula
   with no saved value (some libraries write files that way) shows dimmed as
   `=SUM(B2:B3)`.
-- **Live:** when a script rewrites the file, the grid reads it again and keeps your
-  place on each sheet.
-- **Not covered:** charts, images, merged cells and colors; rows and columns hidden
-  in Excel show like the others. Hidden sheets are listed as tabs, marked hidden.
-  Workbooks over 64 MiB, and password-protected ones, say so instead.
+- **Databases:** `NULL` dimmed, blobs as their size, numbers lined up on the right.
+- **Live:** when a script rewrites the file (or a program writes to the database),
+  the grid reads it again and keeps your place on each sheet.
+- **Not covered:** charts, images, colors and rows hidden in Excel. Hidden sheets are
+  listed as tabs, marked hidden. Workbooks over 64 MiB, and password-protected
+  ones, say so instead.
 
 | Key | Action |
 | --- | --- |
@@ -1562,15 +1589,45 @@ sheets as tabs and the sheet's size.
 | Space, PageUp/PageDown, `Ctrl-d` `Ctrl-u` | Page down / up / half a page |
 | `g` / `G` | First / last row |
 | `0` or Home / `$` or End | First / last column |
-| `]` / `[`, `Ctrl-PageDown` / `Ctrl-PageUp` | Next / previous sheet (a click on a tab works too) |
+| `]` / `[`, `Ctrl-PageDown` / `Ctrl-PageUp` | Next / previous sheet or table (a click on a tab works too) |
 | `/` then Enter, `n` / `N` | Find text in the sheet, next / previous |
 | `y` or `Ctrl-c` / `Y` | Copy the cell as it shows / its row, tab-separated |
-| Enter | The whole cell in the status line |
+| Enter | The whole cell over the grid (`j` `k` scroll, `y` copies, Esc closes) |
+| `w` | Wrapped rows / one line per row |
+| `e` (CSV) | Edit the text at this row |
 | `r` or `:reload` | Read the file again |
 | `q` | Close the pane |
 
-The mouse wheel scrolls and a click selects a cell. `Ctrl-s` only says the file is
-read-only.
+The mouse wheel scrolls and a click selects a cell. In a spreadsheet or database
+`Ctrl-s` only says it's read-only; in a CSV grid it saves the text.
+
+### Files that aren't text
+
+Any other file the editor can't take as text (a NUL byte, or bytes that aren't
+UTF-8, in its first 8000) opens **read-only as hex** instead of being refused:
+images, PDFs, archives, executables, fonts, files in another text encoding. Above
+the bytes Raido says what the file is, from its first bytes: `PNG image, 1200 ×
+800`, `PDF document, version 1.7`, `ELF 64-bit executable, x86-64`, `Mach-O
+executable, ARM64`, `Windows DLL, x86-64`, `Zip archive`, `SQLite database`,
+`UTF-16 text`, and about thirty more, with its size.
+
+Each row shows its offset, 16 bytes in hex (8 or 4 in a narrow pane) and the same
+bytes as characters, colored by kind: NUL dimmed, letters and digits plain,
+whitespace and control characters in the secondary color, bytes past ASCII in the
+accent color. The selected byte is lit in both columns, and the line below gives its
+offset and value. Only the part on screen is read, so a file of any size opens at
+once.
+
+| Key | Action |
+| --- | --- |
+| `h` `l` / `j` `k`, arrows | Previous / next byte, row up / down |
+| Space, PageUp/PageDown, `Ctrl-d` `Ctrl-u` | Page down / up / half a page |
+| `g` / `G` | Start / end of the file |
+| `0` / `$` | Start / end of the row |
+| `/` then Enter, `n` / `N` | Find text (case ignored unless you type a capital), or bytes in hex: `ff d8 ff`, `0xcafe` |
+| `y` or `Ctrl-c` | Copy the row's bytes in hex |
+| `r` or `:reload` | Read the file again (it also does when the file changes) |
+| `q` | Close the pane |
 
 ### Prompt and buffer behavior
 
@@ -2134,8 +2191,8 @@ another way in:
   Alacritty, recent Windows Terminal) never show half a frame; the others, macOS
   Terminal among them, ignore it.
 - PTY I/O runs off the UI thread. Git refreshes on a worker with process timeouts.
-- UTF-8 text only; 16 MiB open-file limit; binary files are rejected
-  (spreadsheets open in their own read-only view).
+- UTF-8 text only; 16 MiB open-file limit. Files that aren't UTF-8 text open
+  read-only as hex; spreadsheets and databases as a grid.
 - Atomic same-directory saves preserve Unix permission bits. The original file
   content is checked before replacement, including a second check after writing
   the temporary file. This is conflict detection, not a filesystem transaction
