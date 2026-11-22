@@ -113,6 +113,7 @@ pub fn file(path: &Path) -> Icon {
         "conf" | "cfg" | "ini" => ("\u{e615}", rgb(0x6d8086)),
         "xml" => ("\u{f05c0}", rgb(0xe37933)),
         "csv" | "tsv" => ("\u{e64a}", rgb(0x89e051)),
+        "xlsx" | "xlsm" | "xlsb" | "xls" | "xla" | "xlam" | "ods" => ("\u{f021b}", rgb(0x21a366)),
         "mp3" | "flac" | "wav" | "ogg" => ("\u{f0386}", rgb(0x66d8ef)),
         "mp4" | "mkv" | "webm" | "mov" => ("\u{f03d}", rgb(0xfd971f)),
         _ => ("\u{f15b}", None),

@@ -13,6 +13,7 @@ use crate::{
     review::{self, ChangesView, Target},
     search,
     session::{self, SavedBuffer, SavedPane, Session},
+    sheet::SheetView,
     sound,
     terminal::{Launch, TerminalPane},
     textsize,
@@ -40,6 +41,8 @@ pub enum Pane {
     Git(Box<GitView>),
     /// What AI agents changed, to keep or undo (`:changes`, Ctrl-b v).
     Changes(Box<ChangesView>),
+    /// A spreadsheet, read-only: .xlsx, .xls, .ods and the like.
+    Sheet(Box<SheetView>),
 }
 
 /// Rendered, read-only view of a buffer: Markdown, or an Nmap scan report.
@@ -905,6 +908,15 @@ impl App {
     /// Show PATH in a pane of its own beside the terminal (or focus the pane already
     /// showing it). A file that doesn't exist yet opens as a new buffer.
     fn open_from_terminal(&mut self, path: &Path) -> Result<String> {
+        if crate::sheet::is_spreadsheet(path) {
+            self.open(path)?;
+            return Ok(workspace::printable(
+                &path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            ));
+        }
         let fresh = Buffer::open_with(path, self.config.line_endings)?;
         let key = fresh.path.clone().context("Missing file name")?;
         let id = match self
@@ -1127,6 +1139,7 @@ impl App {
             let buffer = match self.panes.get(&pane) {
                 Some(Pane::Editor(b)) => *b,
                 Some(Pane::Preview(p)) => p.buffer,
+                Some(Pane::Sheet(view)) => return view.peeked && self.tiles.contains(pane),
                 _ => return false,
             };
             let b = &self.buffers[buffer];
@@ -1153,8 +1166,11 @@ impl App {
         } else {
             self.root.join(path)
         };
+        if crate::sheet::is_spreadsheet(&path) {
+            return self.open_sheet(&path, how);
+        }
         let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-        let document = |p: &Pane| matches!(p, Pane::Editor(_) | Pane::Preview(_));
+        let document = |p: &Pane| matches!(p, Pane::Editor(_) | Pane::Preview(_) | Pane::Sheet(_));
         // Browsing previews beside an editor that's open; it never opens the first.
         if peek
             && !self
@@ -1299,6 +1315,96 @@ impl App {
             })
             .count();
         (buffer.revision == revision && !buffer.dirty && shown <= 1).then_some(id)
+    }
+    /// Open a spreadsheet, read-only, where `open_file` would open a file: in a
+    /// pane showing nothing or only being browsed, else beside the editor. One on
+    /// screen already is focused.
+    fn open_sheet(&mut self, path: &Path, how: Open) -> Result<()> {
+        let peek = how == Open::Peek;
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let document = |p: &Pane| matches!(p, Pane::Editor(_) | Pane::Preview(_) | Pane::Sheet(_));
+        let on_screen = |app: &Self, wanted: &dyn Fn(&Pane) -> bool| {
+            app.panes
+                .iter()
+                .find(|(id, p)| app.tiles.contains(**id) && wanted(p))
+                .map(|(id, _)| *id)
+        };
+        // Browsing previews beside an editor that's open; it never opens the first.
+        if peek && on_screen(self, &document).is_none() {
+            return Ok(());
+        }
+        let name = workspace::printable(
+            &canonical
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        );
+        let shown = on_screen(
+            self,
+            &|p| matches!(p, Pane::Sheet(view) if view.path == canonical),
+        );
+        let crowded = match shown {
+            Some(there) => {
+                if !peek {
+                    if let Some(Pane::Sheet(view)) = self.panes.get_mut(&there) {
+                        view.peeked = false;
+                    }
+                    self.focused = there;
+                }
+                false
+            }
+            None => {
+                let view = Pane::Sheet(Box::new(SheetView::open(
+                    canonical.clone(),
+                    peek,
+                    (0, 0, 0),
+                )));
+                let target = if self.panes.get(&self.focused).is_some_and(document) {
+                    Some(self.focused)
+                } else {
+                    on_screen(self, &document)
+                };
+                match (self.spare_pane(), target) {
+                    (Some(spare), _) => {
+                        self.focused = spare;
+                        self.panes.insert(spare, view);
+                        false
+                    }
+                    (None, Some(beside)) if self.panes.len() < 12 => {
+                        self.focused = beside;
+                        self.add_pane(view, self.split_axis(beside));
+                        false
+                    }
+                    (None, Some(full)) => {
+                        self.focused = full;
+                        self.panes.insert(full, view);
+                        true
+                    }
+                    (None, None) => {
+                        self.add_pane(view, Axis::Horizontal);
+                        false
+                    }
+                }
+            }
+        };
+        let crowded = if crowded {
+            " · 12 panes are open, so it took this one's place"
+        } else {
+            ""
+        };
+        if peek {
+            self.sidebar_focus = true;
+            self.notice(format!("Previewing {name} · Enter to open{crowded}"));
+            return Ok(());
+        }
+        self.opened(&canonical);
+        self.tree.reveal(&canonical);
+        self.sidebar_focus = false;
+        self.mode = Mode::Normal;
+        self.notice(format!(
+            "Opened {name}, read-only · [ ] sheets · / find · y copy{crowded}"
+        ));
+        Ok(())
     }
     pub fn open_terminal(
         &mut self,
@@ -1460,6 +1566,15 @@ impl App {
                         only: view.only.clone(),
                     },
                     Pane::Changes(_) => SavedPane::Changes,
+                    Pane::Sheet(view) => {
+                        let (row, col) = view.selected().unwrap_or_default();
+                        SavedPane::Sheet {
+                            path: relative(&view.path),
+                            sheet: view.current,
+                            row,
+                            col,
+                        }
+                    }
                 };
                 (*id, saved)
             })
@@ -1580,6 +1695,16 @@ impl App {
                 }
                 SavedPane::Ai => Pane::Ai(None),
                 SavedPane::Changes => Pane::Changes(Box::default()),
+                SavedPane::Sheet {
+                    path,
+                    sheet,
+                    row,
+                    col,
+                } => Pane::Sheet(Box::new(SheetView::open(
+                    self.root.join(path),
+                    false,
+                    (sheet, row, col),
+                ))),
                 SavedPane::Git { only } => {
                     let mut view = GitView::new(self.root.clone());
                     if only.is_some() {
@@ -1691,6 +1816,9 @@ impl App {
         Ok(terminal)
     }
     fn save(&mut self, path: Option<PathBuf>) -> Result<()> {
+        if matches!(self.panes.get(&self.focused), Some(Pane::Sheet(_))) {
+            bail!("Spreadsheets are read-only in Raido");
+        }
         let id = self
             .buffer_id()
             .or_else(|| self.preview_buffer())
@@ -1829,6 +1957,7 @@ impl App {
                     }
                 }
                 Pane::Git(view) => self.redraw |= view.poll(),
+                Pane::Sheet(view) => self.redraw |= view.poll(),
                 Pane::Ai(Some(choice)) => self.redraw |= choice.poll(),
                 _ => {}
             }
@@ -2104,6 +2233,14 @@ impl App {
                 self.notice(text);
             }
         }
+        for pane in self.panes.values_mut() {
+            if let Pane::Sheet(view) = pane {
+                if view.changed_on_disk() {
+                    view.reload();
+                    self.redraw = true;
+                }
+            }
+        }
     }
     pub fn event(&mut self, event: Event) {
         self.redraw = true;
@@ -2329,6 +2466,9 @@ impl App {
                             }
                         }
                     }
+                    if let Some(Pane::Sheet(view)) = self.panes.get_mut(&id) {
+                        view.click(at.0, at.1);
+                    }
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) if self.divider.is_some() => {
@@ -2437,6 +2577,7 @@ impl App {
                 view.sync(&self.changes);
                 view.move_by(step);
             }
+            Some(Pane::Sheet(view)) => view.scroll(step as i64),
             _ => {}
         }
         Ok(())
@@ -2799,6 +2940,7 @@ impl App {
             Some(Pane::Preview(_)) => return self.preview_key(key),
             Some(Pane::Git(_)) => return self.git_pane_key(key),
             Some(Pane::Changes(_)) => return self.changes_key(key),
+            Some(Pane::Sheet(_)) => return self.sheet_key(key),
             Some(Pane::Ai(Some(_))) => return self.model_choice_key(key),
             Some(Pane::Ai(None)) => {
                 let chosen = match key.code {
@@ -3821,6 +3963,13 @@ impl App {
             Some(Pane::Terminal(t)) => t.title.clone(),
             Some(Pane::Git(_)) => "Git".into(),
             Some(Pane::Changes(_)) => "Changes".into(),
+            Some(Pane::Sheet(view)) => workspace::printable(
+                &view
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            ),
             Some(Pane::Ai(None)) => "AI launcher".into(),
             Some(Pane::Ai(Some(_))) => "OpenCode · choose a model".into(),
             None => "?".into(),
@@ -5256,6 +5405,91 @@ impl App {
         self.notice(note);
         Ok(())
     }
+    /// Keys in a spreadsheet: move like in the editor (hjkl, the arrows, g G, 0 $),
+    /// page, switch sheets ([ ]), find (/ n N) and copy (y a cell, Y its row).
+    fn sheet_key(&mut self, key: KeyEvent) -> Result<()> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(Pane::Sheet(view)) = self.panes.get_mut(&self.focused) else {
+            return Ok(());
+        };
+        if let Some(typed) = view.typing.as_mut() {
+            match key.code {
+                KeyCode::Esc => view.typing = None,
+                KeyCode::Enter => {
+                    view.query = view.typing.take().unwrap_or_default();
+                    if !view.query.trim().is_empty() && !view.find(true) {
+                        let query = view.query.clone();
+                        self.fail(format!("No cell on this sheet has {query}"));
+                    }
+                }
+                KeyCode::Backspace => {
+                    typed.pop();
+                }
+                KeyCode::Char('u') if ctrl => typed.clear(),
+                KeyCode::Char(c) if !ctrl => typed.push(c),
+                _ => {}
+            }
+            return Ok(());
+        }
+        let page = i64::from(view.page.max(2));
+        let mut copy = None;
+        let mut said: Option<(bool, String)> = None;
+        match key.code {
+            KeyCode::Char('d') if ctrl => view.move_by(page / 2, 0),
+            KeyCode::Char('u') if ctrl => view.move_by(-page / 2, 0),
+            KeyCode::Char('f') if ctrl => view.move_by(page - 1, 0),
+            KeyCode::Char('c') if ctrl => copy = view.copied_cell(),
+            KeyCode::PageDown if ctrl => view.switch(1),
+            KeyCode::PageUp if ctrl => view.switch(-1),
+            _ if ctrl => {}
+            KeyCode::Char('j') | KeyCode::Down => view.move_by(1, 0),
+            KeyCode::Char('k') | KeyCode::Up => view.move_by(-1, 0),
+            KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => view.move_by(0, -1),
+            KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => view.move_by(0, 1),
+            KeyCode::Char(' ') | KeyCode::PageDown => view.move_by(page - 1, 0),
+            KeyCode::PageUp => view.move_by(1 - page, 0),
+            KeyCode::Char('g') => view.go(Some(0), None),
+            KeyCode::Char('G') => view.go(Some(u32::MAX), None),
+            KeyCode::Char('0' | '^') | KeyCode::Home => view.go(None, Some(0)),
+            KeyCode::Char('$') | KeyCode::End => view.go(None, Some(u32::MAX)),
+            KeyCode::Char(']') => view.switch(1),
+            KeyCode::Char('[') => view.switch(-1),
+            KeyCode::Char('/') => view.typing = Some(String::new()),
+            KeyCode::Char(c @ ('n' | 'N')) => {
+                if view.query.trim().is_empty() {
+                    said = Some((true, "Press / to search the sheet".into()));
+                } else if !view.find(c == 'n') {
+                    said = Some((true, format!("No cell on this sheet has {}", view.query)));
+                }
+            }
+            KeyCode::Char('y') => copy = view.copied_cell(),
+            KeyCode::Char('Y') => {
+                copy = view
+                    .copied_row()
+                    .zip(view.selected())
+                    .map(|(text, (row, _))| (format!("row {}", row + 1), text))
+            }
+            KeyCode::Enter => said = view.described().map(|text| (false, text)),
+            KeyCode::Char('r') => view.reload(),
+            KeyCode::Char(':') => self.input_start(InputKind::Command),
+            KeyCode::Char('q') => return self.close(false),
+            _ => {}
+        }
+        if let Some((name, text)) = copy {
+            if text.is_empty() {
+                said = Some((true, format!("{name} is empty")));
+            } else {
+                self.clipboard.copy(text, false);
+                said = Some((false, format!("Copied {name}")));
+            }
+        }
+        match said {
+            Some((true, text)) => self.fail(text),
+            Some((false, text)) => self.notice(text),
+            None => {}
+        }
+        Ok(())
+    }
     fn preview_key(&mut self, key: KeyEvent) -> Result<()> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let Some(Pane::Preview(p)) = self.panes.get_mut(&self.focused) else {
@@ -5962,6 +6196,11 @@ impl App {
                 } else {
                     format!("Loaded {} from disk", self.buffers[id].name())
                 });
+            }
+            "reload" if matches!(self.panes.get(&self.focused), Some(Pane::Sheet(_))) => {
+                if let Some(Pane::Sheet(view)) = self.panes.get_mut(&self.focused) {
+                    view.reload();
+                }
             }
             "reload" => {
                 let id = self.buffer_id().context("Focus an editor")?;
@@ -10105,6 +10344,157 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
                     .collect()
             })
             .collect()
+    }
+
+    /// Wait for the focused spreadsheet to be read.
+    fn sheet_read(app: &mut App) {
+        for _ in 0..300 {
+            app.tick();
+            if matches!(app.panes.get(&app.focused), Some(Pane::Sheet(v)) if !v.loading()) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the workbook was never read");
+    }
+
+    fn budget(path: &Path) {
+        crate::sheet::tests::workbook(
+            path,
+            &[
+                (
+                    "Costs",
+                    false,
+                    &[
+                        ("A1", "'Item", 4, ""),
+                        ("B1", "'Cost", 4, ""),
+                        ("C1", "'Share", 4, ""),
+                        ("A2", "'Rent", 0, ""),
+                        ("B2", "1250.5", 2, ""),
+                        ("C2", "0.625", 1, "B2/B4"),
+                        ("A3", "'Food", 0, ""),
+                        ("B3", "750", 2, ""),
+                        ("A4", "'Total", 4, ""),
+                        ("B4", "2000.5", 2, "SUM(B2:B3)"),
+                    ],
+                ),
+                ("Notes", false, &[("A1", "'later", 0, "")]),
+            ],
+        );
+    }
+
+    #[test]
+    fn spreadsheets_open_as_a_read_only_grid_to_move_find_and_copy_in() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let path = root.join("budget.xlsx");
+        budget(&path);
+        let mut app = App::new(root.clone(), Some(path.clone()), false).unwrap();
+        sheet_read(&mut app);
+        let sheet = |app: &App| match app.panes.get(&app.focused) {
+            Some(Pane::Sheet(view)) => (view.current, view.selected()),
+            _ => panic!("no spreadsheet focused"),
+        };
+        assert_eq!(sheet(&app), (0, Some((0, 0))));
+        let drawn = screen(&mut app, 110, 24).join("\n");
+        assert!(drawn.contains("budget.xlsx · Costs · read-only"), "{drawn}");
+        assert!(drawn.contains("│   A   │    B     │   C   │"), "{drawn}");
+        assert!(drawn.contains("│ Rent  │ 1,250.50 │ 62.5% │"), "{drawn}");
+        assert!(drawn.contains(" Costs │ Notes │"), "{drawn}");
+        assert!(drawn.contains("4 rows · 3 columns"), "{drawn}");
+        assert!(drawn.contains(" SHEET "), "{drawn}");
+        // The selected cell in full at the foot: its formula, its exact number.
+        for key in ['j', 'l', 'l'] {
+            press(&mut app, KeyCode::Char(key), KeyModifiers::NONE);
+        }
+        assert_eq!(sheet(&app), (0, Some((1, 2))));
+        let drawn = screen(&mut app, 110, 24).join("\n");
+        assert!(
+            drawn.contains(" C2 62.5%   =B2/B4   exactly 0.625"),
+            "{drawn}"
+        );
+        // y copies the cell as it shows, Y its row for pasting into a spreadsheet.
+        press(&mut app, KeyCode::Char('y'), KeyModifiers::NONE);
+        assert_eq!(app.clipboard.paste().0, "62.5%");
+        press(&mut app, KeyCode::Char('Y'), KeyModifiers::SHIFT);
+        assert_eq!(app.clipboard.paste().0, "Rent\t1,250.50\t62.5%");
+        // / finds a cell, round the end of the sheet.
+        for key in "/tot".chars() {
+            press(&mut app, KeyCode::Char(key), KeyModifiers::NONE);
+        }
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(sheet(&app), (0, Some((3, 0))));
+        // Nothing to save: it says so.
+        press(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert!(
+            app.error && app.message.contains("read-only"),
+            "{}",
+            app.message
+        );
+        // ] and [ go through the sheets, each keeping its place.
+        press(&mut app, KeyCode::Char(']'), KeyModifiers::NONE);
+        assert_eq!(sheet(&app), (1, Some((0, 0))));
+        press(&mut app, KeyCode::Char('['), KeyModifiers::NONE);
+        assert_eq!(sheet(&app), (0, Some((3, 0))));
+        // The session brings it back at the same cell.
+        app.save_session(true).unwrap();
+        drop(app);
+        let mut app = App::new(root.clone(), None, false).unwrap();
+        app.restore_session();
+        let id = app
+            .panes
+            .iter()
+            .find(|(_, p)| matches!(p, Pane::Sheet(_)))
+            .map(|(id, _)| *id)
+            .expect("the spreadsheet came back");
+        app.focused = id;
+        sheet_read(&mut app);
+        assert_eq!(sheet(&app), (0, Some((3, 0))));
+    }
+
+    #[test]
+    fn browsing_previews_a_spreadsheet_in_place_of_the_last_file_browsed() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        for name in ["notes.txt", "a.txt", "b.txt"] {
+            std::fs::write(root.join(name), "text\n").unwrap();
+        }
+        budget(&root.join("budget.xlsx"));
+        let mut app = App::new(root.clone(), Some(root.join("notes.txt")), false).unwrap();
+        let documents = |app: &App| {
+            app.panes
+                .values()
+                .filter(|p| matches!(p, Pane::Editor(_) | Pane::Preview(_) | Pane::Sheet(_)))
+                .count()
+        };
+        let peeked_sheet = |app: &App| {
+            app.panes
+                .values()
+                .any(|p| matches!(p, Pane::Sheet(view) if view.peeked))
+        };
+        app.open_file(&root.join("a.txt"), Open::Peek).unwrap();
+        assert_eq!(documents(&app), 2);
+        app.open_file(&root.join("budget.xlsx"), Open::Peek)
+            .unwrap();
+        assert_eq!(documents(&app), 2);
+        assert!(peeked_sheet(&app));
+        assert!(app.sidebar_focus);
+        assert!(
+            app.message.starts_with("Previewing budget.xlsx"),
+            "{}",
+            app.message
+        );
+        app.open_file(&root.join("b.txt"), Open::Peek).unwrap();
+        assert_eq!(documents(&app), 2);
+        assert!(!peeked_sheet(&app));
+        // Opened for real, it stays when browsing goes on.
+        app.open_file(&root.join("budget.xlsx"), Open::Pane)
+            .unwrap();
+        assert!(matches!(app.panes.get(&app.focused), Some(Pane::Sheet(v)) if !v.peeked));
+        app.open_file(&root.join("a.txt"), Open::Peek).unwrap();
+        assert_eq!(documents(&app), 3);
+        assert!(app.panes.values().any(|p| matches!(p, Pane::Sheet(_))));
     }
 
     #[test]

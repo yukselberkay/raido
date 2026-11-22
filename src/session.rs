@@ -63,6 +63,16 @@ pub enum SavedPane {
     },
     /// The review of AI agents' changes; what it shows is found again.
     Changes,
+    /// A spreadsheet, and the sheet and cell you were on.
+    Sheet {
+        path: PathBuf,
+        #[serde(default)]
+        sheet: usize,
+        #[serde(default)]
+        row: u32,
+        #[serde(default)]
+        col: u32,
+    },
 }
 
 impl Session {

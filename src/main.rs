@@ -33,6 +33,7 @@ mod review;
 mod screenshot;
 mod search;
 mod session;
+mod sheet;
 #[cfg(test)]
 mod shots;
 mod skill;

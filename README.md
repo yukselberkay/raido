@@ -39,6 +39,7 @@ That is what this workspace is for:
 - [Keyboard reference](#keyboard)
 - [Markdown preview](#markdown-preview)
 - [Nmap scan reports](#nmap-scan-reports)
+- [Spreadsheets](#spreadsheets)
 - [Copy and paste](#copy-and-paste)
 - [Language servers](#language-servers-lsp)
 - [Sessions: pick up where you left off](#sessions)
@@ -425,6 +426,9 @@ the history graph appears after you make commits.
 - **Nmap scan reports:** `.nmap`, `.gnmap` and Nmap XML open as a readable report —
   hosts at a glance, ports colored by state, script output under its port, noise
   folded away.
+- **Spreadsheets:** Excel and OpenDocument workbooks (`.xlsx`, `.xlsm`, `.xlsb`,
+  `.xls`, `.ods`) open read-only as a grid, numbers shown in their own formats
+  (`15%`, `1,234.50`, `€ 9.99`, dates), with the sheets as tabs, search and copy.
 - **Source highlighting:** bundled Rust, C, C++, Python, Go grammars, plus the
   other bundled Syntect languages (JSON and YAML among them) and Raido's own
   grammars: TypeScript and JavaScript with JSX (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`,
@@ -1528,6 +1532,46 @@ reading, `:preview` or `Ctrl-b m` switches back, and `Ctrl-b M` puts the report
 beside the raw file. Reports use up to 140 columns, for version strings and script
 output. Try it with [examples/lab-scan.nmap](examples/lab-scan.nmap).
 
+### Spreadsheets
+
+Excel workbooks (`.xlsx`, `.xlsm`, `.xlsb`, `.xls`) and OpenDocument spreadsheets
+(`.ods`) open **read-only** as a grid: from the explorer (browsing previews them, as
+it does other files), `Ctrl-p`, `:e` or `raido budget.xlsx`. Column letters run
+along the top and row numbers down the side, and the sheet's first row stays on
+screen as a header once you scroll past it. Below the grid are the selected cell in
+full (its formula, and the exact number when the cell shows it rounded), then the
+sheets as tabs and the sheet's size.
+
+- **Values as Excel shows them:** each number in its cell's format (decimals,
+  thousands separators, percent, currency, scientific, negatives in parentheses),
+  `General` numbers in up to 11 characters as Excel does, dates and times in ISO
+  order (`2024-03-15 14:30`), durations as `37:30:00`, `TRUE`/`FALSE`, and errors
+  such as `#DIV/0!` in the warning color. Bold cells are bold.
+- **Formulas aren't recalculated.** A cell shows the value the file saved. A formula
+  with no saved value (some libraries write files that way) shows dimmed as
+  `=SUM(B2:B3)`.
+- **Live:** when a script rewrites the file, the grid reads it again and keeps your
+  place on each sheet.
+- **Not covered:** charts, images, merged cells and colors; rows and columns hidden
+  in Excel show like the others. Hidden sheets are listed as tabs, marked hidden.
+  Workbooks over 64 MiB, and password-protected ones, say so instead.
+
+| Key | Action |
+| --- | --- |
+| `h` `j` `k` `l` / arrows, Tab / Shift-Tab | Move one cell |
+| Space, PageUp/PageDown, `Ctrl-d` `Ctrl-u` | Page down / up / half a page |
+| `g` / `G` | First / last row |
+| `0` or Home / `$` or End | First / last column |
+| `]` / `[`, `Ctrl-PageDown` / `Ctrl-PageUp` | Next / previous sheet (a click on a tab works too) |
+| `/` then Enter, `n` / `N` | Find text in the sheet, next / previous |
+| `y` or `Ctrl-c` / `Y` | Copy the cell as it shows / its row, tab-separated |
+| Enter | The whole cell in the status line |
+| `r` or `:reload` | Read the file again |
+| `q` | Close the pane |
+
+The mouse wheel scrolls and a click selects a cell. `Ctrl-s` only says the file is
+read-only.
+
 ### Prompt and buffer behavior
 
 Command and search prompts support typing, Backspace, Enter and Escape.
@@ -2090,7 +2134,8 @@ another way in:
   Alacritty, recent Windows Terminal) never show half a frame; the others, macOS
   Terminal among them, ignore it.
 - PTY I/O runs off the UI thread. Git refreshes on a worker with process timeouts.
-- UTF-8 text only; 16 MiB open-file limit; binary files are rejected.
+- UTF-8 text only; 16 MiB open-file limit; binary files are rejected
+  (spreadsheets open in their own read-only view).
 - Atomic same-directory saves preserve Unix permission bits. The original file
   content is checked before replacement, including a second check after writing
   the temporary file. This is conflict detection, not a filesystem transaction

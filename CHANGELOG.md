@@ -10,6 +10,14 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **Spreadsheets, read-only.** `.xlsx`, `.xlsm`, `.xlsb`, `.xls` and `.ods` files,
+  refused as binary before, open as a grid: each number in its cell's format
+  (`15%`, `1,234.50`, `€ 9.99`, dates as `2024-03-15`), the first row kept as a
+  header while you scroll, the selected cell's formula and exact value below, and
+  the sheets as tabs (`]` / `[`). `/` finds text, `y` copies a cell and `Y` its
+  row, and the grid reads the file again when it changes on disk. Formulas aren't
+  recalculated: cells show what the file saved.
+
 - **`Ctrl-p` finds a file by a few of its letters**, as VS Code's quick open does:
   `mnrs` opens `src/main.rs`, the best matches first and the matched letters
   highlighted, the files you opened last first when nothing's typed, and `main.rs:42`
