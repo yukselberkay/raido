@@ -42,6 +42,10 @@ ai_split = "right"
 # Teach your AI agents about Raido (an Agent Skills skill for every project; kept
 # current at startup when an AI agent is installed, and when you launch one).
 ai_skill = true
+# Start AI agents without them asking before each command or edit: Claude Code in
+# its auto mode, Codex, Gemini CLI and Antigravity in their yolo modes. false starts
+# each in its own default mode. Your own [ai.<name>] launchers run as you wrote them.
+ai_auto_mode = true
 # A sound when an AI pane finishes a prompt (or stops to ask you something):
 # "default" (macOS Glass, the desktop's "complete" sound on Linux, Windows' notify
 # sound), "off", "bell" (the terminal's bell), a system sound name (macOS "Hero",

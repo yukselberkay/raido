@@ -243,6 +243,12 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Changed
 
+- **AI agents start in auto mode**, without asking before each command or file
+  edit: Claude Code with `--permission-mode auto`, Codex in its yolo mode
+  (`--dangerously-bypass-approvals-and-sandbox`), Gemini CLI with `--yolo` and
+  Antigravity with `--dangerously-skip-permissions`, new or reopened. OpenCode asks
+  for nothing but `.env` files anyway. `ai_auto_mode = false` starts them in their
+  own default modes, as before.
 - The review explains new agent changes by itself once the agents stop, so the
   explanation is waiting when you open it; `s` still asks at once. It asks once per
   round of agent changes, sends only files with new changes, and costs nothing while

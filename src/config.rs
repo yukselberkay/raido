@@ -169,6 +169,10 @@ pub struct Config {
     pub ai_split: String,
     /// Install the Raido skill (interactive docs) for AI agents when one is launched.
     pub ai_skill: bool,
+    /// Start AI CLIs in the mode where they don't ask before each command or edit:
+    /// Claude Code in auto mode, Codex, Gemini CLI and Antigravity in yolo mode.
+    /// false starts each in its own default mode.
+    pub ai_auto_mode: bool,
     /// Sound when an AI pane finishes a prompt: "default", "off", "bell", a macOS
     /// sound name ("Glass", "Hero"…) or a sound file (see `sound::play`).
     pub ai_sound: String,
@@ -251,6 +255,7 @@ impl Default for Config {
             font_size: None,
             ai_split: "right".into(),
             ai_skill: true,
+            ai_auto_mode: true,
             ai_sound: "default".into(),
             review_changes: true,
             review_summary: true,

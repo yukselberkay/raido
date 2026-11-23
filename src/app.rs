@@ -321,6 +321,23 @@ fn agent_flags(
     }
 }
 
+/// Start a built-in AI CLI in the mode where it doesn't ask before each command or
+/// edit (`ai_auto_mode`): Claude Code in its auto mode, Codex, Gemini CLI and
+/// Antigravity in their yolo modes. OpenCode only asks before reading `.env` files
+/// to begin with, and Ollama's chat has no tools, so they get nothing.
+fn auto_mode(program: &str, args: &mut Vec<String>) {
+    let flags: &[&str] = match program {
+        "claude" => &["--permission-mode", "auto"],
+        "codex" => &["--dangerously-bypass-approvals-and-sandbox"],
+        "gemini" => &["--yolo"],
+        "agy" => &["--dangerously-skip-permissions"],
+        _ => &[],
+    };
+    // `codex resume` takes them after its subcommand.
+    let at = usize::from(args.first().is_some_and(|a| a == "resume"));
+    args.splice(at..at, flags.iter().map(|f| f.to_string()));
+}
+
 /// How long Ctrl-b n waits for the second press that stops an agent mid-answer.
 const ASK_AGAIN: Duration = Duration::from_secs(5);
 
@@ -6264,6 +6281,9 @@ impl App {
             gemini_ids,
             &conversation_id,
         );
+        if self.config.ai_auto_mode {
+            auto_mode(program, &mut args);
+        }
         // OpenCode on the model you chose (`:ai opencode <model>`, the choice): on
         // your model server when you have one, else on your Ollama.
         let mut env = Vec::new();
@@ -10330,6 +10350,33 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         assert!(agent_flags("opencode", false, None, &no, false, &new_id)
             .0
             .is_empty());
+        // Each starts in its mode that doesn't ask, new or reopened.
+        let started = |program: &str, resume, session| {
+            let (mut args, _, _) = agent_flags(program, resume, session, &yes, true, &new_id);
+            auto_mode(program, &mut args);
+            args
+        };
+        assert_eq!(
+            started("claude", true, Some(id)),
+            ["--permission-mode", "auto", "--resume", id]
+        );
+        assert_eq!(
+            started("codex", false, None),
+            ["--dangerously-bypass-approvals-and-sandbox"]
+        );
+        assert_eq!(
+            started("codex", true, Some(id)),
+            ["resume", "--dangerously-bypass-approvals-and-sandbox", id]
+        );
+        assert_eq!(
+            started("gemini", true, Some(id)),
+            ["--yolo", "--resume", id]
+        );
+        assert_eq!(
+            started("agy", true, None),
+            ["--dangerously-skip-permissions", "--continue"]
+        );
+        assert_eq!(started("opencode", false, None), Vec::<String>::new());
         let a = conversation_id();
         let b = conversation_id();
         assert_ne!(a, b);

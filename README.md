@@ -1897,6 +1897,22 @@ Letters work too: `c` Codex, `a` Claude, `g` Gemini, `y` Antigravity, `l` Local,
 `o` OpenCode. A restored Codex, Gemini, Antigravity or OpenCode pane reopens that
 CLI's latest conversation in the project; a Claude Code pane reopens exactly its own.
 
+**They start in auto mode:** each agent works without asking before every command or
+file edit, new or reopened. `ai_auto_mode = false` starts them in their own default
+modes, which ask.
+
+| CLI | Starts with |
+| --- | --- |
+| Claude Code | `--permission-mode auto`: it acts by itself, and still stops risky actions |
+| Codex | `--dangerously-bypass-approvals-and-sandbox` (its yolo mode) |
+| Gemini CLI | `--yolo` |
+| Antigravity | `--dangerously-skip-permissions` |
+| OpenCode | nothing: it asks only before reading `.env` files to begin with |
+
+The yolo modes run any command with your user's rights, so run Raido in a container
+or VM for code you don't trust. Your own `[ai.<name>]` launchers, and the Local LLM,
+run exactly as you wrote them.
+
 **OpenCode on your Ollama models:** with Ollama installed, `6` / `o` (or `:ai opencode`)
 first lists the models you've pulled (`ollama list`) in the pane: ↑↓ and Enter, or
 `1`–`9`, start OpenCode on that model; `0` leaves the model to OpenCode (its last
@@ -1965,9 +1981,11 @@ For API-key authentication, use the CLI's documented credential manager or
 environment setup **outside Raido**, then start Raido from that environment.
 Do not put API keys into project files or Raido's TOML config.
 
-Raido does not store keys, wrap model requests, disable approvals, or bypass the
-CLI's sandbox/permission settings. AI tools run with the same OS permissions as
-the user, and their own usage/billing applies. The only model requests Raido makes
+Raido does not store keys or wrap model requests. It starts the CLIs in their
+auto or yolo modes, through their own flags ([above](#ai-authentication));
+`ai_auto_mode = false` leaves their approvals and sandboxes as their settings say.
+AI tools run with the same OS permissions as the user, and their own usage/billing
+applies. The only model requests Raido makes
 itself are the review's explanations, to the AI you name in `review_ai` (through its
 CLI, or your model server's API). A missing CLI produces a visible error without
 destroying a pane.
@@ -2168,6 +2186,7 @@ theme immediately. The configuration supports:
 | `claude_ide` | `true` | Let Claude Code [see your editor](#ai-panes-see-your-editor) (the file and selection) as in VS Code |
 | `format_on_save` | `["go"]` | Languages whose files get imports organized and formatting from their server on save ([Go: tidy on save](#go-tidy-on-save)) |
 | `ai_skill` | `true` | Keep the [Raido skill](#ask-your-ai-agent-about-raido) installed for the AI agents on this machine (at startup and when you launch one) |
+| `ai_auto_mode` | `true` | Start the AI CLIs [without them asking](#ai-authentication) before each command or edit: Claude Code in auto mode, Codex, Gemini CLI and Antigravity in yolo mode; `false` starts each in its own default mode |
 | `shell` | `$SHELL`, then `/bin/sh` | Executable path for interactive terminal panes |
 | `[plugins.name]` | None | Explicit `program` and `args` for `:run name` |
 
