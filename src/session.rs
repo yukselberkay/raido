@@ -63,6 +63,12 @@ pub enum SavedPane {
     },
     /// The review of AI agents' changes; what it shows is found again.
     Changes,
+    /// An archive's files, and the one you were on.
+    Archive {
+        path: PathBuf,
+        #[serde(default)]
+        entry: Option<String>,
+    },
     /// A file that isn't text, as hex, and the byte you were on.
     Hex {
         path: PathBuf,

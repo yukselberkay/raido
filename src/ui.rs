@@ -1,5 +1,6 @@
 use crate::{
     app::{App, InputKind, Mode, Pane},
+    archive::ArchiveView,
     config::{color, Theme},
     editor::Buffer,
     gitgraph::{self, Focus as GitFocus, GitView, RefKind},
@@ -279,6 +280,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     Some(name) => format!("{} only · a shows all", printable(name)),
                     None => "all branches".into(),
                 }
+            ),
+            Some(Pane::Archive(view)) => format!(
+                " {} {} · archive · read-only{} ",
+                number,
+                printable(
+                    &view
+                        .path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                ),
+                if view.peeked { " · preview" } else { "" }
             ),
             Some(Pane::Hex(view)) => format!(
                 " {} {} · hex · read-only{} ",
@@ -684,6 +697,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Some(Pane::Git(view)) => git_view(frame, view, inner, &theme, &app.syntax),
             Some(Pane::Sheet(view)) => sheet_view(frame, view, inner, &theme, bare),
             Some(Pane::Hex(view)) => hex_view(frame, view, inner, &theme, bare),
+            Some(Pane::Archive(view)) => {
+                archive_view(frame, view, inner, &theme, bare, app.config.icons)
+            }
             Some(Pane::Changes(view)) => {
                 view.show = view.notes.unwrap_or(app.config.review_summary);
                 changes_view(frame, &app.changes, view, inner, &theme, &app.syntax)
@@ -3500,6 +3516,195 @@ fn sheet_tabs(frame: &mut Frame, view: &mut SheetView, area: Rect, theme: &Theme
     );
 }
 
+/// An archive: what kind it is and what it holds above; its files and folders as a
+/// tree (folders open and close), each with its size and date at the right; below,
+/// the selected one's path in full.
+fn archive_view(
+    frame: &mut Frame,
+    view: &mut ArchiveView,
+    area: Rect,
+    theme: &Theme,
+    bare: bool,
+    icons: crate::config::Icons,
+) {
+    let fg = color(&theme.foreground);
+    let muted = color(&theme.muted);
+    let accent = color(&theme.accent);
+    let warning = color(&theme.warning);
+    let selection = color(&theme.selection);
+    let file = printable(
+        &view
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    );
+    if let Some(error) = &view.error {
+        text(frame, area, format!(" Can't read {file}: {error}"), warning);
+        return;
+    }
+    if view.entries.is_empty() {
+        let what = if view.loading() {
+            format!(" Reading {file}…")
+        } else {
+            " The archive is empty".into()
+        };
+        text(frame, area, what, muted);
+        return;
+    }
+    let header = u16::from(!bare && area.height > 2);
+    let footer = u16::from(!bare && area.height > 4);
+    if header > 0 {
+        let kind = view.format.map_or("Archive", |f| f.name());
+        text(
+            frame,
+            Rect::new(area.x, area.y, area.width, 1),
+            format!(" {kind} · {}", view.summary()),
+            accent,
+        );
+    }
+    let body = Rect::new(
+        area.x,
+        area.y + header,
+        area.width,
+        area.height.saturating_sub(header + footer),
+    );
+    let rows = usize::from(body.height).max(1);
+    view.page = rows;
+    view.drawn_y = body.y;
+    if view.selected < view.top {
+        view.top = view.selected;
+    }
+    if view.selected >= view.top + rows {
+        view.top = view.selected + 1 - rows;
+    }
+    // The size and date columns at the right, as room allows.
+    let width = usize::from(area.width);
+    let show_date = width >= 60;
+    let show_size = width >= 36;
+    let right = usize::from(show_size) * 11 + usize::from(show_date) * 18;
+    for (line, &index) in view.rows.iter().enumerate().skip(view.top).take(rows) {
+        let entry = &view.entries[index];
+        let lit = line == view.selected;
+        let style = if lit {
+            Style::default().fg(fg).bg(selection)
+        } else {
+            Style::default().fg(fg)
+        };
+        let open = view.expanded.contains(&entry.path);
+        let arrow = if entry.dir {
+            if open {
+                "▾"
+            } else {
+                "▸"
+            }
+        } else if entry.link.is_some() {
+            "↗"
+        } else {
+            " "
+        };
+        let indent = "  ".repeat(entry.depth);
+        let mut spans = vec![Span::styled(format!(" {indent}{arrow} "), style)];
+        if icons != crate::config::Icons::Off {
+            let icon = if entry.dir {
+                crate::icons::folder(open, entry.name())
+            } else {
+                crate::icons::file(std::path::Path::new(entry.name()))
+            };
+            let (glyph, tint) = if icons == crate::config::Icons::Basic {
+                crate::icons::basic(icon, entry.dir, open)
+            } else {
+                icon
+            };
+            let tint = tint.or(entry.dir.then(|| color(&theme.secondary)));
+            let icon_style = match tint {
+                Some(tint) => style.fg(legible(tint, theme)),
+                None => style,
+            };
+            spans.push(Span::styled(format!("{glyph} "), icon_style));
+        }
+        let mut name = printable(entry.name());
+        if let Some(target) = entry.link.as_deref().filter(|t| !t.is_empty()) {
+            name.push_str(&format!(" → {}", printable(target)));
+        }
+        let used: usize = spans.iter().map(|s| s.content.width()).sum();
+        let room = width.saturating_sub(used + right + 1);
+        let name = if name.width() > room {
+            format!("{}…", cut(&name, room.saturating_sub(1)))
+        } else {
+            name
+        };
+        let name_width = name.width();
+        spans.push(Span::styled(name, style));
+        let mut tail = String::new();
+        if show_size {
+            let size = if entry.dir {
+                format!(
+                    "{} {}",
+                    entry.files,
+                    if entry.files == 1 { "file" } else { "files" }
+                )
+            } else {
+                crate::archive::short_size(entry.size)
+            };
+            tail.push_str(&format!("{size:>10} "));
+        }
+        if show_date {
+            tail.push_str(&format!("{:>17} ", entry.modified.as_deref().unwrap_or("")));
+        }
+        let gap = width.saturating_sub(used + name_width + tail.width());
+        spans.push(Span::styled(" ".repeat(gap), style));
+        spans.push(Span::styled(
+            tail,
+            if lit {
+                Style::default().fg(muted).bg(selection)
+            } else {
+                Style::default().fg(muted)
+            },
+        ));
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)),
+            Rect::new(area.x, body.y + (line - view.top) as u16, area.width, 1),
+        );
+    }
+    if footer > 0 {
+        let y = area.bottom() - 1;
+        let line = if let Some(typed) = &view.typing {
+            Line::from(vec![
+                Span::styled(" /", Style::default().fg(accent)),
+                Span::styled(printable(typed), Style::default().fg(fg)),
+                Span::styled("▏", Style::default().fg(accent)),
+            ])
+        } else if let Some(opening) = &view.opening {
+            Line::styled(
+                format!(" Copying out {}…", printable(opening)),
+                Style::default().fg(muted),
+            )
+        } else if let Some(entry) = view.entry() {
+            let mut detail = Vec::new();
+            if !entry.dir {
+                detail.push(crate::hex::size(entry.size));
+                if let Some(packed) = entry.packed.filter(|&p| p > 0 && entry.size > 0) {
+                    detail.push(format!(
+                        "{}% packed",
+                        (packed * 100 / entry.size.max(1)).min(999)
+                    ));
+                }
+            }
+            Line::from(vec![
+                Span::styled(
+                    format!(" {} ", printable(&entry.path)),
+                    Style::default().fg(accent).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(detail.join(" · "), Style::default().fg(muted)),
+            ])
+        } else {
+            Line::raw("")
+        };
+        frame.render_widget(Paragraph::new(line), Rect::new(area.x, y, area.width, 1));
+    }
+}
+
 /// A file as hex: what kind of file it is above; each row's offset, its bytes in
 /// hex (a gap after the eighth) and as characters, the selected byte lit in both;
 /// below, that byte's offset and value.
@@ -4027,6 +4232,7 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
             Some(Pane::Changes(_)) => "REVIEW",
             Some(Pane::Sheet(_)) => "SHEET",
             Some(Pane::Hex(_)) => "HEX",
+            Some(Pane::Archive(_)) => "ARCHIVE",
             _ => match app.mode {
                 Mode::Insert => "INSERT",
                 Mode::Visual => "VISUAL",
@@ -4115,6 +4321,14 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
             && !app.sidebar_focus
         {
             " j k move   n N next change   ] [ file   y keep   x undo   Y X whole file   A keep all   U undo all   Enter open   s/S AI explains new/all   i notes   q close"
+        } else if matches!(app.panes.get(&app.focused), Some(Pane::Archive(v)) if v.typing.is_some())
+            && !app.sidebar_focus
+        {
+            " type part of a name or path   Enter find   ^U clear   Esc cancel"
+        } else if matches!(app.panes.get(&app.focused), Some(Pane::Archive(_)))
+            && !app.sidebar_focus
+        {
+            " j k move   Enter open file / fold   l → open   h ← close / up   space fold   c E fold all   / n N find   y copy path   q close"
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Hex(v)) if v.typing.is_some())
             && !app.sidebar_focus
         {
@@ -4433,6 +4647,14 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         (
             "w / e (CSV) / ^B m",
             "Wrap long text / edit the text / grid or text",
+        ),
+        (
+            "ARCHIVES",
+            "zip jar whl tar.gz tar.xz 7z .gz: a tree, read-only",
+        ),
+        (
+            "Enter / h l / c E / / n N",
+            "Open a read-only copy, fold / up, in / all / find",
         ),
         ("HEX", "Files that aren't text open read-only as hex"),
         (

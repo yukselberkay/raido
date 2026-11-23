@@ -1,4 +1,5 @@
 use crate::{
+    archive::ArchiveView,
     clipboard::Clipboard,
     config::{self, Config, Theme},
     copymode,
@@ -46,6 +47,8 @@ pub enum Pane {
     Sheet(Box<SheetView>),
     /// A file that isn't text, read-only, as hex.
     Hex(Box<HexView>),
+    /// An archive's files as a tree (zip, tar, 7z…), read-only.
+    Archive(Box<ArchiveView>),
 }
 
 impl Pane {
@@ -64,6 +67,7 @@ impl Pane {
         match self {
             Pane::Sheet(view) if view.buffer.is_none() => Some(&view.path),
             Pane::Hex(view) => Some(&view.path),
+            Pane::Archive(view) => Some(&view.path),
             _ => None,
         }
     }
@@ -73,6 +77,7 @@ impl Pane {
         match self {
             Pane::Sheet(view) if view.buffer.is_none() => Some(&mut view.peeked),
             Pane::Hex(view) => Some(&mut view.peeked),
+            Pane::Archive(view) => Some(&mut view.peeked),
             _ => None,
         }
     }
@@ -81,7 +86,7 @@ impl Pane {
     fn document(&self) -> bool {
         matches!(
             self,
-            Pane::Editor(_) | Pane::Preview(_) | Pane::Sheet(_) | Pane::Hex(_)
+            Pane::Editor(_) | Pane::Preview(_) | Pane::Sheet(_) | Pane::Hex(_) | Pane::Archive(_)
         )
     }
 }
@@ -951,6 +956,7 @@ impl App {
     fn open_from_terminal(&mut self, path: &Path) -> Result<String> {
         if crate::sheet::is_spreadsheet(path)
             || crate::sheet::is_database(path)
+            || crate::archive::format(path).is_some()
             || crate::hex::is_binary(path)
         {
             self.open(path)?;
@@ -1184,6 +1190,7 @@ impl App {
                     let peeked = match p {
                         Pane::Sheet(view) => view.peeked,
                         Pane::Hex(view) => view.peeked,
+                        Pane::Archive(view) => view.peeked,
                         _ => false,
                     };
                     return peeked && self.tiles.contains(pane);
@@ -1224,6 +1231,15 @@ impl App {
                 how,
                 "[ ] sheets · / find · y copy",
                 |path, peek| Pane::Sheet(Box::new(SheetView::open(path, peek, None))),
+            );
+        }
+        // Archives as a tree of their files, read by Raido itself.
+        if crate::archive::format(&path).is_some() {
+            return self.open_viewer(
+                &path,
+                how,
+                "Enter opens a file · / find · c E fold",
+                |path, peek| Pane::Archive(Box::new(ArchiveView::open(path, peek, None))),
             );
         }
         // Anything else that isn't text: as hex.
@@ -1635,6 +1651,10 @@ impl App {
                         path: relative(&view.path),
                         offset: view.cursor,
                     },
+                    Pane::Archive(view) => SavedPane::Archive {
+                        path: relative(&view.path),
+                        entry: view.entry().map(|e| e.path.clone()),
+                    },
                     Pane::Sheet(view) => {
                         let (row, col) = view.selected().unwrap_or_default();
                         match view.buffer {
@@ -1757,55 +1777,59 @@ impl App {
         self.panes.clear();
         let mut problems = Vec::new();
         for (id, pane) in saved.panes {
-            let pane = match pane {
-                SavedPane::Editor { buffer } => Pane::Editor(buffer.min(last)),
-                SavedPane::Preview { buffer, scroll } => {
-                    let mut preview = Preview::new(buffer.min(last));
-                    preview.scroll = scroll;
-                    preview.synced = Some(self.buffers[buffer.min(last)].row);
-                    Pane::Preview(preview)
-                }
-                SavedPane::Ai => Pane::Ai(None),
-                SavedPane::Changes => Pane::Changes(Box::default()),
-                SavedPane::Hex { path, offset } => {
-                    Pane::Hex(Box::new(HexView::open(self.root.join(path), false, offset)))
-                }
-                SavedPane::Table { buffer, row, col } => {
-                    let id = buffer.min(last);
-                    let mut view = SheetView::from_buffer(&self.buffers[id], id);
-                    view.go(Some(row), Some(col));
-                    Pane::Sheet(Box::new(view))
-                }
-                SavedPane::Sheet {
-                    path,
-                    sheet,
-                    row,
-                    col,
-                } => Pane::Sheet(Box::new(SheetView::open(
-                    self.root.join(path),
-                    false,
-                    Some((sheet, row, col)),
-                ))),
-                SavedPane::Git { only } => {
-                    let mut view = GitView::new(self.root.clone());
-                    if only.is_some() {
-                        view.only = only;
-                        view.refresh();
+            let pane =
+                match pane {
+                    SavedPane::Editor { buffer } => Pane::Editor(buffer.min(last)),
+                    SavedPane::Preview { buffer, scroll } => {
+                        let mut preview = Preview::new(buffer.min(last));
+                        preview.scroll = scroll;
+                        preview.synced = Some(self.buffers[buffer.min(last)].row);
+                        Pane::Preview(preview)
                     }
-                    Pane::Git(Box::new(view))
-                }
-                SavedPane::Terminal {
-                    launch,
-                    cwd,
-                    transcript,
-                } => match self.restore_terminal(launch, cwd, &transcript) {
-                    Ok(terminal) => Pane::Terminal(Box::new(terminal)),
-                    Err(error) => {
-                        problems.push(format!("{error:#}"));
-                        Pane::Ai(None)
+                    SavedPane::Ai => Pane::Ai(None),
+                    SavedPane::Changes => Pane::Changes(Box::default()),
+                    SavedPane::Archive { path, entry } => Pane::Archive(Box::new(
+                        ArchiveView::open(self.root.join(path), false, entry),
+                    )),
+                    SavedPane::Hex { path, offset } => {
+                        Pane::Hex(Box::new(HexView::open(self.root.join(path), false, offset)))
                     }
-                },
-            };
+                    SavedPane::Table { buffer, row, col } => {
+                        let id = buffer.min(last);
+                        let mut view = SheetView::from_buffer(&self.buffers[id], id);
+                        view.go(Some(row), Some(col));
+                        Pane::Sheet(Box::new(view))
+                    }
+                    SavedPane::Sheet {
+                        path,
+                        sheet,
+                        row,
+                        col,
+                    } => Pane::Sheet(Box::new(SheetView::open(
+                        self.root.join(path),
+                        false,
+                        Some((sheet, row, col)),
+                    ))),
+                    SavedPane::Git { only } => {
+                        let mut view = GitView::new(self.root.clone());
+                        if only.is_some() {
+                            view.only = only;
+                            view.refresh();
+                        }
+                        Pane::Git(Box::new(view))
+                    }
+                    SavedPane::Terminal {
+                        launch,
+                        cwd,
+                        transcript,
+                    } => match self.restore_terminal(launch, cwd, &transcript) {
+                        Ok(terminal) => Pane::Terminal(Box::new(terminal)),
+                        Err(error) => {
+                            problems.push(format!("{error:#}"));
+                            Pane::Ai(None)
+                        }
+                    },
+                };
             self.panes.insert(id, pane);
         }
         self.tiles = saved.tiles;
@@ -1902,6 +1926,9 @@ impl App {
                 bail!("Spreadsheets and databases are read-only in Raido")
             }
             Some(Pane::Hex(_)) => bail!("Raido shows files that aren't text read-only"),
+            Some(Pane::Archive(_)) => {
+                bail!("Archives are read-only in Raido · Enter opens a file in it")
+            }
             Some(Pane::Sheet(view)) => view.buffer,
             _ => None,
         };
@@ -2028,8 +2055,20 @@ impl App {
             self.redraw |= search.poll();
         }
         let mut finished = None;
+        let mut copies = Vec::new();
         for (id, pane) in self.panes.iter_mut() {
             match pane {
+                Pane::Archive(view) => {
+                    self.redraw |= view.poll();
+                    if let Some(done) = view.poll_copy() {
+                        let name = view
+                            .path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        copies.push((*id, name, done));
+                    }
+                }
                 Pane::Terminal(terminal) => {
                     self.redraw |= terminal.poll();
                     if terminal.finished() {
@@ -2071,6 +2110,33 @@ impl App {
                 self.redraw |= self
                     .changes
                     .explain_when_quiet(&self.config.review_ai, !busy.is_empty());
+            }
+        }
+        // A file copied out of an archive opens beside it, as any file does.
+        for (pane, archive, done) in copies {
+            self.redraw = true;
+            match done {
+                Ok(copy) => {
+                    if self.panes.contains_key(&pane) && self.tiles.contains(pane) {
+                        self.focused = pane;
+                        self.sidebar_focus = false;
+                    }
+                    match self.open_file(&copy, Open::Pane) {
+                        Ok(()) => {
+                            let name = copy
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_default();
+                            self.notice(format!(
+                                "Opened {} from {}: a read-only copy",
+                                workspace::printable(&name),
+                                workspace::printable(&archive)
+                            ));
+                        }
+                        Err(error) => self.fail(format!("Can't open it: {error:#}")),
+                    }
+                }
+                Err(error) => self.fail(format!("Can't open it: {error}")),
             }
         }
         if let Some((id, title)) = finished {
@@ -2325,6 +2391,10 @@ impl App {
                     view.reload();
                     self.redraw = true;
                 }
+                Pane::Archive(view) if view.changed_on_disk() => {
+                    view.reload();
+                    self.redraw = true;
+                }
                 _ => {}
             }
         }
@@ -2556,6 +2626,13 @@ impl App {
                     match self.panes.get_mut(&id) {
                         Some(Pane::Sheet(view)) => view.click(at.0, at.1),
                         Some(Pane::Hex(view)) => view.click(at.0, at.1),
+                        Some(Pane::Archive(view)) => {
+                            if view.click(at.1) {
+                                if let Err(error) = view.copy_out() {
+                                    self.fail(error);
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -2668,6 +2745,7 @@ impl App {
             }
             Some(Pane::Sheet(view)) => view.scroll(step as i64),
             Some(Pane::Hex(view)) => view.scroll(step as i64),
+            Some(Pane::Archive(view)) => view.scroll(step),
             _ => {}
         }
         Ok(())
@@ -3032,6 +3110,7 @@ impl App {
             Some(Pane::Changes(_)) => return self.changes_key(key),
             Some(Pane::Sheet(_)) => return self.sheet_key(key),
             Some(Pane::Hex(_)) => return self.hex_key(key),
+            Some(Pane::Archive(_)) => return self.archive_key(key),
             Some(Pane::Ai(Some(_))) => return self.model_choice_key(key),
             Some(Pane::Ai(None)) => {
                 let chosen = match key.code {
@@ -4054,6 +4133,13 @@ impl App {
             Some(Pane::Terminal(t)) => t.title.clone(),
             Some(Pane::Git(_)) => "Git".into(),
             Some(Pane::Changes(_)) => "Changes".into(),
+            Some(Pane::Archive(view)) => workspace::printable(
+                &view
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            ),
             Some(Pane::Hex(view)) => workspace::printable(
                 &view
                     .path
@@ -5537,6 +5623,98 @@ impl App {
         self.notice(note);
         Ok(())
     }
+    /// Keys in an archive: move (j k), open a folder or a file (l, Enter), close a
+    /// folder or go up (h), fold all (c E), find (/ n N), copy the path (y).
+    fn archive_key(&mut self, key: KeyEvent) -> Result<()> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(Pane::Archive(view)) = self.panes.get_mut(&self.focused) else {
+            return Ok(());
+        };
+        if let Some(typed) = view.typing.as_mut() {
+            match key.code {
+                KeyCode::Esc => view.typing = None,
+                KeyCode::Enter => {
+                    view.query = view.typing.take().unwrap_or_default();
+                    if !view.query.trim().is_empty() && !view.find(true) {
+                        let query = view.query.clone();
+                        self.fail(format!("No file or folder in the archive has {query}"));
+                    }
+                }
+                KeyCode::Backspace => {
+                    typed.pop();
+                }
+                KeyCode::Char('u') if ctrl => typed.clear(),
+                KeyCode::Char(c) if !ctrl => typed.push(c),
+                _ => {}
+            }
+            return Ok(());
+        }
+        let page = view.page.max(2) as isize;
+        let mut said: Option<(bool, String)> = None;
+        let mut open = false;
+        let mut copy = None;
+        match key.code {
+            KeyCode::Char('d') if ctrl => view.move_by(page / 2),
+            KeyCode::Char('u') if ctrl => view.move_by(-page / 2),
+            KeyCode::Char('f') if ctrl => view.move_by(page - 1),
+            KeyCode::Char('c') if ctrl => copy = view.entry().map(|e| e.path.clone()),
+            _ if ctrl => {}
+            KeyCode::Char('j') | KeyCode::Down => view.move_by(1),
+            KeyCode::Char('k') | KeyCode::Up => view.move_by(-1),
+            KeyCode::PageDown => view.move_by(page - 1),
+            KeyCode::PageUp => view.move_by(1 - page),
+            KeyCode::Char('g') | KeyCode::Home => view.selected = 0,
+            KeyCode::Char('G') | KeyCode::End => view.move_by(isize::MAX / 2),
+            KeyCode::Char('l') | KeyCode::Right => open = !view.fold(Some(true)),
+            KeyCode::Enter => open = !view.fold(None),
+            KeyCode::Char(' ') => {
+                view.fold(None);
+            }
+            KeyCode::Char('h') | KeyCode::Left => view.back(),
+            KeyCode::Char('c') => view.expand_all(false),
+            KeyCode::Char('E') => view.expand_all(true),
+            KeyCode::Char('/') => view.typing = Some(String::new()),
+            KeyCode::Char(c @ ('n' | 'N')) => {
+                if view.query.trim().is_empty() {
+                    said = Some((true, "Press / to find a file in the archive".into()));
+                } else if !view.find(c == 'n') {
+                    said = Some((
+                        true,
+                        format!("No file or folder in the archive has {}", view.query),
+                    ));
+                }
+            }
+            KeyCode::Char('y') => copy = view.entry().map(|e| e.path.clone()),
+            KeyCode::Char('r') => view.reload(),
+            KeyCode::Char(':') => self.input_start(InputKind::Command),
+            KeyCode::Char('q') => return self.close(false),
+            _ => {}
+        }
+        if open {
+            if let Some(Pane::Archive(view)) = self.panes.get_mut(&self.focused) {
+                said = Some(match view.copy_out() {
+                    Ok(()) => (
+                        false,
+                        format!(
+                            "Opening {}…",
+                            workspace::printable(view.entry().map_or("", |e| e.name()))
+                        ),
+                    ),
+                    Err(error) => (true, error),
+                });
+            }
+        }
+        if let Some(path) = copy {
+            self.clipboard.copy(path.clone(), false);
+            said = Some((false, format!("Copied {}", workspace::printable(&path))));
+        }
+        match said {
+            Some((true, text)) => self.fail(text),
+            Some((false, text)) => self.notice(text),
+            None => {}
+        }
+        Ok(())
+    }
     /// Keys in a hex dump: move by byte (h l) and row (j k), page, find text or
     /// hex bytes (/ n N), copy a row (y).
     fn hex_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -6459,6 +6637,7 @@ impl App {
                 match self.panes.get_mut(&self.focused) {
                     Some(Pane::Sheet(view)) => view.reload(),
                     Some(Pane::Hex(view)) => view.reload(),
+                    Some(Pane::Archive(view)) => view.reload(),
                     _ => {}
                 }
             }
@@ -11005,6 +11184,70 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         assert_eq!(app.buffers[id].line(0), "ağaç şişe");
         assert_eq!(app.buffers[id].encoding, windows_1254);
         assert!(app.command("encoding klingon").is_err());
+    }
+
+    #[test]
+    fn archives_open_as_a_tree_and_their_files_as_read_only_copies() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let zip = root.join("release.zip");
+        crate::archive::tests::zip_of(
+            &zip,
+            &[
+                ("app/README.md", "# App\n"),
+                ("app/src/main.rs", "fn main() {}\n"),
+            ],
+        );
+        let mut app = App::new(root.clone(), Some(zip.clone()), false).unwrap();
+        for _ in 0..300 {
+            app.tick();
+            if matches!(app.panes.get(&app.focused), Some(Pane::Archive(v)) if !v.loading()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let drawn = screen(&mut app, 120, 16).join("\n");
+        assert!(
+            drawn.contains("release.zip · archive · read-only"),
+            "{drawn}"
+        );
+        assert!(
+            drawn.contains("Zip archive · 2 files, 2 folders · 19 B"),
+            "{drawn}"
+        );
+        assert!(drawn.contains("▾ "), "{drawn}");
+        assert!(drawn.contains("main.rs"), "{drawn}");
+        assert!(drawn.contains(" ARCHIVE "), "{drawn}");
+        // Nothing to save in an archive.
+        press(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert!(
+            app.error && app.message.contains("read-only"),
+            "{}",
+            app.message
+        );
+        // / finds main.rs; Enter opens a read-only copy of it beside the archive.
+        for key in "/main".chars() {
+            press(&mut app, KeyCode::Char(key), KeyModifiers::NONE);
+        }
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        for _ in 0..300 {
+            app.tick();
+            if app.buffer_id().is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let id = app.buffer_id().expect("the copy opened in an editor");
+        assert_eq!(app.buffers[id].line(0), "fn main() {}");
+        assert!(
+            app.message.contains("from release.zip: a read-only copy"),
+            "{}",
+            app.message
+        );
+        assert!(app.panes.values().any(|p| matches!(p, Pane::Archive(_))));
+        let error = app.command("w").unwrap_err().to_string();
+        assert!(error.contains("read-only"), "{error}");
     }
 
     #[test]

@@ -13,26 +13,35 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+bzip2 = "0.6"
 calamine = "0.38"
 chardetng = "1"
 crossterm = "0.28"
 directories = "6"
 encoding_rs = "0.8"
+flate2 = "1"
+lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "xz", "optimization"] }
 portable-pty = "0.9"
 pulldown-cmark = { version = "0.13", default-features = false }
 ratatui = "0.29"
 ropey = "1.6"
 rusqlite = { version = "0.43", features = ["bundled"] }
+ruzstd = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sevenz-rust2 = { version = "0.25", default-features = false, features = ["bzip2", "deflate", "ppmd"] }
 similar = { version = "2", default-features = false }
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
+tar = "0.4"
 toml = "0.8"
 unicode-width = "0.2"
 vt100 = "0.15"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+# Their encoders, to make xz and 7z archives in tests; Raido itself only reads.
+lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "xz", "encoder"] }
+sevenz-rust2 = { version = "0.25", default-features = false, features = ["compress", "util"] }
 tempfile = "3"
 
 # vt100 0.15 computes `rows - scrollback_offset` when the scrollback offset exceeds

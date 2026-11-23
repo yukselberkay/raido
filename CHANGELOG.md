@@ -10,6 +10,15 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **Archives open as a tree of their files**, read by Raido itself, so no unzip,
+  tar or 7z is needed on any system: zip and what's built on it (`.jar`, `.whl`,
+  `.apk`, `.vsix`, `.docx`…), tar plain or compressed with gzip, bzip2, xz or
+  Zstandard (`.tar.gz`, `.tgz`, `.tar.xz`, `.crate`…), one compressed file (`.gz`,
+  `.bz2`, `.xz`, `.zst`) and 7z, each known by its first bytes. Enter on a file
+  opens a read-only copy of it as any file opens: text with its highlighting and
+  language server, a spreadsheet as a grid, an archive inside as another tree.
+  `/` finds a file by name, `c` and `E` fold everything. RAR still opens as hex.
+
 - **Text in other encodings opens as text.** UTF-16 files (Windows PowerShell
   writes them), Latin-1 and the other older encodings (Windows-1254 for Turkish,
   Windows-1251 for Cyrillic, Shift_JIS, GBK…), refused before, open in the editor
@@ -40,7 +49,7 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
   following your edits.
 
 - **Files that aren't text open as hex** instead of being refused: images, PDFs,
-  archives, executables, fonts. Above the bytes Raido says
+  executables, fonts. Above the bytes Raido says
   what the file is (`PNG image, 1200 × 800`, `ELF 64-bit executable, x86-64`,
   `Mach-O executable, ARM64`), and `/` finds text or bytes in hex (`ff d8 ff`).
   Only the part on screen is read, so any size opens at once.

@@ -40,6 +40,7 @@ That is what this workspace is for:
 - [Markdown preview](#markdown-preview)
 - [Nmap scan reports](#nmap-scan-reports)
 - [Spreadsheets, CSV and databases](#spreadsheets-csv-and-databases)
+- [Archives](#archives)
 - [Files that aren't text](#files-that-arent-text)
 - [Copy and paste](#copy-and-paste)
 - [Language servers](#language-servers-lsp)
@@ -432,6 +433,9 @@ the history graph appears after you make commits.
   laid out as Excel left them, long text wrapped, numbers in their own formats
   (`15%`, `1,234.50`, `€ 9.99`, dates); CSV and TSV files open the same way and stay
   editable as text.
+- **Archives** (zip, jar, whl, tar.gz, tar.xz, 7z, .gz…) open as a tree of their
+  files, read by Raido itself (no unzip or tar needed); a file in one opens as a
+  read-only copy.
 - **Files that aren't text** open read-only as hex, with what kind of file each is
   (`PNG image, 1200 × 800`, `Mach-O executable, ARM64`).
 - **Source highlighting:** bundled Rust, C, C++, Python, Go grammars, plus the
@@ -1601,11 +1605,50 @@ cell over the grid, to scroll and copy. Then come the sheets as tabs and the siz
 The mouse wheel scrolls and a click selects a cell. In a spreadsheet or database
 `Ctrl-s` only says it's read-only; in a CSV grid it saves the text.
 
+### Archives
+
+Archives open as a tree of their files, read-only, from the explorer, `Ctrl-p`, `:e`
+or `raido release.zip`. Raido reads them itself, in Rust: no `unzip`, `tar` or `7z`
+is needed, so they open the same on macOS, Linux and Windows. It knows an archive
+by its first bytes, whatever its name:
+
+- **Zip** and what's built on it: `.zip`, `.jar`, `.war`, `.whl`, `.apk`, `.vsix`,
+  `.nupkg`, `.epub`, `.docx`, `.pptx` (`.xlsx` and `.ods` open as spreadsheets).
+- **tar**, plain or compressed with gzip, bzip2, xz or Zstandard: `.tar`, `.tar.gz`,
+  `.tgz`, `.tar.bz2`, `.tar.xz`, `.tar.zst`, `.crate`.
+- **One compressed file**: `.gz`, `.bz2`, `.xz`, `.zst` (a log's `server.log.gz`).
+- **7z**.
+
+RAR isn't read (its only full decoder is proprietary C++): it opens as hex, named.
+
+Above the tree: the kind of archive, its files and folders, and their size (and
+packed size). Folders show how many files they hold; files their size and date. A
+small archive opens whole; a large one shows its top level (inside its only folder
+when it has one). Enter on a file copies it out, read-only, to a folder in your
+temporary directory and opens it as any file opens: text in an editor (with its
+highlighting and language server), a spreadsheet as a grid, an image as hex, an
+archive inside the archive as another tree. Saving that copy is refused. Copies
+older than a week are cleared away; paths that would lead outside the folder, and
+files that hold more than the archive says, are refused.
+
+| Key | Action |
+| --- | --- |
+| `j` `k` / arrows, PageUp/PageDown, `g` `G` | Move / page / top and end |
+| Enter, `l` or → | Open a file; Enter opens or closes a folder, `l` opens it |
+| `h` or ← | Close the folder, or go to the one it's in |
+| Space / `c` / `E` | Fold the folder / close all / open all |
+| `/` then Enter, `n` / `N` | Find a file by part of its name or path (case ignored unless you type a capital) |
+| `y` or `Ctrl-c` | Copy the selected path |
+| `r` or `:reload` | Read the archive again (it also does when the file changes) |
+| `q` | Close the pane |
+
+A click selects a row; a second click opens it.
+
 ### Files that aren't text
 
 Any other file the editor can't take as text in any encoding (zero bytes outside
 UTF-16, or many control characters) opens **read-only as hex** instead of being
-refused: images, PDFs, archives, executables, fonts. Above
+refused: images, PDFs, executables, fonts, RAR archives. Above
 the bytes Raido says what the file is, from its first bytes: `PNG image, 1200 ×
 800`, `PDF document, version 1.7`, `ELF 64-bit executable, x86-64`, `Mach-O
 executable, ARM64`, `Windows DLL, x86-64`, `Zip archive`, `SQLite database`,
