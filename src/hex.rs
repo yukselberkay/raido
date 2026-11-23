@@ -11,11 +11,11 @@ use std::{
 
 /// Bytes read at a time around what's on screen.
 const WINDOW: usize = 64 * 1024;
-/// Bytes looked at to tell text from binary, as Git does.
-const SNIFF: usize = 8000;
+/// Bytes looked at to tell text (in any encoding) from binary: all of most files.
+const SNIFF: usize = 1 << 20;
 
-/// Whether `path` is a file the editor can't take as text: a NUL byte, or bytes
-/// that aren't UTF-8, in its first 8000 bytes.
+/// Whether `path` is a file the editor can't take as text in any encoding: zero
+/// bytes (outside UTF-16), many control characters.
 pub fn is_binary(path: &Path) -> bool {
     let Ok(mut file) = File::open(path) else {
         return false;
@@ -23,7 +23,7 @@ pub fn is_binary(path: &Path) -> bool {
     if !file.metadata().is_ok_and(|m| m.is_file()) {
         return false;
     }
-    let mut head = Vec::with_capacity(SNIFF);
+    let mut head = Vec::new();
     if file
         .by_ref()
         .take(SNIFF as u64)
@@ -32,19 +32,7 @@ pub fn is_binary(path: &Path) -> bool {
     {
         return false;
     }
-    binary(&head)
-}
-
-/// Whether bytes are binary: a NUL, or not UTF-8 (a character cut off at the end
-/// doesn't count).
-fn binary(head: &[u8]) -> bool {
-    if head.contains(&0) {
-        return true;
-    }
-    match std::str::from_utf8(head) {
-        Ok(_) => false,
-        Err(error) => error.error_len().is_some(),
-    }
+    !crate::encoding::is_text(&head)
 }
 
 /// A file in a pane, as hex.
@@ -110,7 +98,7 @@ impl HexView {
                 return;
             }
         }
-        let head = self.bytes(0, SNIFF);
+        let head = self.bytes(0, 8000);
         self.what = describe(&head, self.len);
         self.cursor = self.cursor.min(self.len.saturating_sub(1));
     }
@@ -565,11 +553,6 @@ mod tests {
 
     #[test]
     fn binary_files_are_told_from_text_and_named() {
-        assert!(binary(b"abc\0def"));
-        assert!(binary(&[b'a', 0xe9, b'b']));
-        assert!(!binary("café".as_bytes()));
-        // A character cut off by the 8000-byte limit is still text.
-        assert!(!binary(&"é".as_bytes()[..1]));
         let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
         png.extend(1200u32.to_be_bytes());
         png.extend(800u32.to_be_bytes());

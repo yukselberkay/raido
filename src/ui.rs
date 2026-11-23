@@ -508,7 +508,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                             server.push_str(&format!("  ·  {errors}E {warnings}W"));
                         }
                         let detail = format!(
-                            " {language}{server}  ·  UTF-8 / {}     {}:{}  {}%",
+                            " {language}{server}  ·  {} / {}     {}:{}  {}%",
+                            buffer.encoding.name(buffer.bom),
                             match (buffer.crlf, buffer.eol_changed) {
                                 (false, false) => "LF",
                                 (false, true) => "CRLF→LF",
@@ -4441,6 +4442,10 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         ("COMMANDS", "Ctrl-b : also works inside terminals"),
         (":w [path] / :wa / :wq", "Save / save all / save and close"),
         (":e path / :reload", "Open or create / reload a clean file"),
+        (
+            ":encoding [utf-8] / :encoding! X",
+            "Show / save as UTF-8 / read again as X",
+        ),
         (":q / :qa / :qa!", "Close / quit / discard and quit"),
         (
             ":ai codex|claude|gemini|agy|opencode",

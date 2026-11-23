@@ -213,11 +213,17 @@ fn run(root: &Path, query: &str, cancel: &AtomicBool, sender: &Sender<(Vec<Hit>,
         let Ok(bytes) = fs::read(&full) else {
             continue;
         };
-        // Binary files have NUL bytes early on.
-        if bytes.iter().take(8_000).any(|b| *b == 0) {
-            continue;
-        }
-        let text = String::from_utf8_lossy(&bytes);
+        // UTF-8 as it is; other encodings (Latin-1, UTF-16…) as the editor reads
+        // them; binary files (NUL bytes early on, or no text in any encoding) not.
+        let text = match std::str::from_utf8(&bytes) {
+            Ok(text) if !bytes.iter().take(8_000).any(|b| *b == 0) => {
+                std::borrow::Cow::Borrowed(text)
+            }
+            _ => match crate::encoding::decode(&bytes) {
+                Some(decoded) => std::borrow::Cow::Owned(decoded.text),
+                None => continue,
+            },
+        };
         for (number, line) in text.lines().enumerate() {
             let Some(&(at, _)) = found(line).first() else {
                 continue;
@@ -298,5 +304,42 @@ mod tests {
         search.query.clear();
         search.start(root);
         assert!(!search.running && search.hits.is_empty());
+    }
+
+    #[test]
+    fn files_in_other_encodings_are_searched_as_text() {
+        use crate::encoding::{encode, Encoding};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("menu.txt"),
+            b"soup
+caf\xe9 cr\xe8me\n",
+        )
+        .unwrap();
+        let utf16 = encode("x\r\ncafé au lait\r\n", Encoding::Utf16Le, true).unwrap();
+        fs::write(root.join("order.log"), utf16).unwrap();
+        let mut search = Search::new("café".into());
+        search.start(root);
+        finish(&mut search);
+        let mut shown: Vec<(String, Option<usize>, String)> = search
+            .hits
+            .iter()
+            .map(|h| {
+                (
+                    h.path.to_string_lossy().into_owned(),
+                    h.line,
+                    h.text.clone(),
+                )
+            })
+            .collect();
+        shown.sort();
+        assert_eq!(
+            shown,
+            vec![
+                ("menu.txt".into(), Some(1), "café crème".into()),
+                ("order.log".into(), Some(1), "café au lait".into()),
+            ]
+        );
     }
 }

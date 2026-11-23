@@ -1,4 +1,5 @@
-use anyhow::{bail, Context, Result};
+use crate::encoding::Encoding;
+use anyhow::{anyhow, bail, Context, Result};
 use ropey::Rope;
 use std::{
     collections::hash_map::DefaultHasher,
@@ -32,6 +33,10 @@ pub struct Buffer {
     /// The file's line endings were changed to `line_endings`'s when it opened; it's
     /// saved that way.
     pub eol_changed: bool,
+    /// How the file's text is written (UTF-8, UTF-16, Windows-1252…), and whether
+    /// it starts with a byte order mark: it's saved the same way.
+    pub encoding: Encoding,
+    pub bom: bool,
     pub search: String,
     /// Search options: `/` matches case exactly; the find bar ignores case unless the
     /// query has a capital letter, and can match whole words only.
@@ -82,6 +87,8 @@ impl Buffer {
             dirty: false,
             crlf: false,
             eol_changed: false,
+            encoding: Encoding::Utf8,
+            bom: false,
             search: String::new(),
             search_case: true,
             search_word: false,
@@ -111,11 +118,11 @@ impl Buffer {
             if bytes.len() as u64 > MAX_FILE_SIZE {
                 bail!("File grew beyond the 16 MiB limit");
             }
-            if bytes.contains(&0) {
-                bail!("Binary files are not editable");
-            }
-            let source =
-                std::str::from_utf8(&bytes).context("Raido currently edits UTF-8 files only")?;
+            let decoded = crate::encoding::decode(&bytes)
+                .ok_or_else(|| anyhow!("Binary files are not editable"))?;
+            let source = decoded.text.as_str();
+            buffer.encoding = decoded.encoding;
+            buffer.bom = decoded.bom;
             buffer.crlf = mostly_crlf(source);
             buffer.text = Rope::from_str(source);
             buffer.saved = buffer.text.clone();
@@ -644,8 +651,31 @@ impl Buffer {
         Ok(())
     }
 
+    /// Read the file again as `encoding` (its encoding was guessed wrong), unsaved
+    /// edits set aside as one undo step: `:encoding! NAME`.
+    pub fn reread_as(&mut self, encoding: Encoding) -> Result<()> {
+        let path = self.path.clone().context("Unnamed buffer")?;
+        let bytes = fs::read(&path)?;
+        let decoded = crate::encoding::decode_as(&bytes, encoding)
+            .with_context(|| format!("It isn't {} text", encoding.name(false)))?;
+        let mut disk = Buffer::empty();
+        disk.text = Rope::from_str(&decoded.text);
+        disk.saved = disk.text.clone();
+        disk.disk_hash = Some(hash(&bytes));
+        disk.disk_stamp = fs::metadata(&path)
+            .ok()
+            .and_then(|m| m.modified().ok().map(|time| (time, m.len())));
+        disk.encoding = decoded.encoding;
+        disk.bom = decoded.bom;
+        self.crlf = mostly_crlf(&decoded.text);
+        self.load_disk(disk);
+        Ok(())
+    }
+
     /// `disk` (the file opened again) is now what the buffer was last read from.
     fn adopt(&mut self, disk: &Buffer) {
+        self.encoding = disk.encoding;
+        self.bom = disk.bom;
         self.saved = disk.text.clone();
         self.disk_hash = disk.disk_hash;
         self.disk_stamp = disk.disk_stamp;
@@ -685,6 +715,15 @@ impl Buffer {
         } else if same_path && self.disk_hash.is_some() {
             bail!("File was deleted on disk; save to a new name");
         }
+        // The text as the file's encoding writes it; a character it can't write
+        // stops the save rather than turning into something else.
+        let bytes = crate::encoding::encode(&self.text.to_string(), self.encoding, self.bom)
+            .map_err(|c| {
+                anyhow!(
+                    "Not saved: {c} can't be written in {} · :encoding utf-8 saves it as UTF-8",
+                    self.encoding.name(self.bom)
+                )
+            })?;
         let parent = path.parent().context("Missing parent directory")?;
         let serial = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
         let temp = parent.join(format!(".raido-{}-{serial}.tmp", std::process::id()));
@@ -700,9 +739,7 @@ impl Buffer {
             if path.exists() {
                 file.set_permissions(fs::metadata(&path)?.permissions())?;
             }
-            for chunk in self.text.chunks() {
-                file.write_all(chunk.as_bytes())?;
-            }
+            file.write_all(&bytes)?;
             file.sync_all()?;
             // Recheck after writing the temporary file to narrow the race window.
             let now = if path.exists() {
@@ -723,7 +760,7 @@ impl Buffer {
             let _ = fs::remove_file(&temp);
         }
         result?;
-        self.disk_hash = Some(hash(self.text.to_string().as_bytes()));
+        self.disk_hash = Some(hash(&bytes));
         self.saved = self.text.clone();
         self.path = Some(path);
         self.disk_stamp = self

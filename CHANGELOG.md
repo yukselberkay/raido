@@ -10,6 +10,15 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **Text in other encodings opens as text.** UTF-16 files (Windows PowerShell
+  writes them), Latin-1 and the other older encodings (Windows-1254 for Turkish,
+  Windows-1251 for Cyrillic, Shift_JIS, GBK…), refused before, open in the editor
+  and save back as they were written, byte for byte; the status bar names the
+  encoding. A character the encoding can't hold stops the save instead of turning
+  into something else. `:encoding utf-8` converts a file, and `:encoding! NAME`
+  reads it again when the guess was wrong. Project search and the Git marks in the
+  gutter read these files too.
+
 - **Spreadsheets, read-only.** `.xlsx`, `.xlsm`, `.xlsb`, `.xls` and `.ods` files,
   refused as binary before, open as a grid laid out as Excel left them: each
   column's width, frozen columns and rows, merged cells, and the sheet and cell the
@@ -31,7 +40,7 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
   following your edits.
 
 - **Files that aren't text open as hex** instead of being refused: images, PDFs,
-  archives, executables, files in another encoding. Above the bytes Raido says
+  archives, executables, fonts. Above the bytes Raido says
   what the file is (`PNG image, 1200 × 800`, `ELF 64-bit executable, x86-64`,
   `Mach-O executable, ARM64`), and `/` finds text or bytes in hex (`ff d8 ff`).
   Only the part on screen is read, so any size opens at once.

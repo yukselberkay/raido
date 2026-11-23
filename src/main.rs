@@ -5,6 +5,7 @@ mod config;
 mod conversations;
 mod copymode;
 mod editor;
+mod encoding;
 mod finder;
 mod fonts;
 mod gitgraph;

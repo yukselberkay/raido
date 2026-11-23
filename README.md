@@ -1603,9 +1603,9 @@ The mouse wheel scrolls and a click selects a cell. In a spreadsheet or database
 
 ### Files that aren't text
 
-Any other file the editor can't take as text (a NUL byte, or bytes that aren't
-UTF-8, in its first 8000) opens **read-only as hex** instead of being refused:
-images, PDFs, archives, executables, fonts, files in another text encoding. Above
+Any other file the editor can't take as text in any encoding (zero bytes outside
+UTF-16, or many control characters) opens **read-only as hex** instead of being
+refused: images, PDFs, archives, executables, fonts. Above
 the bytes Raido says what the file is, from its first bytes: `PNG image, 1200 ×
 800`, `PDF document, version 1.7`, `ELF 64-bit executable, x86-64`, `Mach-O
 executable, ARM64`, `Windows DLL, x86-64`, `Zip archive`, `SQLite database`,
@@ -1628,6 +1628,28 @@ once.
 | `y` or `Ctrl-c` | Copy the row's bytes in hex |
 | `r` or `:reload` | Read the file again (it also does when the file changes) |
 | `q` | Close the pane |
+
+### Text in other encodings
+
+Files that aren't UTF-8 open as text all the same, to edit and save as they were
+written; the status bar names the encoding where it says `UTF-8 / LF` for others.
+
+- **UTF-16**, with a byte order mark (Windows PowerShell's `>` and many Windows tools
+  write it) or without one, told by its zero bytes.
+- **Older encodings**, guessed from the text as browsers guess them: Windows-1252
+  and Latin-1 (Western), Windows-1254 (Turkish), Windows-1251 and KOI8-R
+  (Cyrillic), Windows-1250, -1253, -1255, -1256, -1257, Shift_JIS, EUC-JP, GBK,
+  Big5, EUC-KR and the rest of the ISO-8859 family. Your locale's country (the `TR`
+  in `tr_TR.UTF-8`) helps the guess.
+- **UTF-8 with a byte order mark** keeps it.
+
+Saving writes the same encoding, byte for byte. A character the encoding has no
+bytes for (typing `✓` into a Latin-1 file) stops the save and says so, rather than
+writing something else. `:encoding` names the file's encoding, `:encoding utf-8`
+saves it as UTF-8 from then on (any encoding by name: `latin1`, `windows-1254`,
+`utf-16le`, `utf-8-bom`), and `:encoding! windows-1254` reads the file again as
+that encoding when the guess was wrong (`u` brings back unsaved edits). Project
+search, and the Git marks in the gutter, read these files the same way.
 
 ### Prompt and buffer behavior
 
@@ -1735,6 +1757,8 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 :e path                   Open a file, or a new buffer if absent
 :reload                   Reload a clean file
 :e! / :reload!            Load the file as it is on disk; `u` brings your unsaved edits back
+:encoding [name]          The file's encoding / save it as name from now on (utf-8, latin1…)
+:encoding! name           Read the file again as name (its encoding was guessed wrong)
 :new                      New scratch editor pane
 :split / :vsplit          Stack / side-by-side split
 :term                     New shell (in it, `raido FILE` opens FILE here)
@@ -2135,7 +2159,7 @@ plugins are intentionally not part of v0.1.
 | New file is absent from the sidebar | Save it first, then focus the explorer and press `r`. |
 | `codex` or `claude` cannot launch | Install that CLI separately and verify `command -v codex` or `command -v claude` in the shell that launches Raido. |
 | File changed on disk | With no unsaved edits, the pane shows the new text. With unsaved edits, changes on other lines are merged into yours (`u` undoes the merge). Where both changed the same lines, yours are kept and saving refuses to overwrite: `:e!` loads the file (`u` brings yours back), `:w!` saves yours over it, or `:w recovery-name` keeps both. |
-| Read-only, binary or non-UTF-8 file | Raido respects read-only files and only edits UTF-8 text. Convert a copy externally if needed. |
+| Read-only, binary or non-UTF-8 file | Raido respects read-only files. Text in other encodings (UTF-16, Latin-1, Windows-1254…) opens as text and saves as it was; the status bar names the encoding, and `:encoding! NAME` reads it again if the guess was wrong. Files that aren't text open read-only as hex. |
 | Custom theme not found | Use a simple name with letters, digits, hyphens or underscores, and place its TOML in the user themes directory. |
 | Code turns faint near language-server problems (older Raido in macOS Terminal.app) | Update Raido. Terminal.app doesn't know the colored-underline code and read part of it as "faint"; Raido now draws plain underlines there. |
 
@@ -2191,8 +2215,9 @@ another way in:
   Alacritty, recent Windows Terminal) never show half a frame; the others, macOS
   Terminal among them, ignore it.
 - PTY I/O runs off the UI thread. Git refreshes on a worker with process timeouts.
-- UTF-8 text only; 16 MiB open-file limit. Files that aren't UTF-8 text open
-  read-only as hex; spreadsheets and databases as a grid.
+- 16 MiB open-file limit. Text in other encodings is edited and saved in its own;
+  files that aren't text open read-only as hex, spreadsheets and databases as a
+  grid.
 - Atomic same-directory saves preserve Unix permission bits. The original file
   content is checked before replacement, including a second check after writing
   the temporary file. This is conflict detection, not a filesystem transaction

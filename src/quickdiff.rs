@@ -141,7 +141,7 @@ fn index_version(path: &Path) -> Option<String> {
         &["show", &format!(":./{name}")],
         crate::editor::MAX_FILE_SIZE as usize,
     )?;
-    String::from_utf8(bytes).ok()
+    crate::encoding::decode(&bytes).map(|decoded| decoded.text)
 }
 
 #[cfg(test)]

@@ -6736,6 +6736,45 @@ impl App {
                     "Minimap off · :minimap brings it back · minimap = false in config.toml keeps it off"
                 });
             }
+            // How the file is written: :encoding says, :encoding NAME saves it as
+            // NAME from now on, :encoding! NAME reads it again as NAME.
+            "encoding" | "enc" | "encoding!" | "enc!" => {
+                let id = self.buffer_id().context("Focus an editor")?;
+                let b = &self.buffers[id];
+                let current = b.encoding.name(b.bom);
+                if arg.is_empty() {
+                    self.notice(format!(
+                        "{} is {current} · :encoding utf-8 saves it as UTF-8 · :encoding! NAME reads it again as NAME",
+                        b.name()
+                    ));
+                    return Ok(());
+                }
+                let (encoding, bom) = crate::encoding::by_name(arg).with_context(|| {
+                    format!("Unknown encoding {arg} · try utf-8, utf-16le, latin1, windows-1254, shift_jis")
+                })?;
+                let name = encoding.name(bom);
+                if verb.ends_with('!') {
+                    let unsaved = self.buffers[id].dirty;
+                    self.buffers[id].reread_as(encoding)?;
+                    self.notice(if unsaved {
+                        format!("Read again as {name} · u brings your edits back")
+                    } else {
+                        format!("Read again as {name}")
+                    });
+                    return Ok(());
+                }
+                let b = &mut self.buffers[id];
+                if let Err(c) = crate::encoding::encode(&b.text.to_string(), encoding, bom) {
+                    bail!("{c} can't be written in {name}");
+                }
+                if (b.encoding, b.bom) != (encoding, bom) {
+                    b.encoding = encoding;
+                    b.bom = bom;
+                    b.dirty = true;
+                    b.revision += 1;
+                }
+                self.notice(format!("Saves as {name} from {current} · :w writes it"));
+            }
             "set" => match arg {
                 "rnu" | "relativenumber" => self.config.relative_numbers = true,
                 "nornu" | "norelativenumber" => self.config.relative_numbers = false,
@@ -10879,6 +10918,93 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         };
         assert!(view.database);
         assert_eq!(view.sheets[0].name, "t");
+    }
+
+    #[test]
+    fn text_in_other_encodings_is_edited_and_saved_as_it_was_written() {
+        use crate::encoding::{by_name, encode, Encoding};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        // Latin-1 (Windows-1252): it opens as text, not as hex.
+        let latin = root.join("menu.txt");
+        std::fs::write(
+            &latin,
+            b"caf\xe9 cr\xe8me br\xfbl\xe9e\nna\xefve fa\xe7ade\n",
+        )
+        .unwrap();
+        let mut app = App::new(root.clone(), Some(latin.clone()), false).unwrap();
+        let id = app.buffer_id().expect("an editor");
+        assert_eq!(app.buffers[id].line(0), "café crème brûlée");
+        let drawn = screen(&mut app, 120, 20).join("\n");
+        assert!(drawn.contains("windows-1252 (Western) / LF"), "{drawn}");
+        // An edit is saved in the same encoding, byte for byte.
+        press(&mut app, KeyCode::Char('A'), KeyModifiers::SHIFT);
+        for c in " à la carte".chars() {
+            press(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        app.command("w").unwrap();
+        assert_eq!(
+            std::fs::read(&latin).unwrap(),
+            b"caf\xe9 cr\xe8me br\xfbl\xe9e \xe0 la carte\nna\xefve fa\xe7ade\n"
+        );
+        // A character it can't hold stops the save, and says what to do.
+        press(&mut app, KeyCode::Char('A'), KeyModifiers::SHIFT);
+        for c in " ✓".chars() {
+            press(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        let error = app.command("w").unwrap_err().to_string();
+        assert!(
+            error.contains("✓ can't be written in windows-1252"),
+            "{error}"
+        );
+        // :encoding utf-8 converts it.
+        app.command("encoding utf-8").unwrap();
+        app.command("w").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&latin).unwrap(),
+            "café crème brûlée à la carte ✓\nnaïve façade\n"
+        );
+        // UTF-16 with a byte order mark, as Windows PowerShell writes it.
+        let utf16 = root.join("out.log");
+        std::fs::write(
+            &utf16,
+            encode("Name\r\nGrüße\r\n", Encoding::Utf16Le, true).unwrap(),
+        )
+        .unwrap();
+        app.open(&utf16).unwrap();
+        let id = app.buffer_id().expect("an editor");
+        assert_eq!(app.buffers[id].line(1), "Grüße");
+        app.command("encoding").unwrap();
+        assert!(
+            app.message.contains("out.log is UTF-16 LE"),
+            "{}",
+            app.message
+        );
+        press(&mut app, KeyCode::Char('A'), KeyModifiers::SHIFT);
+        press(&mut app, KeyCode::Char('!'), KeyModifiers::SHIFT);
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        app.command("w").unwrap();
+        // (Its CRLF line endings become LF, as line_endings says for every file.)
+        assert_eq!(
+            std::fs::read(&utf16).unwrap(),
+            encode("Name!\nGrüße\n", Encoding::Utf16Le, true).unwrap()
+        );
+        // Guessed wrong? :encoding! reads it again as you say.
+        let turkish = root.join("notlar.txt");
+        let windows_1254 = by_name("windows-1254").unwrap().0;
+        std::fs::write(
+            &turkish,
+            encode("ağaç şişe\n", windows_1254, false).unwrap(),
+        )
+        .unwrap();
+        app.open(&turkish).unwrap();
+        app.command("encoding! windows-1254").unwrap();
+        let id = app.buffer_id().expect("an editor");
+        assert_eq!(app.buffers[id].line(0), "ağaç şişe");
+        assert_eq!(app.buffers[id].encoding, windows_1254);
+        assert!(app.command("encoding klingon").is_err());
     }
 
     #[test]
