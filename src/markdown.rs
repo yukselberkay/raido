@@ -240,9 +240,27 @@ struct Renderer<'a> {
     html: Option<String>,
     table: Option<Table>,
     gap: bool,
+    /// Code lines wider than the view continue on the next line instead of
+    /// being cut, for a view that can't scroll sideways (the docs pane).
+    wrap_code: bool,
 }
 
 pub fn render(source: &str, width: usize, theme: &Theme, syntax: &Syntax) -> Document {
+    render_with(source, width, theme, syntax, false)
+}
+
+/// [`render`], with code lines wrapped at the width instead of cut.
+pub fn render_wrapped(source: &str, width: usize, theme: &Theme, syntax: &Syntax) -> Document {
+    render_with(source, width, theme, syntax, true)
+}
+
+fn render_with(
+    source: &str,
+    width: usize,
+    theme: &Theme,
+    syntax: &Syntax,
+    wrap_code: bool,
+) -> Document {
     let mut options = Options::ENABLE_TABLES
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_STRIKETHROUGH
@@ -272,6 +290,7 @@ pub fn render(source: &str, width: usize, theme: &Theme, syntax: &Syntax) -> Doc
         html: None,
         table: None,
         gap: false,
+        wrap_code,
     };
     for (event, range) in Parser::new_ext(source, options).into_offset_iter() {
         let block = matches!(
@@ -734,7 +753,17 @@ impl Renderer<'_> {
                     base,
                 )),
             }
-            self.emit(pad(truncate(spans, width.saturating_sub(1)), width, base));
+            if self.wrap_code {
+                // After the two columns of indent, at most to the margin.
+                let code = spans.split_off(1);
+                for part in chop(code, width.saturating_sub(3)) {
+                    let mut line = vec![Span::styled("  ", base)];
+                    line.extend(part);
+                    self.emit(pad(line, width, base));
+                }
+            } else {
+                self.emit(pad(truncate(spans, width.saturating_sub(1)), width, base));
+            }
         }
         self.emit(pad(Vec::new(), width, base));
     }
@@ -831,6 +860,58 @@ pub(crate) fn truncate(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'sta
         out.push(Span::styled(text, span.style));
     }
     out
+}
+
+/// Spans cut into lines of `width` columns, keeping code's indentation: a line
+/// breaks after a space or a comma, bracket or semicolon in its second half when
+/// it has one, else at the width.
+pub(crate) fn chop(spans: Vec<Span<'static>>, width: usize) -> Vec<Vec<Span<'static>>> {
+    let width = width.max(1);
+    let chars: Vec<(char, Style)> = spans
+        .iter()
+        .flat_map(|span| span.content.chars().map(move |c| (c, span.style)))
+        .collect();
+    let mut lines = Vec::new();
+    let mut start = 0;
+    while start < chars.len() {
+        if !lines.is_empty() {
+            // A continued line doesn't start with the space it broke at.
+            while chars.get(start).is_some_and(|(c, _)| *c == ' ') {
+                start += 1;
+            }
+        }
+        let (mut end, mut used) = (start, 0);
+        while let Some((c, _)) = chars.get(end) {
+            let w = c.width().unwrap_or(0);
+            if used + w > width && end > start {
+                break;
+            }
+            used += w;
+            end += 1;
+        }
+        if end < chars.len() {
+            let half = start + (end - start) / 2;
+            if let Some(at) = (half..end)
+                .rev()
+                .find(|&i| matches!(chars[i].0, ' ' | ',' | ';' | '(' | '[' | '{'))
+            {
+                end = at + 1;
+            }
+        }
+        let mut line: Vec<Span<'static>> = Vec::new();
+        for &(c, style) in &chars[start..end] {
+            match line.last_mut() {
+                Some(span) if span.style == style => span.content.to_mut().push(c),
+                _ => line.push(Span::styled(c.to_string(), style)),
+            }
+        }
+        lines.push(line);
+        start = end;
+    }
+    if lines.is_empty() {
+        lines.push(Vec::new());
+    }
+    lines
 }
 
 /// Greedy word wrap across styled spans. Spaces and tabs separate words; `\n`
@@ -1051,6 +1132,28 @@ mod tests {
         assert!(text.iter().all(|l| !l.contains("front matter")), "{text:?}");
     }
 
+    #[test]
+    fn code_wraps_at_a_space_or_comma_and_keeps_its_indent() {
+        let text = |lines: Vec<Vec<Span<'static>>>| -> Vec<String> {
+            lines
+                .iter()
+                .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+                .collect()
+        };
+        let code = vec![Span::raw("    words = [\"apple\", \"banana\", \"cherry\"]")];
+        assert_eq!(
+            text(chop(code, 24)),
+            // (The space it broke at stays at the end, unseen.)
+            ["    words = [\"apple\", ", "\"banana\", \"cherry\"]"]
+        );
+        // Nowhere to break: at the width.
+        assert_eq!(
+            text(chop(vec![Span::raw("abcdefghij")], 4)),
+            ["abcd", "efgh", "ij"]
+        );
+        assert_eq!(text(chop(vec![Span::raw("short")], 40)), ["short"]);
+        assert_eq!(text(chop(Vec::new(), 40)), [""]);
+    }
     #[test]
     fn markdown_extensions_are_detected() {
         assert!(is_markdown(Path::new("README.md")));

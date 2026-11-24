@@ -1117,6 +1117,23 @@ fn theme_picker(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+/// The longest of `choices` that fits in `room` columns, else the last one cut
+/// with an ellipsis: a narrow pane says less instead of losing the end.
+fn fitting(choices: &[String], room: usize) -> String {
+    if let Some(fits) = choices.iter().find(|c| c.width() <= room) {
+        return fits.clone();
+    }
+    let mut cut = String::new();
+    for c in choices.last().map_or("", String::as_str).chars() {
+        if cut.width() + c.width().unwrap_or(0) + 1 > room {
+            cut.push('…');
+            break;
+        }
+        cut.push(c);
+    }
+    cut
+}
+
 /// The interactive documentation: the answers rendered as Markdown, what the agent
 /// is doing, and the question being typed.
 fn docs_view(
@@ -1170,20 +1187,23 @@ fn docs_view(
                     "" => "thinking",
                     doing => doing,
                 };
-                (
-                    format!(
-                        " {} {by} · {doing} · {}s · Esc stops",
-                        asking.spinner(),
-                        asking.started.elapsed().as_secs()
-                    ),
-                    &theme.accent,
-                )
+                let (spin, secs) = (asking.spinner(), asking.started.elapsed().as_secs());
+                // What it's doing goes last: it's what a narrow pane can lose.
+                let said = [
+                    format!(" {spin} {by} · {secs}s · Esc stops · {doing}"),
+                    format!(" {spin} {secs}s · Esc stops · {doing}"),
+                ];
+                (fitting(&said, inner.width as usize), &theme.accent)
             }
-            None => (
-                " Enter asks · ↑↓ PgUp PgDn scroll · ^Y copies the example on screen · ^B n new topic"
-                    .to_string(),
-                &theme.muted,
-            ),
+            None => {
+                let said = [
+                    " Enter asks · ↑↓ PgUp PgDn scroll · ^Y copies the example on screen · ^B n new topic".to_string(),
+                    " Enter asks · ↑↓ scroll · ^Y copies the example · ^B n new topic".into(),
+                    " Enter asks · ^Y copies the example · ^B n new".into(),
+                    " Enter asks · ^Y copies".into(),
+                ];
+                (fitting(&said, inner.width as usize), &theme.muted)
+            }
         };
         text(
             frame,
@@ -1213,8 +1233,12 @@ fn docs_view(
         return;
     }
     if view.input.is_empty() {
-        let hint = match view.question() {
-            Some((shown, _)) => format!("Enter explains {shown} · or type a question"),
+        let hints = match view.question() {
+            Some((shown, _)) => [
+                format!("Enter explains {shown} · or type a question"),
+                format!("Enter explains {shown}"),
+                "Type a question".into(),
+            ],
             None => {
                 let language = view
                     .context
@@ -1222,9 +1246,14 @@ fn docs_view(
                     .map(|c| c.language.as_str())
                     .filter(|l| *l != "Plain text")
                     .unwrap_or("your language");
-                format!("Ask how to do something in {language}, or about this project")
+                [
+                    format!("Ask how to do something in {language}, or about this project"),
+                    format!("Ask how to do something in {language}"),
+                    "Ask a question".into(),
+                ]
             }
         };
+        let hint = fitting(&hints, room);
         frame.render_widget(
             Paragraph::new(Span::styled(
                 printable(&hint),

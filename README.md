@@ -1003,13 +1003,14 @@ or where this project does a thing:
 ❯ how do I count how often each word appears in a list?
 ```
 
-The answer names the function that does it and its import (`collections.Counter`),
-gives its signature and what its parameters mean, then a short example in your
-language and **what the example prints**, with the common pitfall. Agents that can
-run commands here (Claude Code, Codex, OpenCode) run the example in a scratch folder
-of their own and show what it really printed; the others mark it **Expected
-output**. When your project already has a helper for it, the answer points to it
-(`src/util.py:40`).
+The answer is short and to the point, then it ends: the function that does it
+and its import (`collections.Counter`), a minimal example in your language, and
+**what the example prints**. The agent gives the output it knows; when it isn't
+sure, an agent that can run commands here (Claude Code, Codex, OpenCode) runs the
+example in a scratch folder of its own and shows what it really printed, and the
+others mark it **Expected output**. It looks at your project only when the
+question is about it. Agents that can are asked for little reasoning effort, so the
+answer comes quickly. Code wraps to the pane's width, however narrow it gets.
 
 | In the docs pane | |
 | --- | --- |

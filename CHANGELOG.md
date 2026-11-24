@@ -13,10 +13,10 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 - **Interactive documentation** (`Ctrl-b /`, `:ask`): ask how to do something in
   the language you write, what a function does, or how this project does a thing,
   and an AI agent answers in a pane beside the code like the official docs and
-  Stack Overflow: the function and its import, its signature, a short example and
-  what it prints, the common pitfall, and your project's own helper when it has
-  one. Claude Code, Codex and OpenCode run the example in a scratch folder and
-  show what it really printed. Enter on an empty line explains the name under the
+  Stack Overflow, briefly, then stops: the function and its import, a minimal
+  example and what it prints. When unsure of the output, Claude Code, Codex and
+  OpenCode run the example in a scratch folder and show what it really printed.
+  Code wraps to the pane's width. Enter on an empty line explains the name under the
   cursor or the code you selected; follow-ups remember the questions before;
   `Ctrl-y` copies the example on screen. It works with every AI the launcher has
   (`docs_ai`, "auto" by default), read-only, and changes nothing in the project.

@@ -50,35 +50,28 @@ const CLAUDE_MODEL: &str = "sonnet";
 const CLAUDE_SANDBOX: &str = r#"{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true}}"#;
 const STOPPED: &str = "Stopped";
 
-/// What the agent is told it is, before the question.
+/// What the agent is told it is, before the question: short answers, fast.
 pub const INSTRUCTIONS: &str = "\
 You are the interactive documentation inside the user's code editor: the official \
-documentation of the language and its libraries, a good Stack Overflow answer, and \
-the guide to this code base, in one. Answer from your own knowledge of the \
-language, its libraries and the code base; skills about other tools don't apply. Answer in Markdown, straight away, with no \
-preamble and no closing summary. Headings in your answer, when it needs them, start \
-at ###.
+documentation of the language and its libraries, and a Stack Overflow answer. Answer \
+from your own knowledge; skills about other tools don't apply.
 
-When asked how to do something:
-- Name the function, method or API that does it, with its import or module, and \
-give its signature.
-- Say in a line or two what it does and what its main parameters mean.
-- Give a short, complete example in the language the user writes (that of their \
-file, unless they ask for another), in a fenced code block that names the language.
-- Show what the example prints under **Output**, in a ```text block. Run the \
-example in the scratch folder when you can, and show what it really printed; when \
-you can't run it, write **Expected output** instead.
-- Add the common pitfall, or a better way, in a line when there is one, and the \
-version a recent feature needs.
+Answer only the question asked, as briefly as you can, then stop. No preamble, no \
+headings, no summary, no alternatives or extra sections unless asked. Answer in \
+Markdown.
 
-When asked about a function, class or other name: what it is, its signature, what \
-it returns, and an example with its output, the same way.
-When asked about this code base: read the code first, and cite it as path:line.
-When the code base already has a helper that does what's asked, point to it \
-(path:line) and show how it's used there.
+For how to do something: the function or API that does it, with its import, in \
+one line; a minimal example in the user's language (that of their file) in a fenced \
+code block naming the language; then what it prints under **Output**, in a ```text \
+block. Give the output you know; run the example in the scratch folder only when \
+you aren't sure what it prints.
+For a function or other name: its signature and what it returns in a line, then \
+the same minimal example and output.
+Look at the project only when the question is about it, reading just the files \
+needed, and cite them as path:line.
 
-Keep examples minimal and runnable. Never change, create or delete files in the \
-project: write only in the scratch folder.";
+Never change, create or delete files in the project: write only in the scratch \
+folder.";
 
 /// Told to the agents that can't run commands in their mode here: Antigravity and
 /// Gemini in plan mode (Antigravity's print mode stops at the first command it
@@ -375,7 +368,8 @@ impl DocsView {
             return;
         }
         let (text, starts) = self.transcript();
-        let document = markdown::render(&text, width, theme, syntax);
+        // Code wraps: the pane can't scroll sideways.
+        let document = markdown::render_wrapped(&text, width, theme, syntax);
         let starts = starts
             .into_iter()
             .map(|line| document.line_for_source(line))
@@ -724,6 +718,8 @@ fn run(
         Agent::Claude(model) => {
             command.args(["-p", "--model", model.as_deref().unwrap_or(CLAUDE_MODEL)]);
             command.args(["--output-format", "stream-json", "--verbose"]);
+            // A short answer needs little thought: it comes faster.
+            command.args(["--effort", "low"]);
             // Reading, the web, and commands in the sandbox: no edits.
             command.args(["--tools", "Read,Grep,Glob,WebSearch,WebFetch,Bash"]);
             command.args(["--allowedTools", "Read,Grep,Glob,WebSearch,WebFetch"]);
@@ -737,6 +733,7 @@ fn run(
         Agent::Codex(model) => {
             command.args(["exec", "--ephemeral", "--skip-git-repo-check"]);
             command.args(["--color", "never", "--json"]);
+            command.args(["-c", "model_reasoning_effort=\"low\""]);
             // It reads anything, and writes only in the scratch folder.
             command.args(["--sandbox", "workspace-write"]);
             command.arg("--cd").arg(scratch);
@@ -763,6 +760,7 @@ fn run(
         // Antigravity in plan mode, which changes no files, reading the project too.
         Agent::Agy(model) => {
             command.arg("--add-dir").arg(root);
+            command.args(["--effort", "low"]);
             crate::summary::agy_args(&mut command, model.as_deref(), &whole);
             command.current_dir(scratch);
             String::new()
