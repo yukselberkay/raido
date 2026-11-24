@@ -210,6 +210,12 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Fixed
 
+- **Closing a file without saving lets go of your edits.** `:q!` closed the pane
+  but kept your unsaved edits in memory, so opening the file again showed them
+  instead of what an AI had written to it since. Now the file opens as it is on
+  disk (`u` brings your edits back while the file hasn't changed again); a file
+  still shown in another pane keeps them there. `:qa!` also discards for real: the
+  next session used to bring the unsaved edits back.
 - **A file keeps following an AI after a clash with your unsaved edits.** Once
   an AI changed the same lines as an unsaved edit of yours, even a stray keystroke,
   the pane kept showing only your text, and every later change it made to that

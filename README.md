@@ -1872,7 +1872,7 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 :w!                       Save over the file even though something else changed it
 :wa                       Save all modified buffers
 :wq                       Save and close view
-:q / :q!                  Close view / allow closing an unsaved view
+:q / :q!                  Close view / close it and discard its unsaved edits
 :qa / :qa!                Quit / discard unsaved changes and quit
 :e path                   Open a file, or a new buffer if absent
 :reload                   Reload a clean file
@@ -1913,9 +1913,13 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 ```
 
 Closing a view does not delete its buffer: reopen it with Tab or `:bn` in an editor.
-With multiple panes, `:q!` allows closing an unsaved view but retains its buffer;
-closing the last pane with `:q!` exits and discards unsaved buffers.
-`:qa!` explicitly discards all unsaved buffers. Raido does not automatically save
+With multiple panes, `:q!` closes an unsaved view and discards its unsaved edits, so
+opening the file again shows it as it is on disk, with whatever an AI or a tool wrote
+to it meanwhile (`u` there brings your edits back while the file hasn't changed again).
+When another pane still shows the same file, the edits stay there.
+Closing the last pane with `:q!` exits and discards unsaved buffers.
+`:qa!` explicitly discards all unsaved buffers; the next session opens those files as
+they are on disk. Raido does not automatically save
 files on exit. `:wa` stops on an error (for example an unnamed dirty buffer); use
 `:w filename` on that buffer before retrying.
 

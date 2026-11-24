@@ -1653,9 +1653,10 @@ impl App {
         Ok(())
     }
     fn close(&mut self, force: bool) -> Result<()> {
-        if let Some(id) = self.buffer_id() {
+        let editing = self.buffer_id();
+        if let Some(id) = editing {
             if self.buffers[id].dirty && !force {
-                bail!("Unsaved changes. :w to save, :q! to discard this view.");
+                bail!("Unsaved changes · :w saves them, :q! closes and discards them");
             }
         }
         let closing = self.focused;
@@ -1671,7 +1672,8 @@ impl App {
             self.focused = next;
             self.zoom = false;
             self.mode = Mode::Normal;
-            self.notice("Pane closed · a docked pane came back");
+            let discarded = self.discard_closed(editing);
+            self.notice(format!("Pane closed{discarded} · a docked pane came back"));
             return Ok(());
         }
         if self.tiles.remove(closing) {
@@ -1681,12 +1683,44 @@ impl App {
         self.focused = *self.visible().first().context("No remaining pane")?;
         self.zoom = false;
         self.mode = Mode::Normal;
-        self.notice("Pane closed");
+        let discarded = self.discard_closed(editing);
+        self.notice(format!("Pane closed{discarded}"));
         Ok(())
+    }
+    /// A file closed without saving (`:q!`) lets go of its unsaved edits, unless
+    /// another pane still shows them: it goes back to the file as it is on disk, so
+    /// opening it again shows what an AI or anything else has written to it since.
+    /// What's said about it, if anything.
+    fn discard_closed(&mut self, buffer: Option<usize>) -> String {
+        let Some(id) = buffer.filter(|&id| self.buffers[id].dirty) else {
+            return String::new();
+        };
+        if self
+            .panes
+            .values()
+            .any(|p| matches!(p, Pane::Editor(b) if *b == id))
+        {
+            return String::new();
+        }
+        let disk = match &self.buffers[id].path {
+            Some(path) => match Buffer::open_with(path, self.config.line_endings) {
+                Ok(disk) => disk,
+                Err(_) => return " · its unsaved edits are kept: the file can't be read".into(),
+            },
+            None => Buffer::empty(),
+        };
+        self.buffers[id].load_disk(disk);
+        format!(" · unsaved edits to {} discarded", self.buffers[id].name())
     }
     fn quit(&mut self, force: bool) -> Result<()> {
         if !force && self.buffers.iter().any(|b| b.dirty) {
             bail!("Unsaved buffers. :wa to save all, :qa! to discard and exit.");
+        }
+        if force {
+            // Discarded: the session keeps no unsaved text to bring back next time.
+            for buffer in &mut self.buffers {
+                buffer.dirty = false;
+            }
         }
         if let Err(error) = self.save_session(false) {
             self.fail(format!("Session not saved: {error:#}"));
@@ -10351,6 +10385,65 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         .unwrap();
         let program = app.focused;
         assert_eq!(cwd(&mut app, program), Some(root));
+    }
+    /// You edit a file, an AI changes it, and you close it without saving: your
+    /// edits go, so opening it again shows the file as the AI left it. Another pane
+    /// still showing it keeps them; `:qa!` doesn't bring them back next time either.
+    #[test]
+    fn closing_a_file_without_saving_lets_go_of_your_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        let path = dir.path().join("main.py");
+        std::fs::write(&path, "a = 1\nb = 2\n").unwrap();
+        let mut app = App::new(dir.path().into(), Some(path.clone()), false).unwrap();
+        let editor = app.focused;
+        let id = app.buffer_id().unwrap();
+        app.command("new").unwrap();
+        app.focused = editor;
+        app.buffers[id].insert("# mine\n");
+        std::fs::write(&path, "a = 10\nb = 2\n").unwrap();
+        assert!(app.close(false).is_err(), "unsaved: asks first");
+        app.command("q!").unwrap();
+        assert!(app.message.contains("discarded"), "{}", app.message);
+        assert!(!app.panes.contains_key(&editor));
+        // The AI goes on while the file is closed; opening it shows its work.
+        std::fs::write(&path, "a = 10\nb = 20\n").unwrap();
+        app.open(&path).unwrap();
+        let start = Instant::now();
+        while app.buffers[id].text != "a = 10\nb = 20\n" {
+            assert!(
+                start.elapsed() < Duration::from_secs(1),
+                "{:?}",
+                app.buffers[id].text.to_string()
+            );
+            app.tick();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!app.buffers[id].dirty);
+
+        // Shown in two panes, closing one keeps your edits in the other.
+        (app.buffers[id].row, app.buffers[id].col) = (0, 0);
+        app.buffers[id].insert("# mine\n");
+        let other = app.focused;
+        app.split_editor(Axis::Vertical).unwrap();
+        app.command("q!").unwrap();
+        assert!(app.panes.contains_key(&other));
+        assert!(app.buffers[id].dirty);
+        assert_eq!(app.buffers[id].line(0), "# mine");
+
+        // :qa! discards them: the next session opens the file as it is.
+        app.command("qa!").unwrap();
+        assert!(!app.running);
+        drop(app);
+        let mut app = App::new(dir.path().into(), None, false).unwrap();
+        app.restore_session();
+        let id = (0..app.buffers.len())
+            .find(|&b| {
+                app.buffers[b].path.as_deref() == Some(path.canonicalize().unwrap().as_path())
+            })
+            .unwrap();
+        assert_eq!(app.buffers[id].text, "a = 10\nb = 20\n");
+        assert!(!app.buffers[id].dirty);
     }
     #[cfg(unix)]
     #[test]
