@@ -47,9 +47,9 @@ pub struct Buffer {
     saved: Rope,
     disk_hash: Option<u64>,
     pub disk_stamp: Option<(SystemTime, u64)>,
-    /// The file's stamp when its changes on disk met unsaved edits here: not merged
-    /// again until it changes once more.
-    pub conflict: Option<(SystemTime, u64)>,
+    /// Some change of the file's met unsaved edits here and yours were kept: a plain
+    /// save won't write over it until `:w!` or `:e!` settles it.
+    clashed: bool,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     grouping: bool,
@@ -64,8 +64,9 @@ pub enum FromDisk {
     Matches,
     /// Its changes were carried into the unsaved edits, as one undo step.
     Merged,
-    /// They meet the unsaved edits, which are kept as they are.
-    Conflict,
+    /// The same, except where they met the unsaved edits: those were kept, at these
+    /// lines (from 0).
+    Kept(Vec<usize>),
 }
 
 fn hash(text: &[u8]) -> u64 {
@@ -96,7 +97,7 @@ impl Buffer {
             saved: Rope::new(),
             disk_hash: None,
             disk_stamp: None,
-            conflict: None,
+            clashed: false,
             undo: Vec::new(),
             redo: Vec::new(),
             grouping: false,
@@ -587,8 +588,9 @@ impl Buffer {
     }
     /// Bring into this buffer, which has unsaved edits, what changed in its file:
     /// `disk` is the file opened again. Changes away from yours are merged in as one
-    /// undo step, the cursor and view staying on the same text; ones meeting yours
-    /// leave the buffer as it is.
+    /// undo step, the cursor and view staying on the same text; where they meet
+    /// yours, yours are kept. The file is what later changes merge against, so it
+    /// goes on following the disk either way.
     pub fn take_disk(&mut self, disk: Buffer) -> FromDisk {
         if disk.text == self.saved {
             self.disk_stamp = disk.disk_stamp;
@@ -601,27 +603,40 @@ impl Buffer {
         }
         let ours = self.text.to_string();
         let merged = crate::merge::merge(&self.saved.to_string(), &ours, &disk.text.to_string());
-        let Some(edits) = merged else {
-            self.conflict = disk.disk_stamp;
-            return FromDisk::Conflict;
-        };
-        // A place in the text moves by what was added or removed before it.
-        let moved = |at: usize| -> usize {
-            let shift: isize = edits
-                .iter()
-                .filter(|(_, end, _)| *end <= at)
-                .map(|(start, end, with)| with.chars().count() as isize - (end - start) as isize)
-                .sum();
-            at.saturating_add_signed(shift)
-        };
-        let cursor = moved(self.index());
-        let top = moved(self.text.line_to_char(self.scroll.min(self.lines() - 1)));
-        self.apply_edits(edits);
-        self.set_index(cursor);
-        self.scroll = self.text.char_to_line(top.min(self.text.len_chars()));
+        let edits = merged.edits;
+        if !edits.is_empty() {
+            // A place in the text moves by what was added or removed before it.
+            let moved = |at: usize| -> usize {
+                let shift: isize = edits
+                    .iter()
+                    .filter(|(_, end, _)| *end <= at)
+                    .map(|(start, end, with)| {
+                        with.chars().count() as isize - (end - start) as isize
+                    })
+                    .sum();
+                at.saturating_add_signed(shift)
+            };
+            let cursor = moved(self.index());
+            let top = moved(self.text.line_to_char(self.scroll.min(self.lines() - 1)));
+            self.apply_edits(edits);
+            self.set_index(cursor);
+            self.scroll = self.text.char_to_line(top.min(self.text.len_chars()));
+        }
+        // While a change of theirs is set aside for yours, a plain save still finds
+        // the file changed since it was read, and won't write over it.
+        let clashed = self.clashed || !merged.kept.is_empty();
+        let read = self.disk_hash;
         self.adopt(&disk);
+        if clashed {
+            self.clashed = true;
+            self.disk_hash = read;
+        }
         self.dirty = self.text != self.saved;
-        FromDisk::Merged
+        if merged.kept.is_empty() {
+            FromDisk::Merged
+        } else {
+            FromDisk::Kept(merged.kept)
+        }
     }
 
     /// Take the file as it is on disk, setting aside unsaved edits as one undo step
@@ -679,7 +694,7 @@ impl Buffer {
         self.saved = disk.text.clone();
         self.disk_hash = disk.disk_hash;
         self.disk_stamp = disk.disk_stamp;
-        self.conflict = None;
+        self.clashed = false;
     }
 
     pub fn save(&mut self, new_path: Option<PathBuf>) -> Result<()> {
@@ -770,7 +785,7 @@ impl Buffer {
             .and_then(|m| m.modified().ok().map(|time| (time, m.len())));
         self.dirty = false;
         self.eol_changed = false;
-        self.conflict = None;
+        self.clashed = false;
         self.end_group();
         Ok(())
     }

@@ -503,8 +503,9 @@ the history graph appears after you make commits.
   you are, what changed, find matches and errors; click or drag it to go there
   ([Minimap](#minimap)).
 - **External-change refresh:** open files show what AI/shell tools write to them
-  within a quarter of a second, cursor kept, merged with your unsaved edits when they
-  touch other lines (`:e!` / `:w!` when they meet), and the explorer shows files
+  within a quarter of a second, cursor kept, merged with your unsaved edits; where a
+  change meets yours, yours are kept there and the rest still comes in (`:e!` / `:w!`
+  choose), and the explorer shows files
   they create, delete or rename within half a second. Dirty buffers remain yours; saving detects conflicting disk changes.
 - **Extensions:** user-owned TOML themes and explicitly invoked command plugins.
 
@@ -2299,7 +2300,7 @@ plugins are intentionally not part of v0.1.
 | C compilation fails | Run from the Raido project directory; ensure `cc` exists and create `target` with `mkdir -p target`. |
 | New file is absent from the sidebar | Save it first, then focus the explorer and press `r`. |
 | `codex` or `claude` cannot launch | Install that CLI separately and verify `command -v codex` or `command -v claude` in the shell that launches Raido. |
-| File changed on disk | With no unsaved edits, the pane shows the new text. With unsaved edits, changes on other lines are merged into yours (`u` undoes the merge). Where both changed the same lines, yours are kept and saving refuses to overwrite: `:e!` loads the file (`u` brings yours back), `:w!` saves yours over it, or `:w recovery-name` keeps both. |
+| File changed on disk | With no unsaved edits, the pane shows the new text. With unsaved edits, changes on other lines are merged into yours (`u` undoes the merge). Where both changed the same lines, yours are kept on those lines (Raido names them), the rest still comes in, and saving refuses to overwrite: `:e!` loads the file (`u` brings yours back), `:w!` saves yours over it, or `:w recovery-name` keeps both. |
 | Read-only, binary or non-UTF-8 file | Raido respects read-only files. Text in other encodings (UTF-16, Latin-1, Windows-1254…) opens as text and saves as it was; the status bar names the encoding, and `:encoding! NAME` reads it again if the guess was wrong. Files that aren't text open read-only as hex. |
 | Custom theme not found | Use a simple name with letters, digits, hyphens or underscores, and place its TOML in the user themes directory. |
 | Code turns faint near language-server problems (older Raido in macOS Terminal.app) | Update Raido. Terminal.app doesn't know the colored-underline code and read part of it as "faint"; Raido now draws plain underlines there. |

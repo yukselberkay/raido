@@ -327,6 +327,16 @@ struct AgentRun {
     warning: Option<String>,
 }
 
+/// Lines (from 0) as said to you: "line 6", "lines 6 and 14", "lines 2, 6 and 14".
+fn line_list(lines: &[usize]) -> String {
+    let numbers: Vec<String> = lines.iter().map(|l| (l + 1).to_string()).collect();
+    match numbers.as_slice() {
+        [] => String::new(),
+        [one] => format!("line {one}"),
+        [rest @ .., last] => format!("lines {} and {last}", rest.join(", ")),
+    }
+}
+
 /// Flags for a built-in AI CLI: (args, replay saved output, pinned conversation id).
 /// `exists(program, id)` says whether the CLI saved that conversation; `gemini_ids`
 /// whether the installed Gemini CLI takes `--session-id`.
@@ -2425,7 +2435,7 @@ impl App {
                 let stamp = std::fs::metadata(&path)
                     .ok()
                     .and_then(|m| m.modified().ok().map(|time| (time, m.len())));
-                if stamp.is_none() || stamp == b.disk_stamp || (b.dirty && stamp == b.conflict) {
+                if stamp.is_none() || stamp == b.disk_stamp {
                     continue;
                 }
                 if b.dirty {
@@ -2443,9 +2453,12 @@ impl App {
                             false,
                             format!("{name} changed on disk · merged into your unsaved edits (u undoes)"),
                         )),
-                        FromDisk::Conflict => news.push((
+                        FromDisk::Kept(lines) => news.push((
                             true,
-                            format!("{name} also changed on disk · kept your edits · :e! loads the file (u undoes), :w! saves yours"),
+                            format!(
+                                "{name} changed on disk · merged, except at {} where it met your unsaved edits: yours kept · :e! loads the file (u undoes), :w! saves yours",
+                                line_list(&lines)
+                            ),
                         )),
                     }
                     continue;
@@ -9723,7 +9736,8 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
     }
     /// An AI rewrites the file you have open: the pane shows it within a quarter of
     /// a second, cursor kept. With unsaved edits of yours, its changes are merged in
-    /// where they don't meet yours; where they do, yours stay until you choose.
+    /// where they don't meet yours; where they do, yours stay until you choose, and
+    /// what it changes after that still comes in.
     #[test]
     fn a_file_on_screen_follows_what_an_ai_writes_to_it() {
         let dir = tempfile::tempdir().unwrap();
@@ -9775,11 +9789,11 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
         );
         app.buffers[id].undo(true);
 
-        // Both change `c`: yours is kept, said once, until you choose.
+        // Both change `c`: yours is kept there, said once; its change to `e` comes in.
         let b = &mut app.buffers[id];
         (b.row, b.col) = (4, 5);
         b.insert("3");
-        std::fs::write(&path, "a = 1\nz = 0\nb = 20\nc = 300\nd = 40\ne = 5\n").unwrap();
+        std::fs::write(&path, "a = 1\nz = 0\nb = 20\nc = 300\nd = 40\ne = 50\n").unwrap();
         let start = Instant::now();
         while !app.error {
             assert!(
@@ -9790,18 +9804,31 @@ env = { OPENAI_BASE_URL = "http://localhost:8080/v1" }
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(
-            app.message.contains(":e!") && app.message.contains(":w!"),
+            app.message.contains("line 5")
+                && app.message.contains(":e!")
+                && app.message.contains(":w!"),
             "{}",
             app.message
         );
-        let mine = "# mine\na = 1\nz = 0\nb = 20\nc = 33\nd = 40\ne = 5\n";
-        assert_eq!(app.buffers[id].text, mine);
+        assert_eq!(
+            app.buffers[id].text,
+            "# mine\na = 1\nz = 0\nb = 20\nc = 33\nd = 40\ne = 50\n"
+        );
         app.notice("");
         for _ in 0..20 {
             app.tick();
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(app.message, "", "said once");
+        // The AI goes on: what it changes away from yours still comes in.
+        std::fs::write(
+            &path,
+            "a = 1\nz = 0\nb = 20\nc = 300\nd = 40\ne = 50\nf = 6\n",
+        )
+        .unwrap();
+        let mine = "# mine\na = 1\nz = 0\nb = 20\nc = 33\nd = 40\ne = 50\nf = 6\n";
+        wait_for(&mut app, mine);
+        // A plain save still won't write over its `c`.
         assert!(app.save(None).unwrap_err().to_string().contains(":w!"));
         // :e! takes the file; `u` brings yours back; :w! writes yours over it.
         app.command("e!").unwrap();

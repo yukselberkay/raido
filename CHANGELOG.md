@@ -210,6 +210,13 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Fixed
 
+- **A file keeps following an AI after a clash with your unsaved edits.** Once
+  an AI changed the same lines as an unsaved edit of yours, even a stray keystroke,
+  the pane kept showing only your text, and every later change it made to that
+  file was left out too, wherever it was. Now only the lines where the two meet
+  keep yours (Raido names them once); the rest of that change comes in, and so does
+  everything the AI writes after it. `:w` still won't write over the change it
+  left out: `:e!` loads the file (`u` brings yours back), `:w!` saves yours.
 - **Browsing the explorer no longer opens a pane per file.** A file open already
   (one whose pane you closed, one a definition took you to, one a restored session
   loaded) showed in the preview pane, after which every file browsed opened in a

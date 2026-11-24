@@ -111,5 +111,6 @@ in the order the user presses them. Prefer showing over explaining.
 - **Key does nothing** → probably INSERT mode (press `Esc`) or a terminal pane has
   focus (use `Ctrl-b` first).
 - **An AI changed a file you have unsaved edits in** → changes on other lines are
-  merged in within ¼ s (`u` undoes); where both changed the same lines yours stay:
-  `:e!` loads the file (`u` brings yours back), `:w!` saves yours over it.
+  merged in within ¼ s (`u` undoes); where both changed the same lines yours stay
+  on those lines (named in the status line) and the rest keeps coming in: `:e!`
+  loads the file (`u` brings yours back), `:w!` saves yours over it.
