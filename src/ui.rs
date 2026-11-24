@@ -341,6 +341,20 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     ),
                 }
             }
+            Some(Pane::Docs(view)) => format!(
+                " {} DOCS{}{} ",
+                number,
+                view.context
+                    .as_ref()
+                    .filter(|c| c.language != "Plain text")
+                    .map(|c| format!(" · {}", printable(&c.language)))
+                    .unwrap_or_default(),
+                if view.asking.is_some() {
+                    " · answering"
+                } else {
+                    ""
+                }
+            ),
             _ => format!(" {} AI / copilot ", number),
         };
         let inner = if bare {
@@ -699,6 +713,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Some(Pane::Hex(view)) => hex_view(frame, view, inner, &theme, bare),
             Some(Pane::Archive(view)) => {
                 archive_view(frame, view, inner, &theme, bare, app.config.icons)
+            }
+            Some(Pane::Docs(view)) => {
+                let typing = active && app.input.is_none();
+                docs_view(frame, view, inner, &theme, &app.syntax, typing, bare)
             }
             Some(Pane::Changes(view)) => {
                 view.show = view.notes.unwrap_or(app.config.review_summary);
@@ -1096,6 +1114,142 @@ fn theme_picker(frame: &mut Frame, app: &App, area: Rect) {
             ),
         ]);
         frame.render_widget(Paragraph::new(line), line_area);
+    }
+}
+
+/// The interactive documentation: the answers rendered as Markdown, what the agent
+/// is doing, and the question being typed.
+fn docs_view(
+    frame: &mut Frame,
+    view: &mut crate::docs::DocsView,
+    inner: Rect,
+    theme: &Theme,
+    syntax: &crate::highlight::Syntax,
+    typing: bool,
+    bare: bool,
+) {
+    // The question at the bottom, what's going on above it when there's room.
+    let rows: u16 = if inner.height >= 4 && !bare { 2 } else { 1 };
+    let height = inner.height.saturating_sub(rows) as usize;
+    // One column for the scrollbar, at least two of margin per side.
+    let room = (inner.width as usize).saturating_sub(5);
+    let width = room.clamp(1, markdown::MAX_WIDTH);
+    let left = inner.x + 2 + ((room - width) / 2) as u16;
+    view.layout(width, theme, syntax);
+    view.place(height);
+    if let Some(rendered) = &view.rendered {
+        let lines = &rendered.document.lines;
+        for (offset, line) in lines.iter().skip(view.scroll).take(height).enumerate() {
+            frame.render_widget(
+                Paragraph::new(line.clone()),
+                Rect::new(left, inner.y + offset as u16, width as u16, 1),
+            );
+        }
+        let max = lines.len().saturating_sub(height);
+        if max > 0 && height > 1 && !bare {
+            let x = inner.right() - 1;
+            let thumb = (height * height / lines.len()).max(1);
+            let at = view.scroll * (height - thumb) / max;
+            for row in 0..height {
+                let on = (at..at + thumb).contains(&row);
+                text(
+                    frame,
+                    Rect::new(x, inner.y + row as u16, 1, 1),
+                    if on { "┃" } else { "│" },
+                    color(if on { &theme.accent } else { &theme.border }),
+                );
+            }
+        }
+    }
+    if rows == 2 {
+        let y = inner.bottom() - 2;
+        let (status, fg) = match &view.asking {
+            Some(asking) => {
+                let by = view.entries.last().map_or("", |e| e.by.as_str());
+                let doing = match asking.progress.as_str() {
+                    "" => "thinking",
+                    doing => doing,
+                };
+                (
+                    format!(
+                        " {} {by} · {doing} · {}s · Esc stops",
+                        asking.spinner(),
+                        asking.started.elapsed().as_secs()
+                    ),
+                    &theme.accent,
+                )
+            }
+            None => (
+                " Enter asks · ↑↓ PgUp PgDn scroll · ^Y copies the example on screen · ^B n new topic"
+                    .to_string(),
+                &theme.muted,
+            ),
+        };
+        text(
+            frame,
+            Rect::new(inner.x, y, inner.width, 1),
+            printable(&status),
+            color(fg),
+        );
+    }
+    // The question being typed, on a line of its own color.
+    let y = inner.bottom() - 1;
+    let line = Rect::new(inner.x, y, inner.width, 1);
+    let field = color(&theme.selection);
+    frame.render_widget(Paragraph::new("").style(Style::default().bg(field)), line);
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            " ❯ ",
+            Style::default()
+                .fg(color(&theme.accent))
+                .bg(field)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Rect::new(inner.x, y, 3.min(inner.width), 1),
+    );
+    let x = inner.x + 3;
+    let room = inner.width.saturating_sub(4) as usize;
+    if room == 0 {
+        return;
+    }
+    if view.input.is_empty() {
+        let hint = match view.question() {
+            Some((shown, _)) => format!("Enter explains {shown} · or type a question"),
+            None => {
+                let language = view
+                    .context
+                    .as_ref()
+                    .map(|c| c.language.as_str())
+                    .filter(|l| *l != "Plain text")
+                    .unwrap_or("your language");
+                format!("Ask how to do something in {language}, or about this project")
+            }
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                printable(&hint),
+                Style::default().fg(color(&theme.muted)).bg(field),
+            )),
+            Rect::new(x, y, room as u16, 1),
+        );
+        if typing {
+            frame.set_cursor_position((x, y));
+        }
+        return;
+    }
+    // The part of the question that holds the cursor.
+    let chars: Vec<char> = view.input.chars().collect();
+    let start = view.cursor.saturating_sub(room.saturating_sub(1));
+    let shown: String = chars[start.min(chars.len())..].iter().take(room).collect();
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            printable(&shown),
+            Style::default().fg(color(&theme.foreground)).bg(field),
+        )),
+        Rect::new(x, y, room as u16, 1),
+    );
+    if typing {
+        frame.set_cursor_position((x + (view.cursor - start) as u16, y));
     }
 }
 
@@ -4239,6 +4393,7 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
             Some(Pane::Sheet(_)) => "SHEET",
             Some(Pane::Hex(_)) => "HEX",
             Some(Pane::Archive(_)) => "ARCHIVE",
+            Some(Pane::Docs(_)) => "DOCS",
             _ => match app.mode {
                 Mode::Insert => "INSERT",
                 Mode::Visual => "VISUAL",
@@ -4327,6 +4482,12 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
             && !app.sidebar_focus
         {
             " j k move   n N next change   ] [ file   y keep   x undo   Y X whole file   A keep all   U undo all   Enter open   s/S AI explains new/all   i notes   q close"
+        } else if matches!(app.panes.get(&app.focused), Some(Pane::Docs(v)) if v.asking.is_some())
+            && !app.sidebar_focus
+        {
+            " Esc stop   ↑↓ PgUp PgDn scroll   type the next question meanwhile"
+        } else if matches!(app.panes.get(&app.focused), Some(Pane::Docs(_))) && !app.sidebar_focus {
+            " type a question   Enter ask   ↑↓ PgUp PgDn scroll   ^Y copy the example   ^U clear   ^B n new topic   Esc back to the code"
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Archive(v)) if v.typing.is_some())
             && !app.sidebar_focus
         {
@@ -4661,6 +4822,14 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         (
             "Enter / h l / c E / / n N",
             "Open a read-only copy, fold / up, in / all / find",
+        ),
+        (
+            "DOCS · Ctrl-b / or :ask",
+            "Ask how to do something: the function, an example, its output",
+        ),
+        (
+            "Enter / ^Y / ^B n / Esc",
+            "Ask (empty: the name or selection) / copy example / new / back",
         ),
         ("HEX", "Files that aren't text open read-only as hex"),
         (

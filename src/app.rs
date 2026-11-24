@@ -3,6 +3,7 @@ use crate::{
     clipboard::Clipboard,
     config::{self, Config, Theme},
     copymode,
+    docs::{self, DocsView},
     editor::{Buffer, FromDisk},
     gitgraph::{self, GitView},
     hex::HexView,
@@ -49,6 +50,8 @@ pub enum Pane {
     Hex(Box<HexView>),
     /// An archive's files as a tree (zip, tar, 7z…), read-only.
     Archive(Box<ArchiveView>),
+    /// The interactive documentation: your questions, an AI's answers (Ctrl-b /).
+    Docs(Box<DocsView>),
 }
 
 impl Pane {
@@ -1734,6 +1737,9 @@ impl App {
                         path: relative(&view.path),
                         entry: view.entry().map(|e| e.path.clone()),
                     },
+                    Pane::Docs(view) => SavedPane::Docs {
+                        answers: view.saved(),
+                    },
                     Pane::Sheet(view) => {
                         let (row, col) = view.selected().unwrap_or_default();
                         match view.buffer {
@@ -1856,59 +1862,61 @@ impl App {
         self.panes.clear();
         let mut problems = Vec::new();
         for (id, pane) in saved.panes {
-            let pane =
-                match pane {
-                    SavedPane::Editor { buffer } => Pane::Editor(buffer.min(last)),
-                    SavedPane::Preview { buffer, scroll } => {
-                        let mut preview = Preview::new(buffer.min(last));
-                        preview.scroll = scroll;
-                        preview.synced = Some(self.buffers[buffer.min(last)].row);
-                        Pane::Preview(preview)
+            let pane = match pane {
+                SavedPane::Editor { buffer } => Pane::Editor(buffer.min(last)),
+                SavedPane::Preview { buffer, scroll } => {
+                    let mut preview = Preview::new(buffer.min(last));
+                    preview.scroll = scroll;
+                    preview.synced = Some(self.buffers[buffer.min(last)].row);
+                    Pane::Preview(preview)
+                }
+                SavedPane::Ai => Pane::Ai(None),
+                SavedPane::Changes => Pane::Changes(Box::default()),
+                SavedPane::Archive { path, entry } => Pane::Archive(Box::new(ArchiveView::open(
+                    self.root.join(path),
+                    false,
+                    entry,
+                ))),
+                SavedPane::Hex { path, offset } => {
+                    Pane::Hex(Box::new(HexView::open(self.root.join(path), false, offset)))
+                }
+                SavedPane::Table { buffer, row, col } => {
+                    let id = buffer.min(last);
+                    let mut view = SheetView::from_buffer(&self.buffers[id], id);
+                    view.go(Some(row), Some(col));
+                    Pane::Sheet(Box::new(view))
+                }
+                SavedPane::Sheet {
+                    path,
+                    sheet,
+                    row,
+                    col,
+                } => Pane::Sheet(Box::new(SheetView::open(
+                    self.root.join(path),
+                    false,
+                    Some((sheet, row, col)),
+                ))),
+                SavedPane::Docs { answers } => Pane::Docs(Box::new(DocsView::restored(answers))),
+                SavedPane::Git { only } => {
+                    let mut view = GitView::new(self.root.clone());
+                    if only.is_some() {
+                        view.only = only;
+                        view.refresh();
                     }
-                    SavedPane::Ai => Pane::Ai(None),
-                    SavedPane::Changes => Pane::Changes(Box::default()),
-                    SavedPane::Archive { path, entry } => Pane::Archive(Box::new(
-                        ArchiveView::open(self.root.join(path), false, entry),
-                    )),
-                    SavedPane::Hex { path, offset } => {
-                        Pane::Hex(Box::new(HexView::open(self.root.join(path), false, offset)))
+                    Pane::Git(Box::new(view))
+                }
+                SavedPane::Terminal {
+                    launch,
+                    cwd,
+                    transcript,
+                } => match self.restore_terminal(launch, cwd, &transcript) {
+                    Ok(terminal) => Pane::Terminal(Box::new(terminal)),
+                    Err(error) => {
+                        problems.push(format!("{error:#}"));
+                        Pane::Ai(None)
                     }
-                    SavedPane::Table { buffer, row, col } => {
-                        let id = buffer.min(last);
-                        let mut view = SheetView::from_buffer(&self.buffers[id], id);
-                        view.go(Some(row), Some(col));
-                        Pane::Sheet(Box::new(view))
-                    }
-                    SavedPane::Sheet {
-                        path,
-                        sheet,
-                        row,
-                        col,
-                    } => Pane::Sheet(Box::new(SheetView::open(
-                        self.root.join(path),
-                        false,
-                        Some((sheet, row, col)),
-                    ))),
-                    SavedPane::Git { only } => {
-                        let mut view = GitView::new(self.root.clone());
-                        if only.is_some() {
-                            view.only = only;
-                            view.refresh();
-                        }
-                        Pane::Git(Box::new(view))
-                    }
-                    SavedPane::Terminal {
-                        launch,
-                        cwd,
-                        transcript,
-                    } => match self.restore_terminal(launch, cwd, &transcript) {
-                        Ok(terminal) => Pane::Terminal(Box::new(terminal)),
-                        Err(error) => {
-                            problems.push(format!("{error:#}"));
-                            Pane::Ai(None)
-                        }
-                    },
-                };
+                },
+            };
             self.panes.insert(id, pane);
         }
         self.tiles = saved.tiles;
@@ -2007,6 +2015,9 @@ impl App {
             Some(Pane::Hex(_)) => bail!("Raido shows files that aren't text read-only"),
             Some(Pane::Archive(_)) => {
                 bail!("Archives are read-only in Raido · Enter opens a file in it")
+            }
+            Some(Pane::Docs(_)) => {
+                bail!("The docs pane isn't a file · Ctrl-y copies the example on screen")
             }
             Some(Pane::Sheet(view)) => view.buffer,
             _ => None,
@@ -2137,6 +2148,7 @@ impl App {
         let mut copies = Vec::new();
         for (id, pane) in self.panes.iter_mut() {
             match pane {
+                Pane::Docs(view) => self.redraw |= view.poll(),
                 Pane::Archive(view) => {
                     self.redraw |= view.poll();
                     if let Some(done) = view.poll_copy() {
@@ -2510,6 +2522,9 @@ impl App {
                     Ok(())
                 } else if let Some(image) = self.pasted_image(&text) {
                     self.paste_image(&image)
+                } else if let Some(Pane::Docs(view)) = self.panes.get_mut(&self.focused) {
+                    view.paste(&text);
+                    Ok(())
                 } else if let Some(Pane::Terminal(terminal)) = self.panes.get_mut(&self.focused) {
                     terminal.paste(&text)
                 } else if let Some((start, end)) = self.selection() {
@@ -2825,6 +2840,7 @@ impl App {
             Some(Pane::Sheet(view)) => view.scroll(step as i64),
             Some(Pane::Hex(view)) => view.scroll(step as i64),
             Some(Pane::Archive(view)) => view.scroll(step),
+            Some(Pane::Docs(view)) => view.scroll_by(step as i64),
             _ => {}
         }
         Ok(())
@@ -3190,6 +3206,7 @@ impl App {
             Some(Pane::Sheet(_)) => return self.sheet_key(key),
             Some(Pane::Hex(_)) => return self.hex_key(key),
             Some(Pane::Archive(_)) => return self.archive_key(key),
+            Some(Pane::Docs(_)) => return self.docs_key(key),
             Some(Pane::Ai(Some(_))) => return self.model_choice_key(key),
             Some(Pane::Ai(None)) => {
                 let chosen = match key.code {
@@ -3978,6 +3995,11 @@ impl App {
     /// conversations still have the last one. While the agent is answering a prompt,
     /// it asks first: a second Ctrl-b n within a few seconds stops it.
     fn new_conversation(&mut self) -> Result<()> {
+        if let Some(Pane::Docs(view)) = self.panes.get_mut(&self.focused) {
+            view.clear();
+            self.notice("Docs: a new topic · the questions before it are forgotten");
+            return Ok(());
+        }
         let id = self.ai_pane()?;
         let Some(Pane::Terminal(t)) = self.panes.get(&id) else {
             return Ok(());
@@ -4118,6 +4140,7 @@ impl App {
             KeyCode::Char('t') => self.open_picker(),
             KeyCode::Char('M') => self.split_preview()?,
             KeyCode::Char('?') => self.toggle_help(),
+            KeyCode::Char('/') => self.docs("")?,
             KeyCode::Char('[') => self.enter_copy_mode(),
             KeyCode::Char('Z') => self.toggle_copy_view(),
             KeyCode::Char(':') => self.input_start(InputKind::Command),
@@ -4235,6 +4258,7 @@ impl App {
             ),
             Some(Pane::Ai(None)) => "AI launcher".into(),
             Some(Pane::Ai(Some(_))) => "OpenCode · choose a model".into(),
+            Some(Pane::Docs(_)) => "Docs".into(),
             None => "?".into(),
         }
     }
@@ -5510,6 +5534,199 @@ impl App {
     }
     /// Ctrl-b v / `:changes`: the review of what AI agents changed. Opens it beside
     /// the focused pane (below a narrow one), focuses it, or maximizes it when focused.
+    /// Where you are in the code, for the interactive documentation: the focused
+    /// editor's file, else the one you were in last.
+    fn docs_context(&self) -> Option<docs::Context> {
+        let spot = crate::ide::Spot::of(self).or_else(|| self.editor_spot.clone())?;
+        let buffer = self.buffers.get(spot.buffer)?;
+        // From the project folder, however its path was spelled.
+        let canonical = self
+            .root
+            .canonicalize()
+            .unwrap_or_else(|_| self.root.clone());
+        let file = spot
+            .path
+            .strip_prefix(&self.root)
+            .or_else(|_| spot.path.strip_prefix(&canonical))
+            .unwrap_or(&spot.path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let length = buffer.text.len_chars();
+        let selection = spot
+            .chars
+            .map(|(start, end)| {
+                buffer
+                    .text
+                    .slice(start.min(length)..end.min(length))
+                    .to_string()
+            })
+            .filter(|text| !text.trim().is_empty());
+        let word = match selection {
+            Some(_) => None,
+            None => word_at(buffer).map(|(word, _)| word),
+        };
+        Some(docs::Context {
+            file,
+            language: self.syntax.language(buffer),
+            line: spot.start.0 + 1,
+            text: buffer.line(spot.start.0),
+            selection,
+            word,
+        })
+    }
+    /// Ctrl-b / and `:ask [question]`: the interactive documentation beside the
+    /// code, knowing where you are in it. A question is asked at once.
+    fn docs(&mut self, question: &str) -> Result<()> {
+        let context = self.docs_context();
+        if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+            self.end_visual();
+        }
+        let existing = self
+            .panes
+            .iter()
+            .find(|(_, p)| matches!(p, Pane::Docs(_)))
+            .map(|(id, _)| *id);
+        match existing {
+            Some(id) => {
+                if let Some(index) = self.docked.iter().position(|d| *d == id) {
+                    self.undock(index);
+                }
+                self.focused = id;
+            }
+            None => {
+                if self.panes.len() >= 12 {
+                    bail!("Maximum of 12 panes");
+                }
+                let wide = self
+                    .rectangles
+                    .iter()
+                    .find(|(id, _)| *id == self.focused)
+                    .is_some_and(|(_, r)| r.width >= 120);
+                let axis = if wide {
+                    Axis::Horizontal
+                } else {
+                    Axis::Vertical
+                };
+                self.add_pane(Pane::Docs(Box::default()), axis);
+            }
+        }
+        self.sidebar_focus = false;
+        self.zoom = false;
+        let Some(Pane::Docs(view)) = self.panes.get_mut(&self.focused) else {
+            return Ok(());
+        };
+        if context.is_some() && context != view.context {
+            view.context = context;
+            view.changed();
+        }
+        let question = question.trim();
+        if !question.is_empty() {
+            view.input = question.to_string();
+            view.cursor = question.chars().count();
+            return self.docs_ask();
+        }
+        let language = view
+            .context
+            .as_ref()
+            .map(|c| c.language.clone())
+            .filter(|l| l != "Plain text")
+            .unwrap_or_else(|| "your language".into());
+        self.notice(format!(
+            "Docs: ask how to do something in {language}, or about this project · Enter asks · Esc back to the code"
+        ));
+        Ok(())
+    }
+    /// Enter in the docs pane: ask its question.
+    fn docs_ask(&mut self) -> Result<()> {
+        let Some(Pane::Docs(view)) = self.panes.get(&self.focused) else {
+            return Ok(());
+        };
+        let Some((shown, asked)) = view.question() else {
+            bail!("Type a question, or open the docs (Ctrl-b /) on a name or a selection in your code");
+        };
+        let agent =
+            crate::summary::Agent::choose_for(&self.config.docs_ai, "docs_ai", "answer with")
+                .map_err(anyhow::Error::msg)?
+                .context(
+                    "The interactive documentation is off (docs_ai = \"off\" in config.toml)",
+                )?;
+        let by = agent.name();
+        let root = self.root.clone();
+        if let Some(Pane::Docs(view)) = self.panes.get_mut(&self.focused) {
+            view.ask(shown, asked, agent, &root);
+        }
+        self.notice(format!("Asking {by} · Esc stops"));
+        Ok(())
+    }
+    fn docs_key(&mut self, key: KeyEvent) -> Result<()> {
+        let Some(Pane::Docs(view)) = self.panes.get_mut(&self.focused) else {
+            return Ok(());
+        };
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let page = view.height.saturating_sub(2).max(1) as i64;
+        let empty = view.input.is_empty();
+        match key.code {
+            KeyCode::Enter => return self.docs_ask(),
+            KeyCode::Esc => {
+                if view.stop() {
+                    self.notice("Stopped · Enter asks again");
+                } else {
+                    self.focus_editor();
+                }
+            }
+            KeyCode::Char('y') if ctrl => match view.example().map(str::to_string) {
+                Some(code) => {
+                    let lines = code.lines().count();
+                    self.clipboard.copy(code, false);
+                    self.notice(format!(
+                        "Copied the example ({lines} line{})",
+                        if lines == 1 { "" } else { "s" }
+                    ));
+                }
+                None => self.fail("No code example on screen to copy"),
+            },
+            KeyCode::Char('u') if ctrl => {
+                view.input.clear();
+                view.cursor = 0;
+            }
+            KeyCode::Char(c) if !ctrl && !alt => view.insert(c),
+            KeyCode::Backspace => view.backspace(),
+            KeyCode::Delete => view.delete(),
+            KeyCode::Left => view.left(),
+            KeyCode::Right => view.right(),
+            KeyCode::Home if empty => view.scroll = 0,
+            KeyCode::End if empty => view.scroll = usize::MAX,
+            KeyCode::Home => view.cursor = 0,
+            KeyCode::End => view.cursor = view.input.chars().count(),
+            KeyCode::Up => view.scroll_by(-1),
+            KeyCode::Down => view.scroll_by(1),
+            KeyCode::PageUp => view.scroll_by(-page),
+            KeyCode::PageDown => view.scroll_by(page),
+            _ => {}
+        }
+        Ok(())
+    }
+    /// Back to the code: the editor you were in last, else the first on screen.
+    fn focus_editor(&mut self) {
+        let last = self.editor_spot.as_ref().map(|s| s.buffer);
+        let editors: Vec<(usize, usize)> = self
+            .panes
+            .iter()
+            .filter(|(id, _)| self.tiles.contains(**id))
+            .filter_map(|(id, p)| match p {
+                Pane::Editor(b) => Some((*id, *b)),
+                _ => None,
+            })
+            .collect();
+        let back = editors
+            .iter()
+            .find(|(_, b)| Some(*b) == last)
+            .or(editors.first());
+        if let Some(&(id, _)) = back {
+            self.focused = id;
+        }
+    }
     fn changes_pane(&mut self) -> Result<()> {
         if !self.config.review_changes {
             bail!("Change review is off (review_changes = false in config.toml)");
@@ -6530,8 +6747,11 @@ impl App {
         self.syntax = Syntax::new(&theme);
         self.previews.clear();
         for pane in self.panes.values_mut() {
-            if let Pane::Terminal(terminal) = pane {
-                terminal.set_theme(&theme);
+            match pane {
+                Pane::Terminal(terminal) => terminal.set_theme(&theme),
+                // Its answers are drawn in the theme's colors.
+                Pane::Docs(view) => view.changed(),
+                _ => {}
             }
         }
         self.theme = theme;
@@ -6958,6 +7178,7 @@ impl App {
                 }
             }
             "theme" | "themes" => self.open_picker(),
+            "ask" => self.docs(arg)?,
             "mention" => self.mention()?,
             "image" | "screenshot" => self.attach_image()?,
             "explain" => self.explain_commit(arg)?,
@@ -8474,6 +8695,130 @@ while True:
                 assert!(screen.find("light themes").is_some_and(|at| at < heading));
             }
         }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn ctrl_b_slash_documents_the_code_you_are_in_beside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("app.py"), "import csv\nrows = load(path)\n").unwrap();
+        // An agent of its own: an example, and the question it was asked.
+        let script = root.join("answer.sh");
+        std::fs::write(
+            &script,
+            "q=$(grep '^Question:')\n\
+             printf 'Use **csv.DictReader**.\\n\\n```python\\nimport csv\\nprint(1)\\n```\\n\\n%s\\n' \"$q\"\n",
+        )
+        .unwrap();
+        let mut app = App::new(root.into(), None, false).unwrap();
+        app.config.docs_ai = vec![format!("sh {}", script.display())];
+        app.open(&root.join("app.py")).unwrap();
+        let editor = app.focused;
+        let id = app.buffer_id().unwrap();
+        (app.buffers[id].row, app.buffers[id].col) = (1, 8);
+        let wait = |app: &mut App, docs: usize| {
+            let start = Instant::now();
+            while matches!(app.panes.get(&docs), Some(Pane::Docs(v)) if v.asking.is_some()) {
+                app.tick();
+                assert!(start.elapsed() < Duration::from_secs(20), "no answer");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        let view = |app: &App, docs: usize| match app.panes.get(&docs) {
+            Some(Pane::Docs(view)) => view.entries.clone(),
+            _ => panic!("the docs pane"),
+        };
+        // Ctrl-b / opens it beside the code, knowing where you are.
+        press(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('/'), KeyModifiers::NONE);
+        let docs = app.focused;
+        assert_ne!(docs, editor);
+        let Some(Pane::Docs(opened)) = app.panes.get(&docs) else {
+            panic!("the docs pane")
+        };
+        let context = opened.context.clone().unwrap();
+        assert_eq!(
+            (
+                context.file.as_str(),
+                context.language.as_str(),
+                context.line
+            ),
+            ("app.py", "Python", 2)
+        );
+        assert_eq!(context.word.as_deref(), Some("load"));
+        // Enter on an empty line asks about the name under the cursor.
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        wait(&mut app, docs);
+        let entries = view(&app, docs);
+        assert_eq!(entries[0].shown, "`load`");
+        assert_eq!(entries[0].about.as_deref(), Some("app.py:2 · Python"));
+        let answer = entries[0].answer.as_deref().unwrap();
+        assert!(answer.starts_with("Use **csv.DictReader**."), "{answer}");
+        assert!(answer.contains("Question: `load`: what it is"), "{answer}");
+        // A question typed (or pasted) and asked.
+        for c in "how do I read".chars() {
+            press(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        app.event(Event::Paste(" rows?".into()));
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        wait(&mut app, docs);
+        let entries = view(&app, docs);
+        assert_eq!(entries[1].shown, "how do I read rows?");
+        assert!(entries[1]
+            .answer
+            .as_deref()
+            .unwrap()
+            .contains("Question: how do I read rows?"));
+        // Drawn: the answer, and its example to copy.
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(150, 40)).unwrap();
+        terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(screen.contains("DOCS · Python"), "{screen}");
+        assert!(screen.contains("❯ how do I read rows?"));
+        assert!(screen.contains("csv.DictReader"));
+        press(&mut app, KeyCode::Char('y'), KeyModifiers::CONTROL);
+        assert_eq!(app.clipboard.paste().0, "import csv\nprint(1)\n");
+        assert!(app.message.contains("Copied the example (2 lines)"));
+        // It isn't a file to save.
+        press(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert!(app.error && app.message.contains("isn't a file"));
+        // Esc goes back to the code; Ctrl-b / comes back to the same pane.
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.focused, editor);
+        press(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('/'), KeyModifiers::NONE);
+        assert_eq!(app.focused, docs);
+        assert_eq!(app.panes.len(), 2);
+        // The session keeps the answers.
+        let Some(Pane::Docs(kept)) = app.panes.get(&docs) else {
+            panic!("the docs pane")
+        };
+        let restored = DocsView::restored(kept.saved());
+        assert_eq!(restored.entries.len(), 2);
+        assert_eq!(restored.entries[0].asked, entries[0].asked);
+        // Ctrl-b n there: a new topic.
+        press(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('n'), KeyModifiers::NONE);
+        assert!(view(&app, docs).is_empty());
+        // :ask asks at once.
+        app.command("ask what does csv.reader return?").unwrap();
+        wait(&mut app, docs);
+        assert!(view(&app, docs)[0]
+            .answer
+            .as_deref()
+            .unwrap()
+            .contains("Question: what does csv.reader return?"));
+        // With the docs off, it says how to turn them on.
+        app.config.docs_ai = vec!["off".into()];
+        let error = app.command("ask anything").unwrap_err().to_string();
+        assert!(error.contains("docs_ai"), "{error}");
     }
     #[test]
     fn browsing_past_files_open_already_keeps_to_one_preview_pane() {

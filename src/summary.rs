@@ -106,14 +106,17 @@ pub enum Agent {
     Claude(Option<String>),
     Codex(Option<String>),
     Gemini(Option<String>),
+    /// Antigravity CLI (`agy`).
+    Agy(Option<String>),
+    OpenCode(Option<String>),
     /// Ollama, the way the AI launcher's Local LLM entry finds it.
     Local(Option<String>),
     /// A command of your own: the prompt on its input, the answer on its output.
     Command(Vec<String>),
 }
 
-/// What `"auto"` tries, in order.
-const AUTO: [&str; 4] = ["claude", "codex", "gemini", "local"];
+/// What `"auto"` tries, in order: the AI launcher's CLIs, then a local model.
+const AUTO: [&str; 6] = ["claude", "codex", "gemini", "agy", "opencode", "local"];
 
 impl Agent {
     /// One `review_ai` entry: `"claude"`, `"codex"`, `"gemini"` or `"local"`,
@@ -131,6 +134,8 @@ impl Agent {
             "claude" => Self::Claude(model),
             "codex" => Self::Codex(model),
             "gemini" => Self::Gemini(model),
+            "agy" | "antigravity" => Self::Agy(model),
+            "opencode" => Self::OpenCode(model),
             "local" | "ollama" => Self::Local(model),
             _ => Self::Command(entry.split_whitespace().map(str::to_string).collect()),
         }
@@ -138,6 +143,15 @@ impl Agent {
     /// The first of config's `review_ai` entries installed here (`"auto"`: Claude
     /// Code, Codex, Gemini, a local model). `None` when they're off.
     pub fn choose(entries: &[String]) -> Result<Option<Self>, String> {
+        Self::choose_for(entries, "review_ai", "explain with")
+    }
+    /// The same for another setting (`docs_ai`), named in the error with what the
+    /// AI is for ("answer with").
+    pub fn choose_for(
+        entries: &[String],
+        setting: &str,
+        purpose: &str,
+    ) -> Result<Option<Self>, String> {
         let entries: Vec<&str> = entries
             .iter()
             .map(|e| e.trim())
@@ -167,16 +181,18 @@ impl Agent {
             .map(Some)
             .ok_or_else(|| {
                 format!(
-                    "No AI to explain with: {} not installed · set review_ai in config.toml",
+                    "No AI to {purpose}: {} not installed · set {setting} in config.toml",
                     tried.join(", ")
                 )
             })
     }
-    fn program(&self) -> &str {
+    pub(crate) fn program(&self) -> &str {
         match self {
             Self::Claude(_) => "claude",
             Self::Codex(_) => "codex",
             Self::Gemini(_) => "gemini",
+            Self::Agy(_) => "agy",
+            Self::OpenCode(_) => "opencode",
             Self::Local(_) => "ollama",
             Self::Command(words) => words.first().map_or("", String::as_str),
         }
@@ -200,6 +216,8 @@ impl Agent {
             Self::Claude(model) => ("Claude", Some(model.as_deref().unwrap_or(CLAUDE_MODEL))),
             Self::Codex(model) => ("Codex", model.as_deref()),
             Self::Gemini(model) => ("Gemini", model.as_deref()),
+            Self::Agy(model) => ("Antigravity", model.as_deref()),
+            Self::OpenCode(model) => ("OpenCode", model.as_deref()),
             Self::Local(model) => match crate::model_server::name() {
                 // "gpu-box (qwen3:8b)"
                 Some(server) => {
@@ -444,10 +462,15 @@ fn ask(agent: &Agent, prompt: &str) -> Result<(String, Option<Usage>, String), S
             // The prompt goes on its input; this line is added after it.
             command.args(["-p", "Answer as asked above.", "-o", "json"]);
             command.args(["--approval-mode", "plan"]);
+            if gemini_skips_trust() {
+                command.arg("--skip-trust");
+            }
             if let Some(model) = model {
                 command.args(["--model", model]);
             }
         }
+        Agent::Agy(model) => agy_args(&mut command, model.as_deref(), prompt),
+        Agent::OpenCode(model) => opencode_args(&mut command, model.as_deref(), prompt),
         Agent::Local(model) => {
             let model = match model {
                 Some(model) => model.clone(),
@@ -465,7 +488,9 @@ fn ask(agent: &Agent, prompt: &str) -> Result<(String, Option<Usage>, String), S
         }
     }
     command.current_dir(&quiet);
-    let output = run_for(&mut command, Some(prompt.as_bytes()), TIMEOUT, &by);
+    // Antigravity and OpenCode take the prompt as an argument; the rest read it.
+    let input = (!matches!(agent, Agent::Agy(_) | Agent::OpenCode(_))).then_some(prompt.as_bytes());
+    let output = run_for(&mut command, input, TIMEOUT, &by);
     let answer = (|| -> Result<(String, Option<Usage>), String> {
         let stdout = String::from_utf8_lossy(&output?).into_owned();
         Ok(match agent {
@@ -481,6 +506,11 @@ fn ask(agent: &Agent, prompt: &str) -> Result<(String, Option<Usage>, String), S
                 let (text, usage) = gemini_answer(&stdout)?;
                 (text, Some(usage))
             }
+            Agent::Agy(_) => {
+                let (text, usage) = agy_answer(&stdout)?;
+                (text, Some(usage))
+            }
+            Agent::OpenCode(_) => (plain(&stdout), None),
             Agent::Local(_) | Agent::Command(_) => (stdout, None),
         })
     })();
@@ -492,9 +522,122 @@ fn ask(agent: &Agent, prompt: &str) -> Result<(String, Option<Usage>, String), S
     Ok((text, usage, by))
 }
 
+/// Whether the installed Gemini CLI takes `--skip-trust`: in a folder it hasn't
+/// been told to trust, it overrides plan mode and won't answer, so it's asked to
+/// trust this one for the run. Read once from its help, off the UI thread.
+pub(crate) fn gemini_skips_trust() -> bool {
+    static ANSWER: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ANSWER.get_or_init(|| {
+        let Some(gemini) = crate::platform::which("gemini") else {
+            return false;
+        };
+        let mut command = Command::new(gemini);
+        command.arg("--help");
+        run_for(&mut command, None, Duration::from_secs(15), "gemini")
+            .is_ok_and(|help| String::from_utf8_lossy(&help).contains("--skip-trust"))
+    })
+}
+
+/// Antigravity CLI asked once, in plan mode (it changes no files), for JSON: the
+/// prompt goes with `--print`, as its value.
+pub(crate) fn agy_args(command: &mut Command, model: Option<&str>, prompt: &str) {
+    command.args(["--output-format", "json", "--mode", "plan"]);
+    if let Some(model) = model {
+        command.args(["--model", model]);
+    }
+    command.arg(format!("--print={prompt}"));
+}
+
+/// OpenCode asked once (`opencode run`), the prompt as its message; it prints the
+/// answer.
+pub(crate) fn opencode_args(command: &mut Command, model: Option<&str>, prompt: &str) {
+    command.arg("run");
+    if let Some(model) = model {
+        command.args(["--model", model]);
+    }
+    command.arg(prompt);
+}
+
+/// Antigravity CLI's JSON answer (`--output-format json`): the text, and the
+/// tokens it took. It says what went wrong in `error`, and exits 0 either way.
+pub(crate) fn agy_answer(json: &str) -> Result<(String, Usage), String> {
+    let json = json.find('{').map_or(json, |at| &json[at..]);
+    let value: serde_json::Value = serde_json::from_str(json.trim())
+        .map_err(|_| "Antigravity answered in an unexpected form")?;
+    let text = value["response"].as_str().unwrap_or_default().to_string();
+    let error = value["error"].as_str().unwrap_or_default();
+    // It stops at a tool it may not use without asking, which it can't here.
+    let denied: Vec<&str> = value["denied_actions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|d| d["display_name"].as_str().or(d["action"].as_str()))
+        .collect();
+    if text.trim().is_empty() && error.is_empty() && !denied.is_empty() {
+        return Err(format!(
+            "Antigravity stopped: it may not use {} without asking",
+            denied.join(", ")
+        ));
+    }
+    if value["status"]
+        .as_str()
+        .is_some_and(|s| s.eq_ignore_ascii_case("error"))
+        || (text.trim().is_empty() && !error.is_empty())
+    {
+        return Err(format!(
+            "Antigravity: {}",
+            if error.is_empty() { "failed" } else { error }
+        ));
+    }
+    let usage = &value["usage"];
+    let count = |key: &str| usage[key].as_u64().unwrap_or(0);
+    Ok((
+        text,
+        Usage {
+            input: count("input_tokens") + count("cache_read_tokens"),
+            output: count("output_tokens") + count("thinking_tokens"),
+            cost: None,
+        },
+    ))
+}
+
+/// What a CLI printed for a terminal, without its color and cursor escapes.
+pub(crate) fn plain(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            if c != '\r' {
+                out.push(c);
+            }
+            continue;
+        }
+        match chars.next() {
+            // CSI: up to its final letter.
+            Some('[') => {
+                for c in chars.by_ref() {
+                    if ('@'..='~').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            // OSC: up to BEL or ST.
+            Some(']') => {
+                while let Some(c) = chars.next() {
+                    if c == '\x07' || (c == '\x1b' && chars.next_if_eq(&'\\').is_some()) {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Gemini CLI's JSON answer (`-o json`): the text, and the tokens of every model it
 /// used.
-fn gemini_answer(json: &str) -> Result<(String, Usage), String> {
+pub(crate) fn gemini_answer(json: &str) -> Result<(String, Usage), String> {
     // Anything it prints before the JSON (warnings) is skipped.
     let json = json.find('{').map_or(json, |at| &json[at..]);
     let value: serde_json::Value =
@@ -518,7 +661,7 @@ fn gemini_answer(json: &str) -> Result<(String, Usage), String> {
 }
 
 /// Claude Code's JSON answer: the text, and the tokens and price it took.
-fn claude_answer(json: &str) -> Result<(String, Usage), String> {
+pub(crate) fn claude_answer(json: &str) -> Result<(String, Usage), String> {
     let value: serde_json::Value =
         serde_json::from_str(json.trim()).map_err(|_| "Claude answered in an unexpected form")?;
     let text = value["result"].as_str().unwrap_or_default().to_string();
@@ -541,7 +684,7 @@ fn claude_answer(json: &str) -> Result<(String, Usage), String> {
 }
 
 /// The tokens in Codex's events (`--json`), from the turn that finished.
-fn codex_usage(events: &str) -> Option<Usage> {
+pub(crate) fn codex_usage(events: &str) -> Option<Usage> {
     events.lines().rev().find_map(|line| {
         let value: serde_json::Value = serde_json::from_str(line).ok()?;
         if value["type"] != "turn.completed" {
@@ -795,5 +938,63 @@ mod tests {
             Some(&before)
         )
         .is_none());
+    }
+
+    #[test]
+    fn antigravity_and_opencode_are_asked_too() {
+        assert_eq!(Agent::parse("agy"), Agent::Agy(None));
+        assert_eq!(
+            Agent::parse("antigravity:gemini-3-pro").name(),
+            "Antigravity (gemini-3-pro)"
+        );
+        assert_eq!(Agent::parse("opencode"), Agent::OpenCode(None));
+        assert!(AUTO.contains(&"agy") && AUTO.contains(&"opencode"));
+        // Both take the prompt as an argument.
+        let mut command = Command::new("agy");
+        agy_args(&mut command, Some("m"), "how?");
+        let args: Vec<_> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "--output-format",
+                "json",
+                "--mode",
+                "plan",
+                "--model",
+                "m",
+                "--print=how?"
+            ]
+        );
+        let mut command = Command::new("opencode");
+        opencode_args(&mut command, None, "how?");
+        let args: Vec<_> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, ["run", "how?"]);
+        // Antigravity's JSON: the answer and its tokens, or what went wrong.
+        let ok = r#"{"conversation_id":"1","status":"SUCCESS","response":"Use Counter.","error":"","usage":{"input_tokens":10,"output_tokens":5,"thinking_tokens":2,"cache_read_tokens":3}}"#;
+        let (text, usage) = agy_answer(ok).unwrap();
+        assert_eq!(text, "Use Counter.");
+        assert_eq!((usage.input, usage.output), (13, 7));
+        let busy = r#"{"conversation_id":"1","status":"ERROR","response":"","error":"Our servers are experiencing high traffic right now, please try again in a minute.","usage":{}}"#;
+        assert_eq!(
+            agy_answer(busy).unwrap_err(),
+            "Antigravity: Our servers are experiencing high traffic right now, please try again in a minute."
+        );
+        assert!(agy_answer("not json").is_err());
+        let denied = r#"{"status":"SUCCESS","response":"","denied_actions":[{"action":"command","display_name":"Bash"}]}"#;
+        assert_eq!(
+            agy_answer(denied).unwrap_err(),
+            "Antigravity stopped: it may not use Bash without asking"
+        );
+        // OpenCode prints for a terminal: its escapes are taken out.
+        assert_eq!(
+            plain("\x1b[1m\x1b[38;5;2mUse\x1b[0m Counter.\r\n\x1b]0;title\x07done\x1b]8;;x\x1b\\"),
+            "Use Counter.\ndone"
+        );
     }
 }

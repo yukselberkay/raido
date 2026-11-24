@@ -208,7 +208,8 @@ pub struct Config {
     pub review_summary: bool,
     /// The AI that explains the changes when you press `s` in the review, or a list
     /// of them to try in order (the first installed answers): "auto" (Claude Code,
-    /// Codex, Gemini, a local model), "claude", "codex", "gemini", "local", each
+    /// Codex, Gemini, Antigravity, OpenCode, a local model), "claude", "codex",
+    /// "gemini", "agy", "opencode", "local", each
     /// optionally with a model (`"claude:sonnet"`, `"local:llama3.2"`), a command
     /// that reads the prompt on its input, or "off".
     #[serde(deserialize_with = "one_or_more")]
@@ -216,6 +217,13 @@ pub struct Config {
     /// Have that AI explain new changes by itself once the agents stop, so the
     /// explanation is waiting when you open the review (`s` still asks at once).
     pub review_ai_auto: bool,
+    /// The AI that answers in the interactive documentation (`Ctrl-b /`, `:ask`),
+    /// or a list to try in order: "auto" (Claude Code, Codex, Gemini, Antigravity,
+    /// OpenCode, a local model), "claude", "codex", "gemini", "agy", "opencode",
+    /// "local", each optionally with a model
+    /// (`"claude:opus"`), a command that reads the question on its input, or "off".
+    #[serde(deserialize_with = "one_or_more")]
+    pub docs_ai: Vec<String>,
     /// Gitignored files the review tracks anyway, by name: `*` stands for any
     /// characters (`"*.md"`, `"NOTES*"`), a pattern with `/` matches the path from
     /// the project folder. Files over 2 MB and dependency, build and cache folders
@@ -286,6 +294,7 @@ impl Default for Config {
             review_summary: true,
             review_ai: vec!["auto".into()],
             review_ai_auto: true,
+            docs_ai: vec!["auto".into()],
             review_ignored: vec!["*.md".into(), "*.txt".into()],
             paste_screenshots: true,
             claude_ide: true,

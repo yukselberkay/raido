@@ -46,6 +46,7 @@ That is what this workspace is for:
 - [Language servers](#language-servers-lsp)
 - [Sessions: pick up where you left off](#sessions)
 - [Command reference](#commands)
+- [Interactive documentation](#interactive-documentation)
 - [AI CLIs: Codex, Claude, Gemini, Antigravity](#ai-authentication)
 - [Themes and plugins](#themes-and-command-plugins)
 - [Troubleshooting](#troubleshooting)
@@ -440,6 +441,10 @@ the history graph appears after you make commits.
   read-only copy.
 - **Files that aren't text** open read-only as hex, with what kind of file each is
   (`PNG image, 1200 × 800`, `Mach-O executable, ARM64`).
+- **Interactive documentation:** `Ctrl-b /` asks an AI agent how to do something in
+  the language you write, what a function does, or how this project does a thing,
+  and it answers beside the code like the official docs and Stack Overflow: the
+  function and its import, how to call it, an example and what it prints.
 - **Source highlighting:** bundled Rust, C, C++, Python, Go grammars, plus the
   other bundled Syntect languages (JSON and YAML among them) and Raido's own
   grammars: TypeScript and JavaScript with JSX (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`,
@@ -529,7 +534,8 @@ Shift on many keyboard layouts. On macOS, **Ctrl means Control, not Command**.
 | `Ctrl-b v` | [Review what AI agents changed](#review-ai-changes): keep or undo each change; again focuses the review, and when focused maximizes / restores it |
 | `Ctrl-b i` | [Hand the AI pane where you are](#ai-panes-see-your-editor): the file and the lines you selected, typed into its prompt as `@file#L10-20`, and on to that pane |
 | `Ctrl-b I` | [Give the AI pane a screenshot](#screenshots-and-images-in-ai-panes): the image on the clipboard, else the one you just took, attached to its prompt |
-| `Ctrl-b n` | [A new conversation in the AI pane](#a-new-conversation-in-an-ai-pane): its agent or local model starts again there, on the same model |
+| `Ctrl-b n` | [A new conversation in the AI pane](#a-new-conversation-in-an-ai-pane): its agent or local model starts again there, on the same model; in the docs pane, a new topic |
+| `Ctrl-b /` | [Interactive documentation](#interactive-documentation) beside the code: ask how to do something, or Enter for the name under the cursor or the code you selected |
 | `PageUp` / `PageDown` (Fn-↑/↓ on a Mac) | Scroll a terminal or AI pane's history half a page; then ↑/↓ one line, Home/End top/bottom, Esc or typing returns. Full-screen programs (vim, less) get the keys instead |
 | `Ctrl-b [` | [Copy mode](#copying-from-terminal-and-ai-panes) in a terminal or AI pane |
 | `Ctrl-b Z` | [Copy view](#copying-from-terminal-and-ai-panes): only the focused pane's text; again to return |
@@ -828,7 +834,7 @@ change did to the code, and at the end it sums up the whole change:
 | --- | --- | --- |
 | `review_summary` | `true` | The outline under each file and at the end; `false` hides it (`i` toggles it in the review) |
 | `review_ai_auto` | `true` | Explain new agent changes by themselves once the agents stop; `false` waits for `s` |
-| `review_ai` | `"auto"` | Who explains the changes, or a list to try in order (the first one installed answers). `"auto"` tries Claude Code, Codex, Gemini, then a local model. Name one with `"claude"`, `"codex"`, `"gemini"` or `"local"`, and a model after a colon, as that CLI names it: `"claude:sonnet"`, `"local:llama3.2"`, `"codex:<model>"`, `"gemini:<model>"`. Also a command that reads the prompt on its input and answers on its output, or `"off"` |
+| `review_ai` | `"auto"` | Who explains the changes, or a list to try in order (the first one installed answers). `"auto"` tries Claude Code, Codex, Gemini, Antigravity, OpenCode, then a local model. Name one with `"claude"`, `"codex"`, `"gemini"`, `"agy"`, `"opencode"` or `"local"`, and a model after a colon, as that CLI names it: `"claude:sonnet"`, `"local:llama3.2"`, `"codex:<model>"`, `"gemini:<model>"`. Also a command that reads the prompt on its input and answers on its output, or `"off"` |
 
 Without a model, Claude Code uses Haiku (cheap and quick, which suits a summary;
 `claude:sonnet` explains more carefully for more), Codex and Gemini their own
@@ -985,6 +991,53 @@ reference to the file, and to the lines you selected, into the AI pane on screen
 With nothing selected it's the file alone. From the AI pane, `Ctrl-b i` refers to the
 editor you came from. The agent reads the file itself, and nothing is sent until you
 press Enter.
+
+### Interactive documentation
+
+`Ctrl-b /` (or `:ask`) opens a docs pane beside the code, and an AI agent answers
+in it like the official documentation, Stack Overflow and a guide to your project
+in one. Ask how to do something in the language you write, what a function does,
+or where this project does a thing:
+
+```text
+❯ how do I count how often each word appears in a list?
+```
+
+The answer names the function that does it and its import (`collections.Counter`),
+gives its signature and what its parameters mean, then a short example in your
+language and **what the example prints**, with the common pitfall. Agents that can
+run commands here (Claude Code, Codex, OpenCode) run the example in a scratch folder
+of their own and show what it really printed; the others mark it **Expected
+output**. When your project already has a helper for it, the answer points to it
+(`src/util.py:40`).
+
+| In the docs pane | |
+| --- | --- |
+| Type, Enter | Ask; follow-ups know what was asked before (`and in reverse?`) |
+| Enter on an empty line | Explain the name under the cursor (`read_csv`), or the code you selected, in the file you came from |
+| `Ctrl-y` | Copy the code example on screen |
+| ↑↓ PgUp PgDn, Home End | Scroll the answers |
+| `Ctrl-u` | Clear the question |
+| `Esc` | Stop an answer on its way; else back to your code |
+| `Ctrl-b n` | A new topic: the questions before are forgotten |
+
+`:ask how do I parse a date?` asks at once. The question goes with where you are:
+the file and its language, the line, and what you selected. While the agent works,
+the pane says what it's doing (`reading app.py`, `searching the web for …`,
+`running python3 example.py`).
+
+**Which agent:** `docs_ai` in `config.toml`, `"auto"` by default: the first installed
+of Claude Code (on Sonnet), Codex, Gemini CLI, Antigravity, OpenCode, then a local
+model. Name one (`docs_ai = "codex"`), one with a model (`"claude:opus"`), a list to
+try in order, a command of yours that reads the question on its input, or `"off"`.
+It runs in the background with your sign-in and subscription, one run per question;
+no skill is needed, as every agent gets the same instructions with the question.
+
+**It changes nothing in your project.** Each agent runs read-only: Claude Code with
+only its reading, search and web tools, and commands in its sandbox, which may write
+only in the scratch folder; Codex in its sandbox, writing only there; Gemini and
+Antigravity in plan mode. OpenCode is told to keep to the scratch folder. The pane
+keeps its answers with your [session](#sessions).
 
 ### Editor: normal mode
 
@@ -1813,6 +1866,7 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 :ai new                   A new conversation in the AI pane: its CLI starts again there (Ctrl-b n)
 :ai local [model]         Your local LLM ([ai.local], else your model server, else Ollama / LM Studio)
 :ai <name> [model]        A launcher you defined as [ai.<name>]
+:ask [question]           Interactive documentation beside the code; a question is asked at once (Ctrl-b /)
 :themes                   Theme picker with live preview (also Ctrl-b t)
 :theme name               Switch theme directly (e.g. dracula or visual-studio-dark)
 :preview [split]          Rendered Markdown or Nmap report in place / beside the source
@@ -1988,8 +2042,9 @@ auto or yolo modes, through their own flags ([above](#ai-authentication));
 `ai_auto_mode = false` leaves their approvals and sandboxes as their settings say.
 AI tools run with the same OS permissions as the user, and their own usage/billing
 applies. The only model requests Raido makes
-itself are the review's explanations, to the AI you name in `review_ai` (through its
-CLI, or your model server's API). A missing CLI produces a visible error without
+itself are the review's explanations and the
+[interactive documentation](#interactive-documentation)'s answers, to the AI you name
+in `review_ai` and `docs_ai` (through its CLI, or your model server's API). A missing CLI produces a visible error without
 destroying a pane.
 
 ### Your own model server (Ollama, vLLM)
@@ -2182,9 +2237,10 @@ theme immediately. The configuration supports:
 | `review_changes` | `true` | Track the files AI panes change, to [review, keep or undo](#review-ai-changes) them (`Ctrl-b v`) |
 | `review_summary` | `true` | In the review, list what each file's change added, changed and removed, and sum it up at the end, read from the code without AI |
 | `review_ai_auto` | `true` | Explain new agent changes in the review by themselves once the agents stop (`false`: only on `s`) |
+| `docs_ai` | `"auto"` | Which AI answers in the [interactive documentation](#interactive-documentation), or a list to try in order: `"auto"`, `"claude"`, `"codex"`, `"gemini"`, `"agy"`, `"opencode"`, `"local"`, each with an optional `:model`, a command, or `"off"` |
 | `paste_screenshots` | `true` | macOS: [⌘V pastes a screenshot into an AI pane](#screenshots-and-images-in-ai-panes): while one is open, a screenshot on the clipboard is saved and, while Raido is in front, its path added beside the image as text |
 | `review_ignored` | `["*.md", "*.txt"]` | [Gitignored files](#review-ai-changes) the review tracks anyway, by name (`"*.md"`) or path (`"plans/*.md"`); not over 2 MB or in dependency and build folders; `[]` for none |
-| `review_ai` | `"auto"` | Which AI explains the changes in the review, or a list to try in order: `"auto"`, `"claude"`, `"codex"`, `"gemini"`, `"local"`, each with an optional `:model`, a command, or `"off"` |
+| `review_ai` | `"auto"` | Which AI explains the changes in the review, or a list to try in order: `"auto"`, `"claude"`, `"codex"`, `"gemini"`, `"agy"`, `"opencode"`, `"local"`, each with an optional `:model`, a command, or `"off"` |
 | `claude_ide` | `true` | Let Claude Code [see your editor](#ai-panes-see-your-editor) (the file and selection) as in VS Code |
 | `format_on_save` | `["go"]` | Languages whose files get imports organized and formatting from their server on save ([Go: tidy on save](#go-tidy-on-save)) |
 | `ai_skill` | `true` | Keep the [Raido skill](#ask-your-ai-agent-about-raido) installed for the AI agents on this machine (at startup and when you launch one) |

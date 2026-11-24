@@ -93,6 +93,26 @@ pub enum SavedPane {
         #[serde(default)]
         col: u32,
     },
+    /// The interactive documentation, and the questions answered in it.
+    Docs {
+        #[serde(default)]
+        answers: Vec<SavedAnswer>,
+    },
+}
+
+/// A question the interactive documentation answered.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SavedAnswer {
+    pub question: String,
+    /// The question as the agent got it, when it differs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked: Option<String>,
+    #[serde(default)]
+    pub about: Option<String>,
+    #[serde(default)]
+    pub answer: Option<String>,
+    #[serde(default)]
+    pub by: String,
 }
 
 impl Session {

@@ -5,6 +5,7 @@ mod clipboard;
 mod config;
 mod conversations;
 mod copymode;
+mod docs;
 mod editor;
 mod encoding;
 mod finder;

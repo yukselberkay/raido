@@ -46,6 +46,11 @@ ai_skill = true
 # its auto mode, Codex, Gemini CLI and Antigravity in their yolo modes. false starts
 # each in its own default mode. Your own [ai.<name>] launchers run as you wrote them.
 ai_auto_mode = true
+# Who answers in the interactive documentation (Ctrl-b /, :ask): "auto" (the first
+# installed of Claude Code, Codex, Gemini, Antigravity, OpenCode, a local model),
+# one of those ("claude", "codex", "gemini", "agy", "opencode", "local"), with
+# ":model" if you like ("claude:opus"), a list to try in order, or "off".
+docs_ai = "auto"
 # A sound when an AI pane finishes a prompt (or stops to ask you something):
 # "default" (macOS Glass, the desktop's "complete" sound on Linux, Windows' notify
 # sound), "off", "bell" (the terminal's bell), a system sound name (macOS "Hero",
