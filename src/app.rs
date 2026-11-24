@@ -148,13 +148,59 @@ pub struct Find {
 
 /// Theme chooser: moving previews a theme live, Enter keeps it, Esc restores.
 pub struct ThemePicker {
-    /// (name, origin: "built in" / "your file" / "omarchy")
-    pub themes: Vec<(String, &'static str)>,
+    /// Light themes first, then dark ones, each by name, as VS Code lists them.
+    pub themes: Vec<ThemeChoice>,
+    /// The themes the filter lets through, in that order (indexes into `themes`).
     pub shown: Vec<usize>,
+    /// Which of `shown` is highlighted.
     pub selected: usize,
     pub filter: String,
     /// Theme active when the picker opened, restored on Esc.
     pub original: String,
+}
+
+/// A theme in the picker.
+pub struct ThemeChoice {
+    pub name: String,
+    /// "built in", "your file" or "omarchy".
+    pub origin: &'static str,
+    /// Listed under the light themes; one that doesn't load goes with the dark.
+    pub light: bool,
+}
+
+/// A line of the theme picker's list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PickerRow {
+    /// "light themes" or "dark themes", above the first of them.
+    Heading(&'static str),
+    /// The theme at this position of `shown`.
+    Theme(usize),
+}
+
+impl ThemePicker {
+    /// The list as drawn: each group of the themes shown under its heading.
+    pub fn rows(&self) -> Vec<PickerRow> {
+        let mut rows = Vec::with_capacity(self.shown.len() + 2);
+        let mut group = None;
+        for (at, &index) in self.shown.iter().enumerate() {
+            let light = self.themes[index].light;
+            if group != Some(light) {
+                group = Some(light);
+                rows.push(PickerRow::Heading(if light {
+                    "light themes"
+                } else {
+                    "dark themes"
+                }));
+            }
+            rows.push(PickerRow::Theme(at));
+        }
+        rows
+    }
+    /// The name of the highlighted theme.
+    pub fn chosen(&self) -> Option<String> {
+        let index = *self.shown.get(self.selected)?;
+        Some(self.themes[index].name.clone())
+    }
 }
 
 /// What the AI launcher pane says in the status line.
@@ -6380,15 +6426,18 @@ impl App {
         }
     }
     pub fn open_picker(&mut self) {
-        let themes: Vec<(String, &'static str)> = config::available_themes()
+        let mut themes: Vec<ThemeChoice> = config::available_themes()
             .into_iter()
-            .map(|name| {
-                let origin = config::theme_origin(&name);
-                (name, origin)
+            .map(|name| ThemeChoice {
+                origin: config::theme_origin(&name),
+                light: config::load_theme(&name).is_ok_and(|theme| theme.is_light()),
+                name,
             })
             .collect();
+        // Already by name; the sort keeps that within each group.
+        themes.sort_by_key(|theme| !theme.light);
         let original = self.config.theme.clone();
-        let selected = themes.iter().position(|(n, _)| *n == original).unwrap_or(0);
+        let selected = themes.iter().position(|t| t.name == original).unwrap_or(0);
         self.picker = Some(ThemePicker {
             shown: (0..themes.len()).collect(),
             themes,
@@ -6416,10 +6465,7 @@ impl App {
                 return Ok(());
             }
             KeyCode::Enter => {
-                let chosen = picker
-                    .shown
-                    .get(picker.selected)
-                    .map(|&i| picker.themes[i].0.clone());
+                let chosen = picker.chosen();
                 self.picker = None;
                 if let Some(name) = chosen {
                     self.command(&format!("theme {name}"))?;
@@ -6449,16 +6495,12 @@ impl App {
         if refilter {
             let filter = picker.filter.to_lowercase();
             picker.shown = (0..picker.themes.len())
-                .filter(|&i| picker.themes[i].0.to_lowercase().contains(&filter))
+                .filter(|&i| picker.themes[i].name.to_lowercase().contains(&filter))
                 .collect();
             picker.selected = 0;
         }
         // Live preview of the highlighted theme; not saved until Enter.
-        let preview = picker
-            .shown
-            .get(picker.selected)
-            .map(|&i| picker.themes[i].0.clone());
-        if let Some(name) = preview {
+        if let Some(name) = picker.chosen() {
             if name != self.config.theme {
                 if let Err(error) = self.apply_theme(&name) {
                     self.fail(format!("{name}: {error:#}"));
@@ -8351,8 +8393,26 @@ while True:
         press(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
         press(&mut app, KeyCode::Char('t'), KeyModifiers::NONE);
         let picker = app.picker.as_ref().unwrap();
-        assert_eq!(picker.themes[picker.shown[picker.selected]].0, "nord");
-        assert!(picker.themes.iter().any(|(n, _)| n == "vscode-dark-2026"));
+        assert_eq!(picker.chosen().as_deref(), Some("nord"));
+        assert!(picker.themes.iter().any(|t| t.name == "vscode-dark-2026"));
+        // Light themes come first, then dark ones, each by name, as in VS Code.
+        let group = |light: bool| -> Vec<&str> {
+            let names = picker.themes.iter().filter(|t| t.light == light);
+            names.map(|t| t.name.as_str()).collect()
+        };
+        let (light, dark) = (group(true), group(false));
+        for name in ["github-light", "solarized-light", "visual-studio-light"] {
+            assert!(light.contains(&name), "{name} is light");
+        }
+        for name in ["nord", "phosphor", "solarized-dark", "visual-studio-dark"] {
+            assert!(dark.contains(&name), "{name} is dark");
+        }
+        assert!(picker.themes[..light.len()].iter().all(|t| t.light));
+        assert!(light.is_sorted() && dark.is_sorted());
+        let rows = picker.rows();
+        assert_eq!(rows[0], PickerRow::Heading("light themes"));
+        assert_eq!(rows[light.len() + 1], PickerRow::Heading("dark themes"));
+        assert_eq!(rows.len(), picker.themes.len() + 2);
         // Moving previews the next theme immediately.
         press(&mut app, KeyCode::Down, KeyModifiers::NONE);
         assert_ne!(app.config.theme, "nord");
@@ -8365,7 +8425,13 @@ while True:
         for c in "drac".chars() {
             press(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
         }
-        assert_eq!(app.picker.as_ref().unwrap().shown.len(), 1);
+        let picker = app.picker.as_ref().unwrap();
+        assert_eq!(picker.shown.len(), 1);
+        // Only the groups with a theme that matches keep their heading.
+        assert_eq!(
+            picker.rows(),
+            [PickerRow::Heading("dark themes"), PickerRow::Theme(0)]
+        );
         assert_eq!(app.config.theme, "dracula");
         press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
         assert!(app.picker.is_none());
@@ -8385,6 +8451,12 @@ while True:
                 .map(|c| c.symbol())
                 .collect();
             assert!(screen.contains("THEMES"));
+            // The highlighted dark theme shows below its heading.
+            let heading = screen.find("dark themes").expect("dark heading");
+            assert!(screen.find("dracula").is_some_and(|at| at > heading));
+            if height > 30 {
+                assert!(screen.find("light themes").is_some_and(|at| at < heading));
+            }
         }
     }
     #[test]

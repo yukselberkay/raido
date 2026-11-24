@@ -1,5 +1,5 @@
 use crate::{
-    app::{App, InputKind, Mode, Pane},
+    app::{App, InputKind, Mode, Pane, PickerRow, ThemeChoice},
     archive::ArchiveView,
     config::{color, Theme},
     editor::Buffer,
@@ -1002,8 +1002,8 @@ fn theme_picker(frame: &mut Frame, app: &App, area: Rect) {
     };
     let theme = &app.theme;
     let width = area.width.saturating_sub(6).min(52);
-    let rows = picker.shown.len().clamp(1, 16);
-    let height = (rows as u16 + 4).min(area.height.saturating_sub(4));
+    let rows = picker.rows();
+    let height = (rows.len().clamp(1, 18) as u16 + 4).min(area.height.saturating_sub(4));
     let rect = Rect::new(
         area.x + (area.width - width) / 2,
         area.y + (area.height - height) / 2,
@@ -1038,7 +1038,12 @@ fn theme_picker(frame: &mut Frame, app: &App, area: Rect) {
         Rect::new(inner.x, inner.y, inner.width, 1),
     );
     let visible = (inner.height - 1) as usize;
-    let top = picker.selected.saturating_sub(visible.saturating_sub(1));
+    // The highlighted theme stays on screen, its heading above it when there's room.
+    let at = rows
+        .iter()
+        .position(|row| *row == PickerRow::Theme(picker.selected))
+        .unwrap_or(0);
+    let top = at.saturating_sub(visible.saturating_sub(1));
     let chosen = crate::markdown::mix(color(&theme.selection), color(&theme.accent), 0.45);
     if picker.shown.is_empty() {
         text(
@@ -1048,9 +1053,26 @@ fn theme_picker(frame: &mut Frame, app: &App, area: Rect) {
             color(&theme.muted),
         );
     }
-    for (offset, &index) in picker.shown.iter().skip(top).take(visible).enumerate() {
-        let (name, origin) = &picker.themes[index];
-        let selected = top + offset == picker.selected;
+    for (offset, row) in rows.iter().skip(top).take(visible).enumerate() {
+        let line_area = Rect::new(inner.x, inner.y + 1 + offset as u16, inner.width, 1);
+        let at = match *row {
+            // VS Code's separators: the group's name, then a rule.
+            PickerRow::Heading(label) => {
+                let rule = (inner.width as usize).saturating_sub(label.len() + 3);
+                let line = Line::from(vec![
+                    Span::styled(
+                        format!(" {label} "),
+                        Style::default().fg(color(&theme.muted)),
+                    ),
+                    Span::styled("─".repeat(rule), Style::default().fg(color(&theme.border))),
+                ]);
+                frame.render_widget(Paragraph::new(line), line_area);
+                continue;
+            }
+            PickerRow::Theme(at) => at,
+        };
+        let ThemeChoice { name, origin, .. } = &picker.themes[picker.shown[at]];
+        let selected = at == picker.selected;
         let mark = if *name == picker.original { "●" } else { " " };
         let base = if selected {
             Style::default().bg(chosen)
@@ -1073,10 +1095,7 @@ fn theme_picker(frame: &mut Frame, app: &App, area: Rect) {
                 })),
             ),
         ]);
-        frame.render_widget(
-            Paragraph::new(line),
-            Rect::new(inner.x, inner.y + 1 + offset as u16, inner.width, 1),
-        );
+        frame.render_widget(Paragraph::new(line), line_area);
     }
 }
 
@@ -1140,20 +1159,7 @@ fn copy_mode(frame: &mut Frame, mode: &mut crate::copymode::CopyMode, area: Rect
 /// yellows) stay visible on light ones.
 pub(crate) fn legible(tint: Color, theme: &Theme) -> Color {
     let (background, text) = (color(&theme.background), color(&theme.foreground));
-    let luminance = |c: Color| match c {
-        Color::Rgb(r, g, b) => {
-            let channel = |v: u8| {
-                let v = f32::from(v) / 255.0;
-                if v <= 0.03928 {
-                    v / 12.92
-                } else {
-                    ((v + 0.055) / 1.055).powf(2.4)
-                }
-            };
-            Some(0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b))
-        }
-        _ => None,
-    };
+    let luminance = crate::config::luminance;
     let contrast = |c: Color| match (luminance(c), luminance(background)) {
         (Some(a), Some(b)) => (a.max(b) + 0.05) / (a.min(b) + 0.05),
         _ => f32::MAX,

@@ -243,6 +243,10 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Changed
 
+- **The theme picker lists light and dark themes apart**, as VS Code does: the
+  light themes under their heading first, then the dark ones, each by name. Your
+  own and Omarchy themes join the group their background puts them in, and
+  filtering keeps the heading of each group that still has a match.
 - **AI agents start in auto mode**, without asking before each command or file
   edit: Claude Code with `--permission-mode auto`, Codex in its yolo mode
   (`--dangerously-bypass-approvals-and-sandbox`), Gemini CLI with `--yolo` and

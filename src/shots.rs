@@ -478,12 +478,10 @@ fn shots_theme_picker() {
     app.command("e examples/beacon.rs").unwrap();
     ready(&mut app, w, h, "rust-analyzer");
     prefix(&mut app, 't');
-    keys(&mut app, "dark");
+    // Both groups: Visual Studio Light under the light themes, Dark under the dark.
+    keys(&mut app, "visual");
     for _ in 0..12 {
-        let selected = app.picker.as_ref().and_then(|p| {
-            let index = *p.shown.get(p.selected)?;
-            Some(p.themes[index].0.clone())
-        });
+        let selected = app.picker.as_ref().and_then(|p| p.chosen());
         if selected.as_deref() == Some("visual-studio-dark") {
             break;
         }

@@ -2116,11 +2116,11 @@ Themes are plain files loaded at runtime from `~/.config/raido/themes/`
 
 | Command | Action |
 | --- | --- |
-| `:themes` (or `:theme`, or **Ctrl-b t**) | Open the **theme picker**: ↑↓ previews each theme live, typing filters, Enter keeps it (saved as default), Esc restores the previous one |
+| `:themes` (or `:theme`, or **Ctrl-b t**) | Open the **theme picker**, light themes and dark themes listed apart as in VS Code (by the theme's background): ↑↓ previews each theme live, typing filters, Enter keeps it (saved as default), Esc restores the previous one |
 | `:theme na` then **Tab** | Complete theme names; Tab again cycles matches |
 | `:theme name` | Switch; the footer says whether it is built in or which file it came from |
 
-![The theme picker filtered to dark themes, Visual Studio Dark highlighted](docs/raido-theme-picker.png)
+![The theme picker filtered to "visual": Visual Studio Light under light themes, Visual Studio Dark highlighted under dark themes](docs/raido-theme-picker.png)
 
 **Omarchy themes are picked up automatically.** On an [Omarchy](https://omarchy.org)
 desktop, every installed theme (system and `~/.config/omarchy/themes`) appears in the

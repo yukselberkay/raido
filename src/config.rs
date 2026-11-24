@@ -92,6 +92,31 @@ pub const BUNDLED_THEMES: &[(&str, &str)] = &[
     ),
 ];
 
+impl Theme {
+    /// A light theme, as VS Code sorts them: dark text reads better on its
+    /// background than light text does. A background that isn't a color (the
+    /// terminal's own) counts as dark.
+    pub fn is_light(&self) -> bool {
+        luminance(color(&self.background)).is_some_and(|l| l > 0.18)
+    }
+}
+
+/// A color's relative luminance, 0 (black) to 1 (white), as WCAG measures contrast.
+pub fn luminance(c: Color) -> Option<f32> {
+    let Color::Rgb(r, g, b) = c else {
+        return None;
+    };
+    let channel = |v: u8| {
+        let v = f32::from(v) / 255.0;
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    Some(0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b))
+}
+
 impl Default for Theme {
     fn default() -> Self {
         Self {
