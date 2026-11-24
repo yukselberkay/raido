@@ -214,6 +214,16 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Fixed
 
+- **A red dot no longer turns up on a line with nothing wrong.** Diagnostics were
+  placed by line number in the text as it was when they arrived, so adding or
+  removing lines left a dot on whatever line took that number until the language
+  server checked again (half a second or more with pyright), and a check of a text
+  you had typed past since landed on the wrong lines. Now the marks move with
+  their lines as you type, one on a removed line goes, and what a server says
+  about an older version lands where those lines are now.
+- **A dot says why it's there.** An error's or warning's message shows, faint,
+  after the line it marks (`inline_diagnostics = false` hides it); the cursor's
+  line has it at the bottom of the pane, as before.
 - **Closing a file without saving lets go of your edits.** `:q!` closed the pane
   but kept your unsaved edits in memory, so opening the file again showed them
   instead of what an AI had written to it since. Now the file opens as it is on

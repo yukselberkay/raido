@@ -18,6 +18,9 @@ auto_pairs = true
 # language's keywords and words from your open files. Tab accepts.
 autocomplete = true
 relative_numbers = false
+# A language server's error or warning shows its message, faint, after the line it
+# marks with a dot (the cursor's line has it at the bottom of the pane instead).
+inline_diagnostics = true
 # File-type icons in the explorer. true: Nerd Font glyphs when a Nerd Font is
 # available (Omarchy has one), else colored markers. "nerd"/"basic" force a style;
 # false hides them.

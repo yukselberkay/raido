@@ -9,9 +9,12 @@
 //! every tick. Documents are synced in full (simple and accepted by every server).
 use crate::{config::CommandPlugin, editor::Buffer};
 use anyhow::{bail, Context, Result};
+use ropey::Rope;
 use serde_json::{json, Value};
+use similar::{capture_diff_slices_deadline, Algorithm, DiffTag};
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    hash::Hasher,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -22,6 +25,10 @@ use std::{
 
 /// Debounce for sending edits to the server while typing.
 const SYNC_DELAY: Duration = Duration::from_millis(200);
+
+/// Texts sent to a server kept per file, to place what it says about one of them
+/// (a check of a version you have typed past since) in the text as it is now.
+const SENT_KEPT: usize = 8;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
@@ -490,6 +497,58 @@ pub fn encode(line: &str, col: usize, utf32: bool) -> usize {
 }
 
 /// LSP `character` → char column.
+/// Line `row` of `text` without its line break; empty past the end.
+fn line_of(text: &Rope, row: usize) -> String {
+    if row >= text.len_lines() {
+        return String::new();
+    }
+    let line = text.line(row).to_string();
+    line.trim_end_matches(['\n', '\r']).to_string()
+}
+
+/// Each line's hash, line break included, to tell lines apart cheaply.
+fn line_hashes(text: &Rope) -> Vec<u64> {
+    text.lines()
+        .map(|line| {
+            let mut hasher = DefaultHasher::new();
+            for chunk in line.chunks() {
+                hasher.write(chunk.as_bytes());
+            }
+            hasher.finish()
+        })
+        .collect()
+}
+
+/// Move diagnostics placed in a text whose lines hash to `old` to where their lines
+/// are in the text whose lines hash to `new`. A line rewritten in place keeps its
+/// own; one removed loses them. True when any moved or went.
+fn place(list: &mut Vec<Diagnostic>, old: &[u64], new: &[u64]) -> bool {
+    if old == new {
+        return false;
+    }
+    let mut map = vec![None; old.len()];
+    let deadline = Some(Instant::now() + Duration::from_millis(50));
+    for op in capture_diff_slices_deadline(Algorithm::Myers, old, new, deadline) {
+        let (tag, was, now) = op.as_tag_tuple();
+        if matches!(tag, DiffTag::Equal | DiffTag::Replace) {
+            for (from, to) in was.zip(now) {
+                map[from] = Some(to);
+            }
+        }
+    }
+    let before = list.len();
+    let mut moved = false;
+    list.retain_mut(|d| match map.get(d.row).copied().flatten() {
+        Some(row) => {
+            moved |= row != d.row;
+            d.row = row;
+            true
+        }
+        None => false,
+    });
+    moved || list.len() != before
+}
+
 pub fn decode(line: &str, character: usize, utf32: bool) -> usize {
     if utf32 {
         return character.min(line.chars().count());
@@ -671,6 +730,8 @@ struct Doc {
     version: i64,
     revision: u64,
     last_sent: Instant,
+    /// The last texts sent, by version, newest last.
+    sent: VecDeque<(i64, Rope)>,
 }
 
 pub struct Lsp {
@@ -683,6 +744,9 @@ pub struct Lsp {
     failed: HashMap<&'static str, String>,
     docs: HashMap<usize, Doc>,
     pub diagnostics: HashMap<usize, Vec<Diagnostic>>,
+    /// The text each buffer's diagnostics are placed in: its revision, and its
+    /// lines' hashes, to move them with their lines as the text changes.
+    placed: HashMap<usize, (u64, Vec<u64>)>,
     announced: HashSet<&'static str>,
     /// YAML and JSON files are checked against the schemas published for them
     /// (`lsp_schemas`), which their servers download; off, only their syntax is.
@@ -729,6 +793,7 @@ impl Lsp {
             failed: HashMap::new(),
             docs: HashMap::new(),
             diagnostics: HashMap::new(),
+            placed: HashMap::new(),
             announced: HashSet::new(),
             schemas: true,
             tab_width: 4,
@@ -1047,6 +1112,7 @@ impl Lsp {
                             version: 1,
                             revision: buffer.revision,
                             last_sent: Instant::now(),
+                            sent: VecDeque::from([(1, buffer.text.clone())]),
                         },
                     );
                 }
@@ -1064,10 +1130,35 @@ impl Lsp {
         events
     }
 
+    /// Keep each diagnostic on its line as you type: lines added or removed above it
+    /// move it at once, before the server has checked the text again, and one on a
+    /// line you removed goes. True when any moved.
+    pub fn follow(&mut self, buffers: &[Buffer]) -> bool {
+        let mut moved = false;
+        for (id, list) in &mut self.diagnostics {
+            let (Some(buffer), Some((revision, lines))) =
+                (buffers.get(*id), self.placed.get_mut(id))
+            else {
+                continue;
+            };
+            if *revision == buffer.revision || list.is_empty() {
+                continue;
+            }
+            let now = line_hashes(&buffer.text);
+            moved |= place(list, lines, &now);
+            (*revision, *lines) = (buffer.revision, now);
+        }
+        moved
+    }
+
     fn send_change(client: &mut Client, doc: &mut Doc, buffer: &Buffer) {
         doc.version += 1;
         doc.revision = buffer.revision;
         doc.last_sent = Instant::now();
+        doc.sent.push_back((doc.version, buffer.text.clone()));
+        if doc.sent.len() > SENT_KEPT {
+            doc.sent.pop_front();
+        }
         client.notify(
             "textDocument/didChange",
             json!({
@@ -1412,12 +1503,20 @@ impl Lsp {
                 let params = &message["params"];
                 let uri = params["uri"].as_str().unwrap_or_default();
                 let utf32 = client.utf32;
-                let Some((&buffer_id, _)) = self.docs.iter().find(|(_, d)| d.uri == uri) else {
+                let Some((&buffer_id, doc)) = self.docs.iter().find(|(_, d)| d.uri == uri) else {
                     return false;
                 };
                 let Some(buffer) = buffers.get(buffer_id) else {
                     return false;
                 };
+                // The text the server checked: the version it names, else the last
+                // one sent to it. Its lines are where these are, as you may have
+                // typed on since.
+                let version = params["version"].as_i64();
+                let checked = version
+                    .and_then(|v| doc.sent.iter().find(|(sent, _)| *sent == v))
+                    .or(doc.sent.back())
+                    .map_or_else(|| buffer.text.clone(), |(_, text)| text.clone());
                 let mut list: Vec<Diagnostic> = params["diagnostics"]
                     .as_array()
                     .into_iter()
@@ -1427,7 +1526,7 @@ impl Lsp {
                             .pointer("/range/start/line")
                             .and_then(Value::as_u64)
                             .unwrap_or(0) as usize;
-                        let line = buffer.line(row);
+                        let line = line_of(&checked, row);
                         let start = decode(
                             &line,
                             d.pointer("/range/start/character")
@@ -1465,8 +1564,11 @@ impl Lsp {
                         }
                     })
                     .collect();
+                let now = line_hashes(&buffer.text);
+                place(&mut list, &line_hashes(&checked), &now);
                 list.sort_by_key(|d| (d.row, d.severity, d.start));
                 self.diagnostics.insert(buffer_id, list);
+                self.placed.insert(buffer_id, (buffer.revision, now));
                 true
             }
             (None, Some(id)) => {
@@ -2107,6 +2209,126 @@ mod tests {
     /// The YAML server asks for its settings, and again when told they changed: a
     /// Kubernetes manifest opened is in them. The JSON server is told its settings,
     /// SchemaStore's catalog once it's here, and nothing to download when offline.
+    /// Lines added above a mark move it with its line at once; typing on its line
+    /// keeps it there; removing the line takes it away.
+    #[test]
+    fn marks_stay_on_their_lines_as_you_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("check.py");
+        std::fs::write(&path, "import re\n\nx = re.search(a, b).group(1)\nok = 1\n").unwrap();
+        let mut buffers = vec![Buffer::open(&path).unwrap()];
+        let mut lsp = Lsp::new(dir.path().into(), false, BTreeMap::new());
+        let mark = |row, message: &str| Diagnostic {
+            row,
+            start: 0,
+            end: 1,
+            severity: 1,
+            message: message.into(),
+        };
+        lsp.diagnostics
+            .insert(0, vec![mark(2, "group"), mark(3, "ok")]);
+        lsp.placed
+            .insert(0, (buffers[0].revision, line_hashes(&buffers[0].text)));
+        let rows =
+            |lsp: &Lsp| -> Vec<usize> { lsp.diagnostics[&0].iter().map(|d| d.row).collect() };
+        assert!(!lsp.follow(&buffers), "nothing typed");
+        // Three lines added under the import.
+        let b = &mut buffers[0];
+        (b.row, b.col) = (1, 0);
+        b.insert("a = 1\nb = 2\nc = 3\n");
+        assert!(lsp.follow(&buffers));
+        assert_eq!(rows(&lsp), [5, 6]);
+        // Typing on the marked line keeps its mark there.
+        let b = &mut buffers[0];
+        (b.row, b.col) = (5, 0);
+        b.insert("result_");
+        lsp.follow(&buffers);
+        assert_eq!(rows(&lsp), [5, 6]);
+        // Its line removed, its mark goes; the other moves up.
+        buffers[0].delete_lines(1);
+        assert!(lsp.follow(&buffers));
+        assert_eq!(rows(&lsp), [5]);
+        assert_eq!(lsp.diagnostics[&0][0].message, "ok");
+    }
+
+    /// A server checking a text you have typed past since names its version: what
+    /// it says lands on the lines it meant, where they are now.
+    #[cfg(unix)]
+    #[test]
+    fn a_check_of_an_older_text_lands_on_the_lines_it_meant() {
+        if !on_path("python3") {
+            return;
+        }
+        const SERVER: &str = r#"
+import json, sys
+def send(msg):
+    body = json.dumps(msg)
+    sys.stdout.write("Content-Length: %d\r\n\r\n%s" % (len(body.encode()), body)); sys.stdout.flush()
+def read():
+    length = 0
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line: sys.exit(0)
+        line = line.strip()
+        if not line: break
+        if line.lower().startswith(b"content-length:"): length = int(line.split(b":")[1])
+    return json.loads(sys.stdin.buffer.read(length))
+while True:
+    msg = read(); method = msg.get("method")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {"capabilities": {}}})
+    elif method == "textDocument/didChange":
+        # Late: its check of version 1, whose line 2 had the problem.
+        send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {
+            "uri": msg["params"]["textDocument"]["uri"], "version": 1, "diagnostics": [
+            {"range": {"start": {"line": 2, "character": 4}, "end": {"line": 2, "character": 9}},
+             "severity": 1, "message": "late"}]}})
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("check.py");
+        std::fs::write(&path, "import re\n\nx = re.search(a, b).group(1)\n").unwrap();
+        let mut buffers = vec![Buffer::open(&path).unwrap()];
+        let mut overrides = BTreeMap::new();
+        overrides.insert(
+            "python".to_string(),
+            CommandPlugin {
+                program: "python3".into(),
+                args: vec!["-c".into(), SERVER.into()],
+            },
+        );
+        let mut lsp = Lsp::new(dir.path().into(), true, overrides);
+        lsp.sync(&buffers, &[0]);
+        for _ in 0..300 {
+            lsp.poll(&buffers);
+            if lsp.docs.contains_key(&0) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        // Two lines added at the top: version 2 is sent, and the server answers
+        // about version 1.
+        let b = &mut buffers[0];
+        (b.row, b.col) = (0, 0);
+        b.insert("# one\n# two\n");
+        thread::sleep(SYNC_DELAY);
+        lsp.sync(&buffers, &[0]);
+        // Typed on before the answer comes: it lands where that line is now.
+        let b = &mut buffers[0];
+        (b.row, b.col) = (0, 0);
+        b.insert("# three\n");
+        for _ in 0..300 {
+            lsp.poll(&buffers);
+            if lsp.diagnostics.contains_key(&0) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let found = &lsp.diagnostics[&0];
+        assert_eq!(found.len(), 1);
+        assert_eq!((found[0].row, found[0].start, found[0].end), (5, 4, 9));
+        assert_eq!(buffers[0].line(5), "x = re.search(a, b).group(1)");
+    }
+
     #[cfg(unix)]
     #[test]
     fn yaml_and_json_servers_get_their_schemas() {

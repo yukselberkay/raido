@@ -172,6 +172,9 @@ pub struct Config {
     pub autocomplete: bool,
     pub shell: Option<String>,
     pub relative_numbers: bool,
+    /// An error's or warning's message after the line it marks, faint, so a red or
+    /// yellow dot always says why it's there.
+    pub inline_diagnostics: bool,
     /// The minimap beside the code: the whole file small, where you are, what changed.
     pub minimap: bool,
     /// File-type icons in the explorer: `true` (auto), `"nerd"`, `"basic"` or `false`.
@@ -279,6 +282,7 @@ impl Default for Config {
             autocomplete: true,
             shell: None,
             relative_numbers: false,
+            inline_diagnostics: true,
             minimap: true,
             icons: Icons::Auto,
             show_hidden: true,

@@ -470,6 +470,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     &theme,
                     active && app.input.is_none(),
                     app.config.relative_numbers,
+                    app.config.inline_diagnostics,
                     app.config.tab_width,
                     bare,
                 );
@@ -1759,6 +1760,9 @@ fn sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
     git_section(frame, app, regions[1]);
 }
 
+/// The fewest columns a diagnostic's message is shown in after its line.
+const INLINE_ROOM: usize = 12;
+
 #[allow(clippy::too_many_arguments)]
 fn editor(
     frame: &mut Frame,
@@ -1771,6 +1775,7 @@ fn editor(
     theme: &Theme,
     active: bool,
     relative: bool,
+    inline: bool,
     tab_width: usize,
     bare: bool,
 ) -> Option<(u16, u16)> {
@@ -1895,6 +1900,33 @@ fn editor(
             Paragraph::new(Line::from(spans)),
             Rect::new(area.x + gutter, y, width, 1),
         );
+        // Why a line has a dot: an error's or warning's message after its text,
+        // faint, where there's room. The cursor's line has it in the footer.
+        if inline && !bare && !current_row {
+            if let Some(d) = marks.iter().find(|d| d.severity <= 2) {
+                let at = (display_width(raw.chars(), tab_width) + 3).saturating_sub(buffer.hscroll);
+                let room = (width as usize).saturating_sub(at);
+                if room >= INLINE_ROOM {
+                    let message = printable(&d.message);
+                    let shown = if message.width() > room {
+                        format!("{}…", cut(&message, room - 1))
+                    } else {
+                        message
+                    };
+                    let faint = crate::markdown::mix(
+                        severity_color(theme, d.severity),
+                        color(&theme.background),
+                        0.4,
+                    );
+                    text(
+                        frame,
+                        Rect::new(area.x + gutter + at as u16, y, room as u16, 1),
+                        shown,
+                        faint,
+                    );
+                }
+            }
+        }
         for d in &marks {
             let x0 = display_width(raw.chars().take(d.start), tab_width);
             let x1 = display_width(raw.chars().take(d.end), tab_width).max(x0 + 1);

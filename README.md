@@ -1372,7 +1372,7 @@ are installed); by hand, install a server once:
 
 | Feature | How |
 | --- | --- |
-| Diagnostics | A `●` in the gutter, underlined code, and the message at the bottom of the pane when the cursor is on that line; `]d` / `[d` jump between them. The underline takes the problem's color in terminals that color underlines (iTerm2, Ghostty, kitty, WezTerm, foot, VS Code, tmux); elsewhere, including macOS Terminal.app, it's plain and the `●` keeps the color |
+| Diagnostics | A `●` in the gutter, underlined code, and an error's or warning's message, faint, after the line (`inline_diagnostics`); on the cursor's line it's at the bottom of the pane instead. The marks move with their lines as you type, before the server checks again. `]d` / `[d` jump between them. The underline takes the problem's color in terminals that color underlines (iTerm2, Ghostty, kitty, WezTerm, foot, VS Code, tmux); elsewhere, including macOS Terminal.app, it's plain and the `●` keeps the color |
 | Hover | `K` shows types and docs in a popup; any key closes it |
 | Go to definition | `gd` opens the definition (even in another file); `Ctrl-o` jumps back |
 | Completion | Pops up after two letters or `.`; `Ctrl-Space` or `Ctrl-n` asks; keywords and words from your files without a server. Accepting one that needs an import adds it (`useState` → `import { useState } from "react"`), as VS Code does |
@@ -2251,6 +2251,7 @@ theme immediately. The configuration supports:
 | `smart_indent` | `true` | [Language-aware](#language-aware-typing) Enter, `o`, Tab/Shift-Tab and closers |
 | `auto_pairs` | `true` | Brackets and quotes close themselves; typing the closer steps over it |
 | `autocomplete` | `true` | Suggestions pop up after two letters of a word (language server, else keywords and words from your files) |
+| `inline_diagnostics` | `true` | A language server's error or warning shows its message, faint, after the line its dot marks (the cursor's line shows it in the pane's footer) |
 | `relative_numbers` | `false` | Relative line numbers except the current line; type the shown number, then `j`/Enter (down) or `k`/`-` (up) |
 | `minimap` | `true` | The [minimap](#minimap) beside editors with room for it; `:minimap` hides it until you quit |
 | `icons` | `true` | Explorer file-type icons: `true` picks Nerd Font glyphs when a Nerd Font is available, else colored markers; `"nerd"`/`"basic"` force one; `false` for none |

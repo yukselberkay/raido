@@ -2182,6 +2182,8 @@ impl App {
         let (replies, changed) = self.lsp.poll(&self.buffers);
         events.extend(replies);
         self.redraw |= changed || !events.is_empty();
+        // Marks stay on their lines as you type, before the server checks again.
+        self.redraw |= self.lsp.follow(&self.buffers);
         for event in events {
             self.lsp_event(event);
         }
@@ -7718,6 +7720,63 @@ mod tests {
         // gc1j comments this line and the next.
         keys(&mut app, "uggjgc1j");
         assert_eq!(text(&mut app), "1\n# 2\n# 3\n4\n5\n6\n");
+    }
+    /// A line a language server marks says why after its text, faint; the cursor's
+    /// line has it in the footer instead, and `inline_diagnostics = false` hides it.
+    #[test]
+    fn a_marked_line_says_why_after_its_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("check.py");
+        std::fs::write(&path, "import re\nx = re.search(a, b).group(1)\ny = 2\n").unwrap();
+        let mut app = App::new(dir.path().into(), Some(path), false).unwrap();
+        let id = app.buffer_id().unwrap();
+        let mark = |row, severity, message: &str| crate::lsp::Diagnostic {
+            row,
+            start: 0,
+            end: 1,
+            severity,
+            message: message.into(),
+        };
+        app.lsp.diagnostics.insert(
+            id,
+            vec![
+                mark(1, 1, "\"group\" is not a known attribute of \"None\""),
+                mark(2, 4, "y is not accessed"),
+            ],
+        );
+        let line = |rows: &[String], text: &str| -> String {
+            rows.iter()
+                .find(|r| r.contains(text))
+                .cloned()
+                .unwrap_or_default()
+        };
+        let rows = screen(&mut app, 120, 20);
+        let marked = line(&rows, "re.search");
+        assert!(
+            marked.contains("group(1)   \"group\" is not a known attribute of \"None\""),
+            "{marked}"
+        );
+        // A hint's dot is faint enough: no message.
+        assert!(!line(&rows, "y = 2").contains("not accessed"));
+        // Narrow, the message is cut to fit.
+        let rows = screen(&mut app, 105, 20);
+        let marked = line(&rows, "re.search");
+        assert!(
+            marked.contains("\"group\" is") && marked.contains('…'),
+            "{marked}"
+        );
+        // Too narrow for a few words: only the dot.
+        let rows = screen(&mut app, 75, 20);
+        assert!(!line(&rows, "re.search").contains("group\" is"));
+        // On the cursor's line it's in the footer, not after the text.
+        app.command("2").unwrap();
+        let rows = screen(&mut app, 120, 20);
+        assert!(!line(&rows, "re.search").contains("known attribute"));
+        assert!(rows.iter().any(|r| r.contains("● \"group\" is not")));
+        app.command("1").unwrap();
+        app.config.inline_diagnostics = false;
+        let rows = screen(&mut app, 120, 20);
+        assert!(!line(&rows, "re.search").contains("known attribute"));
     }
     #[test]
     fn option_and_cmd_arrows_move_by_word_and_line_like_a_mac() {
