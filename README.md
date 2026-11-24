@@ -1055,6 +1055,7 @@ keeps its answers with your [session](#sessions).
 | `gg` / `G` | First / last line |
 | `42G` or `:42` then Enter | Go to line 42 (line numbers are one-based) |
 | `15j` / `15k`, `15` Enter / `15-`, `:+15` / `:-15` | Jump 15 lines down / up — the numbers shown by `:set rnu` |
+| `d3j` / `d3k`, `y3j` / `y3k`, `gc3j` / `gc3k` | Delete / copy / comment the cursor's line and the 3 below / above it |
 | `10j`, `3w`, `5x`, `3dd` | Repeat a movement, character or line deletion |
 | PageUp / PageDown | Move 20 lines up/down |
 | `Ctrl-u` / `Ctrl-d` | Move 15 lines up/down |

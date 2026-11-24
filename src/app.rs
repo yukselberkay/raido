@@ -4879,9 +4879,17 @@ impl App {
                 // Relative numbers show distances; say how to use the one typed.
                 if self.config.relative_numbers {
                     let n = &self.count;
-                    self.notice(format!(
-                        "{n} · j/↓/Enter: {n} lines down · k/↑/-: {n} lines up · G: line {n}"
-                    ));
+                    let reach = |verb: &str, typed: &str| {
+                        format!("{typed}{n} · j: {verb} this line and {n} below · k: and {n} above")
+                    };
+                    self.notice(match self.pending {
+                        Some('d') => reach("deletes", "d"),
+                        Some('y') => reach("copies", "y"),
+                        Some(COMMENT_LINES) => reach("comments", "gc"),
+                        _ => format!(
+                            "{n} · j/↓/Enter: {n} lines down · k/↑/-: {n} lines up · G: line {n}"
+                        ),
+                    });
                 }
                 return Ok(());
             }
@@ -4919,6 +4927,39 @@ impl App {
                 (COMMENT_LINES, KeyCode::Char('c')) => {
                     let first = b.row;
                     return self.toggle_comment_lines(first, first + count - 1);
+                }
+                // gc3j / gc3k: this line and the 3 below or above it.
+                (COMMENT_LINES, code) if is_line_motion(code) => {
+                    let (first, last) = line_reach(b.row, count, b.lines(), code);
+                    return self.toggle_comment_lines(first, last);
+                }
+                // d3j / y3k: this line and the 3 below or above it, as far as the
+                // relative numbers show; past the end, the lines that are left.
+                ('d', code) if is_line_motion(code) => {
+                    let (first, last) = line_reach(b.row, count, b.lines(), code);
+                    b.row = first;
+                    let lines = b.delete_lines(last - first + 1);
+                    let n = lines.lines().count();
+                    self.clipboard.copy(lines, true);
+                    if n > 1 {
+                        self.notice(format!("{n} lines deleted · u undoes, p pastes them"));
+                    }
+                }
+                ('y', code) if is_line_motion(code) => {
+                    let (first, last) = line_reach(b.row, count, b.lines(), code);
+                    let row = b.row;
+                    b.row = first;
+                    let (start, end) = b.line_span(last - first + 1);
+                    let mut lines = b.slice(start, end);
+                    if !lines.ends_with('\n') {
+                        lines.push('\n');
+                    }
+                    // Like Vim, the cursor goes to the top of what was copied.
+                    b.row = row.min(first);
+                    b.clamp();
+                    let n = lines.lines().count();
+                    self.clipboard.copy(lines, true);
+                    self.notice(format!("{n} lines copied · p pastes below, P above"));
                 }
                 ('g', KeyCode::Char('d')) => return self.lsp_request(lsp::Kind::Definition),
                 (']', KeyCode::Char('d')) => self.next_diagnostic(false),
@@ -7477,6 +7518,21 @@ fn grows(edit: &(usize, usize, String)) -> isize {
 /// The key `gc` waits on: a second `c` comments out lines (`gcc`).
 const COMMENT_LINES: char = '\u{1}';
 
+/// j / k / ↓ / ↑ after an operator: lines down or up from the cursor's.
+fn is_line_motion(code: KeyCode) -> bool {
+    matches!(code, KeyCode::Char('j' | 'k') | KeyCode::Down | KeyCode::Up)
+}
+
+/// The lines `count` j's or k's (`code`) reach from `row`, the row included, as the
+/// first and last of them; kept inside the `lines` there are.
+fn line_reach(row: usize, count: usize, lines: usize, code: KeyCode) -> (usize, usize) {
+    if matches!(code, KeyCode::Char('k') | KeyCode::Up) {
+        (row.saturating_sub(count), row)
+    } else {
+        (row, (row + count).min(lines.saturating_sub(1)))
+    }
+}
+
 fn is_vim_motion(code: KeyCode) -> bool {
     matches!(
         code,
@@ -7618,6 +7674,50 @@ mod tests {
         keys(&mut app, "ugg2yy");
         assert_eq!(app.clipboard.paste(), ("1\n2\n".into(), true));
         assert_eq!(text(&mut app), "1\n2\n3\n4\n5\n");
+    }
+    /// d3j, y2k, gc1j: an operator takes the cursor's line and the ones a count of
+    /// j or k reaches, the distance relative numbers show, as in Vim.
+    #[test]
+    fn operators_take_the_lines_a_relative_jump_reaches() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.py");
+        std::fs::write(&path, "1\n2\n3\n4\n5\n6\n").unwrap();
+        let mut app = App::new(dir.path().into(), Some(path), false).unwrap();
+        app.command("set rnu").unwrap();
+        let text = |app: &mut App| app.active_buffer().unwrap().text.to_string();
+        let row = |app: &mut App| app.active_buffer().unwrap().row;
+        let keys = |app: &mut App, keys: &str| {
+            for c in keys.chars() {
+                press(app, KeyCode::Char(c), KeyModifiers::NONE);
+            }
+        };
+        keys(&mut app, "jd2");
+        assert!(
+            app.message.contains("deletes this line and 2 below"),
+            "{}",
+            app.message
+        );
+        keys(&mut app, "j");
+        assert_eq!(text(&mut app), "1\n5\n6\n");
+        assert_eq!(app.clipboard.paste(), ("2\n3\n4\n".into(), true));
+        assert_eq!(row(&mut app), 1);
+        // One undo brings them back; dk is the line and the one above.
+        keys(&mut app, "u4Gdk");
+        assert_eq!(text(&mut app), "1\n2\n5\n6\n");
+        // y2k copies up to two lines above, the cursor going to the top of them.
+        keys(&mut app, "u5Gy2k");
+        assert_eq!(app.clipboard.paste(), ("3\n4\n5\n".into(), true));
+        assert_eq!(row(&mut app), 2);
+        assert_eq!(text(&mut app), "1\n2\n3\n4\n5\n6\n");
+        // y3j leaves the cursor; a count past the end takes what's left.
+        keys(&mut app, "y3j");
+        assert_eq!(app.clipboard.paste(), ("3\n4\n5\n6\n".into(), true));
+        assert_eq!(row(&mut app), 2);
+        keys(&mut app, "5Gd9j");
+        assert_eq!(text(&mut app), "1\n2\n3\n4\n");
+        // gc1j comments this line and the next.
+        keys(&mut app, "uggjgc1j");
+        assert_eq!(text(&mut app), "1\n# 2\n# 3\n4\n5\n6\n");
     }
     #[test]
     fn option_and_cmd_arrows_move_by_word_and_line_like_a_mac() {

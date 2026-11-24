@@ -10,6 +10,10 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **Operators reach as far as relative numbers show**, as in Vim: `d3j` deletes the
+  cursor's line and the 3 below it, `y3k` copies it and the 3 above, `gc3j`
+  comments them. Typing the count with `:set rnu` on says what `j` and `k` will do.
+
 - **Jupyter notebooks open as their cells**, as Jupyter and GitHub show them:
   Markdown cells rendered, code cells highlighted in the kernel's language with
   `In [3]:`, and under each what it printed, its result (`Out[3]:`), and its error

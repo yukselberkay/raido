@@ -4768,6 +4768,10 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
             "Delete / change / copy lines (3 = count) / paste",
         ),
         (
+            "d3j y3k gc3j",
+            "Delete / copy / comment this line and 3 below / above",
+        ),
+        (
             "v / V / Shift-arrows",
             "Select characters / lines; y copy, d cut, p replace",
         ),
