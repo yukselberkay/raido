@@ -10,6 +10,11 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **The terminal tab shows the project's name**, the folder Raido works in, instead
+  of `raido`, so a tab per project tells them apart. Its own title comes back when
+  Raido quits: from the terminal's title stack where it keeps one, and in macOS
+  Terminal, which keeps none, as its usual title.
+
 - **Archives open as a tree of their files**, read by Raido itself, so no unzip,
   tar or 7z is needed on any system: zip and what's built on it (`.jar`, `.whl`,
   `.apk`, `.vsix`, `.docx`…), tar plain or compressed with gzip, bzip2, xz or

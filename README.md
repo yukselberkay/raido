@@ -311,7 +311,9 @@ things. [CHANGELOG.md](CHANGELOG.md) lists what changed in each version.
 ## Your first five minutes
 
 1. **Open a project:** run `raido /path/to/project` (or the local binary above).
-   A directory opens a scratch editor plus the file/Git sidebar.
+   A directory opens a scratch editor plus the file/Git sidebar. The terminal tab
+   takes the project folder's name while Raido runs, so a tab per project tells
+   them apart, and gets its own title back when you quit.
 2. **Choose a file:** press `Ctrl-e`, use Up/Down to select a file or directory,
    Right to expand, Left to collapse, and Enter to open. Focus moves to the editor.
 3. **Edit:** the bottom bar initially says `NORMAL`. Press `i` to enter `INSERT`,

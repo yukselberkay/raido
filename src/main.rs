@@ -117,9 +117,38 @@ fn reset_terminal_colors() {
 const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 const MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
 
+/// The terminal tab's title while Raido runs: the project folder's name, so a tab
+/// per project tells them apart. Control characters are left out: a folder name
+/// can't end the title and slip escape sequences to the terminal.
+fn title(root: &std::path::Path) -> String {
+    let name = root.file_name().map_or_else(
+        || root.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    name.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// Save the terminal's title on its title stack (XTWINOPS 22), then show `title`
+/// in the tab and the window (OSC 0).
+fn set_title(title: &str) {
+    let mut out = io::stdout();
+    let _ = write!(out, "\x1b[22;0t\x1b]0;{title}\x07");
+    let _ = out.flush();
+}
+
+/// Give the terminal its title back: an empty one first, which makes terminals
+/// without a title stack (macOS Terminal) show their usual title again, then the
+/// one saved on the stack where there is one.
+fn reset_title() {
+    let mut out = io::stdout();
+    let _ = write!(out, "\x1b]0;\x07\x1b[23;0t");
+    let _ = out.flush();
+}
+
 struct TerminalGuard;
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        reset_title();
         reset_terminal_colors();
         let _ = disable_raw_mode();
         let _ = execute!(
@@ -259,6 +288,7 @@ fn main() -> Result<()> {
     // Restore the user's terminal even on panic; no shell or raw escape output survives.
     let old_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        reset_title();
         reset_terminal_colors();
         let _ = disable_raw_mode();
         let _ = execute!(
@@ -281,6 +311,7 @@ fn main() -> Result<()> {
         EnableFocusChange,
         Hide
     )?;
+    set_title(&title(&app.root));
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     terminal.clear()?;
     let mut applied_colors = None;
@@ -442,6 +473,16 @@ fn show_keys() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_tab_is_named_after_the_project_folder() {
+        use std::path::Path;
+        assert_eq!(title(Path::new("/Users/me/code/raido")), "raido");
+        assert_eq!(title(Path::new("/srv/my project")), "my project");
+        assert_eq!(title(Path::new("/")), "/");
+        // A folder name can't end the title and send the terminal its own escapes.
+        assert_eq!(title(Path::new("/tmp/a\x07\x1b]0;b\x1b[2J")), "a]0;b[2J");
+    }
 
     /// Every version gets a CHANGELOG.md entry: bumping `version` in Cargo.toml
     /// without one fails here.
