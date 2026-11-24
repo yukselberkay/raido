@@ -5315,7 +5315,7 @@ impl App {
     }
     fn preview_kind(&self, id: usize) -> Result<markdown::Kind> {
         markdown::kind(&self.buffers[id]).context(
-            "Preview renders Markdown files (.md, .markdown) and Nmap scans (.nmap, .gnmap, -oX XML)",
+            "Preview renders Markdown files (.md, .markdown), Jupyter notebooks (.ipynb) and Nmap scans (.nmap, .gnmap, -oX XML)",
         )
     }
     /// Switch the focused pane between the rendered view and its source, keeping place.
@@ -5343,6 +5343,9 @@ impl App {
                     markdown::Kind::Nmap => {
                         "Nmap report · e shows the raw output · [ ] jump between hosts"
                     }
+                    markdown::Kind::Notebook => {
+                        "Notebook · e edits its JSON · [ ] jump between cells"
+                    }
                 });
             }
             Some(Pane::Preview(p)) => {
@@ -5357,6 +5360,9 @@ impl App {
                 self.notice(match markdown::kind(&self.buffers[id]) {
                     Some(markdown::Kind::Nmap) => {
                         "Raw Nmap output · Ctrl-b m or :preview shows the report"
+                    }
+                    Some(markdown::Kind::Notebook) => {
+                        "Editing the notebook's JSON · Ctrl-b m or :preview shows its cells"
                     }
                     _ => "Editing Markdown source · Ctrl-b m or :preview renders it",
                 });
@@ -5376,7 +5382,9 @@ impl App {
                 self.panes.insert(self.focused, Pane::Editor(id));
                 self.notice("Editing the text · Ctrl-b m or :preview shows the grid");
             }
-            _ => bail!("Focus a Markdown file, an Nmap scan or a CSV file to preview it"),
+            _ => {
+                bail!("Focus a Markdown file, a notebook, an Nmap scan or a CSV file to preview it")
+            }
         }
         Ok(())
     }
@@ -5389,7 +5397,9 @@ impl App {
                 self.panes.insert(self.focused, Pane::Editor(id));
                 id
             }
-            _ => bail!("Focus a Markdown file, an Nmap scan or a CSV file to preview it"),
+            _ => {
+                bail!("Focus a Markdown file, a notebook, an Nmap scan or a CSV file to preview it")
+            }
         };
         if crate::sheet::is_table(&self.buffers[id]) {
             if self.panes.len() >= 12 {
@@ -8695,6 +8705,76 @@ while True:
                 assert!(screen.find("light themes").is_some_and(|at| at < heading));
             }
         }
+    }
+    #[test]
+    fn notebooks_open_as_their_cells_and_edit_as_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("counts.ipynb");
+        std::fs::write(
+            &path,
+            r##"{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": ["# Counts"]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "metadata": {},
+   "outputs": [{"name": "stdout", "output_type": "stream", "text": ["hello from the cell\n"]}],
+   "source": ["print(\"hello from the cell\")"]
+  }
+ ],
+ "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python"}},
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
+"##,
+        )
+        .unwrap();
+        let mut app = App::new(dir.path().into(), None, false).unwrap();
+        app.open(&path).unwrap();
+        assert!(matches!(
+            app.panes.get(&app.focused),
+            Some(Pane::Preview(_))
+        ));
+        let screen = |app: &mut App| -> String {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+            terminal.draw(|f| crate::ui::draw(f, app)).unwrap();
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect()
+        };
+        let shown = screen(&mut app);
+        assert!(
+            shown.contains("Counts") && shown.contains("In [1]:"),
+            "{shown}"
+        );
+        assert!(shown.contains("hello from the cell"));
+        assert!(shown.contains("Jupyter notebook  ·  Python 3  ·  2 cells"));
+        // ] goes to the next cell; e edits the JSON there.
+        press(&mut app, KeyCode::Char(']'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('e'), KeyModifiers::NONE);
+        let Some(Pane::Editor(id)) = app.panes.get(&app.focused) else {
+            panic!("the notebook's JSON in an editor")
+        };
+        let buffer = &app.buffers[*id];
+        assert_eq!(buffer.line(buffer.row).trim(), "{");
+        assert!(buffer.line(buffer.row + 1).contains("\"code\""));
+        // And back to the cells.
+        press(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('m'), KeyModifiers::NONE);
+        assert!(matches!(
+            app.panes.get(&app.focused),
+            Some(Pane::Preview(_))
+        ));
     }
     #[cfg(unix)]
     #[test]

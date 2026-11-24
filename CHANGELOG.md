@@ -10,6 +10,14 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **Jupyter notebooks open as their cells**, as Jupyter and GitHub show them:
+  Markdown cells rendered, code cells highlighted in the kernel's language with
+  `In [3]:`, and under each what it printed, its result (`Out[3]:`), and its error
+  with the traceback, its colors taken out. A plot is named for what it is
+  (`PNG image, 640 × 480`). `]` and `[` go from cell to cell; `e` edits the
+  notebook's JSON at that cell, and `Ctrl-b M` shows the JSON beside the cells,
+  which follow the cursor.
+
 - **Interactive documentation** (`Ctrl-b /`, `:ask`): ask how to do something in
   the language you write, what a function does, or how this project does a thing,
   and an AI agent answers in a pane beside the code like the official docs and

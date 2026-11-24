@@ -27,6 +27,7 @@ mod merge;
 mod minimap;
 mod model_server;
 mod nmap;
+mod notebook;
 mod omarchy;
 mod outline;
 mod platform;

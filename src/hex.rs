@@ -322,7 +322,7 @@ fn u32_le(b: &[u8], at: usize) -> Option<u32> {
 }
 
 /// The kind of file its first bytes (magic numbers) say it is.
-fn kind(b: &[u8]) -> String {
+pub(crate) fn kind(b: &[u8]) -> String {
     let starts = |magic: &[u8]| b.starts_with(magic);
     let at = |offset: usize, magic: &[u8]| b.get(offset..offset + magic.len()) == Some(magic);
     if b.is_empty() {

@@ -38,6 +38,7 @@ That is what this workspace is for:
 - [Horizontal and vertical tiles](#horizontal-and-vertical-tiles)
 - [Keyboard reference](#keyboard)
 - [Markdown preview](#markdown-preview)
+- [Jupyter notebooks](#jupyter-notebooks)
 - [Nmap scan reports](#nmap-scan-reports)
 - [Spreadsheets, CSV and databases](#spreadsheets-csv-and-databases)
 - [Archives](#archives)
@@ -428,6 +429,9 @@ the history graph appears after you make commits.
 - **Markdown preview:** `.md` files open rendered — headings, lists, task
   lists, tables, highlighted code blocks, quotes and GitHub alerts — with a live
   side-by-side preview that follows your cursor while you edit.
+- **Jupyter notebooks:** `.ipynb` files open as their cells, as Jupyter shows them —
+  Markdown rendered, code highlighted with `In [3]:`, and each cell's output, error
+  and traceback beneath it; `e` edits the notebook's JSON.
 - **Nmap scan reports:** `.nmap`, `.gnmap` and Nmap XML open as a readable report —
   hosts at a glance, ports colored by state, script output under its port, noise
   folded away.
@@ -1570,6 +1574,22 @@ fenced code with syntax highlighting, tables with alignment, rules, footnotes an
 YAML front matter. HTML is reduced to its text. Prose wraps to the pane and is
 centered at a 100-column reading width; wide tables shrink and truncate cells.
 Colors come from the active theme.
+
+### Jupyter notebooks
+
+Notebooks (`.ipynb`) open as their **cells**, the way Jupyter and GitHub show them:
+Markdown cells rendered, code cells highlighted in the kernel's language with their
+execution count (`In [3]:`), and under each what it printed, what it returned
+(`Out[3]:`), and its error with the traceback, without its terminal colors. A plot or
+another image is named for what it is (`▣ PNG image, 640 × 480`), since a terminal
+can't show it; HTML results show as their text, and a data frame as its table text.
+The footer names the kernel and counts the cells.
+
+The keys are the [Markdown preview](#markdown-preview)'s, with `]` / `[` going from
+cell to cell. A notebook is its JSON: `e` edits it at the cell you were reading,
+`Ctrl-b m` switches back, and `Ctrl-b M` puts the JSON beside the cells, which follow
+the cursor from cell to cell and re-render as you type. Raido doesn't run cells; a
+notebook a kernel rewrites on disk shows its new outputs.
 
 ### Nmap scan reports
 

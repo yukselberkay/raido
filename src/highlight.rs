@@ -195,6 +195,7 @@ impl Syntax {
                 matches!(name, ".babelrc" | ".swcrc" | ".jshintrc")
                     || name.ends_with(".jsonc")
                     || name.ends_with(".code-workspace")
+                    || name.ends_with(".ipynb")
             });
         if json_named {
             return self.by_extension("json");

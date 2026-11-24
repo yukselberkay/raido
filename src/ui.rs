@@ -4813,8 +4813,8 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         ),
         ("Tab / Shift-Tab", "Cycle open buffers"),
         (
-            "MARKDOWN · NMAP",
-            ".md files and Nmap scans open rendered, live",
+            "MARKDOWN · NOTEBOOK · NMAP",
+            ".md, .ipynb and Nmap scans open rendered, live",
         ),
         (
             ":preview / Ctrl-b m",

@@ -17,6 +17,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 /// Readable measure: wide panes center the document instead of stretching prose.
 pub const MAX_WIDTH: usize = 100;
 const MAX_SOURCE: usize = 4 * 1024 * 1024;
+/// Notebooks carry their plots as base64, which isn't shown: they may be larger.
+const MAX_NOTEBOOK: usize = 64 * 1024 * 1024;
 // Inline code keeps its spacing and never wraps at its own spaces.
 const NBSP: char = '\u{a0}';
 
@@ -34,12 +36,20 @@ pub enum Kind {
     Markdown,
     /// An Nmap scan report (`.nmap`, `.gnmap`, or Nmap's XML).
     Nmap,
+    /// A Jupyter notebook (`.ipynb`): its cells and their outputs.
+    Notebook,
 }
 
 /// How the preview pane renders `buffer`, if it renders it at all.
 pub fn kind(buffer: &Buffer) -> Option<Kind> {
     if buffer.path.as_deref().is_some_and(is_markdown) {
         Some(Kind::Markdown)
+    } else if buffer
+        .path
+        .as_deref()
+        .is_some_and(crate::notebook::is_notebook)
+    {
+        Some(Kind::Notebook)
     } else if crate::nmap::is_report(buffer) {
         Some(Kind::Nmap)
     } else {
@@ -52,6 +62,7 @@ pub fn kind(buffer: &Buffer) -> Option<Kind> {
 pub fn max_width(buffer: &Buffer) -> usize {
     match kind(buffer) {
         Some(Kind::Nmap) => crate::nmap::MAX_WIDTH,
+        Some(Kind::Notebook) => crate::notebook::MAX_WIDTH,
         _ => MAX_WIDTH,
     }
 }
@@ -78,6 +89,21 @@ impl Document {
             .is_none_or(|&(s, o)| source_line > s && at >= o)
         {
             self.anchors.push((source_line, at));
+        }
+    }
+    /// Tie source lines to rendered lines anew, for a document rendered from
+    /// something other than its source text: a notebook's cells from its JSON.
+    /// Pairs out of order are dropped.
+    pub(crate) fn set_anchors(&mut self, anchors: Vec<(usize, usize)>) {
+        self.anchors.clear();
+        for (source, rendered) in anchors {
+            if self
+                .anchors
+                .last()
+                .is_none_or(|&(s, r)| source > s && rendered >= r)
+            {
+                self.anchors.push((source, rendered));
+            }
         }
     }
     /// First rendered line of the block containing `source_line`.
@@ -129,15 +155,22 @@ impl Previews {
             .get(&id)
             .is_none_or(|c| c.revision != buffer.revision || c.width != width);
         if stale {
-            let document = if buffer.text.len_bytes() > MAX_SOURCE {
+            let kind = kind(buffer);
+            let limit = match kind {
+                Some(Kind::Notebook) => MAX_NOTEBOOK,
+                _ => MAX_SOURCE,
+            };
+            let document = if buffer.text.len_bytes() > limit {
                 render(
                     "> [!WARNING]\n> File too large to preview. Press **e** to edit the source.",
                     width,
                     theme,
                     syntax,
                 )
-            } else if kind(buffer) == Some(Kind::Nmap) {
+            } else if kind == Some(Kind::Nmap) {
                 crate::nmap::render(&buffer.text.to_string(), width, theme)
+            } else if kind == Some(Kind::Notebook) {
+                crate::notebook::render(&buffer.text.to_string(), width, theme, syntax)
             } else {
                 render(&buffer.text.to_string(), width, theme, syntax)
             };
@@ -1004,7 +1037,7 @@ pub(crate) fn wrap(spans: Vec<Span<'static>>, width: usize) -> Vec<Vec<Span<'sta
 }
 
 /// Plain-text view of an HTML block: comments and tags dropped, images keep their alt text.
-fn strip_html(html: &str) -> String {
+pub(crate) fn strip_html(html: &str) -> String {
     let mut out = String::new();
     let mut rest = html;
     while let Some(start) = rest.find('<') {
