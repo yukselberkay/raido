@@ -189,6 +189,11 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Fixed
 
+- **Browsing the explorer no longer opens a pane per file.** A file open already
+  (one whose pane you closed, one a definition took you to, one a restored session
+  loaded) showed in the preview pane, after which every file browsed opened in a
+  new pane of its own, until there was no room left. Browsing past such files now
+  keeps to the one preview pane; Enter or an edit keeps a file there, as before.
 - A long completion list (TypeScript's globals) no longer leaves out what you're
   typing: the suggestions for the word come first before the list is cut at 300.
 

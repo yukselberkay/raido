@@ -553,6 +553,10 @@ pub struct App {
     /// Buffer opened by browsing the sidebar, and its revision then. It is reused
     /// for the next browsed file unless it was opened with Enter or edited.
     peek: Option<(usize, u64)>,
+    /// A pane browsing filled with a file that was open already: (pane, buffer, its
+    /// revision then). The next file browsed takes its place there, as it takes the
+    /// preview's, unless that file was opened with Enter or edited.
+    peek_pane: Option<(usize, usize, u64)>,
     /// The agent skill was installed or refreshed this session.
     skill_ready: bool,
     /// Screen position of the editor cursor, recorded at draw time for popups.
@@ -733,6 +737,7 @@ impl App {
             known_files: Vec::new(),
             recent: Vec::new(),
             peek: None,
+            peek_pane: None,
             skill_ready: false,
             cursor_at: None,
             jumps: Vec::new(),
@@ -1266,7 +1271,8 @@ impl App {
             };
             let b = &self.buffers[buffer];
             let blank = b.path.is_none() && !b.dirty && b.text.len_chars() == 0;
-            self.tiles.contains(pane) && (blank || preview == Some(buffer))
+            let browsed = self.peek_pane == Some((pane, buffer, b.revision));
+            self.tiles.contains(pane) && (blank || browsed || preview == Some(buffer))
         };
         std::iter::once(self.focused)
             .chain(self.panes.keys().copied())
@@ -1431,6 +1437,16 @@ impl App {
             (_, _, _, None) => {
                 self.add_pane(view(), Axis::Horizontal);
             }
+        }
+        // A file open already, browsed onto the screen: its pane is browsing's now.
+        if peek && existing.is_some() && shown.is_none() {
+            self.peek_pane = self
+                .panes
+                .iter()
+                .find(|(pane, p)| self.tiles.contains(**pane) && p.buffer() == Some(id))
+                .map(|(pane, _)| (*pane, id, self.buffers[id].revision));
+        } else if !peek && self.peek_pane.is_some_and(|(_, buffer, _)| buffer == id) {
+            self.peek_pane = None;
         }
         let eol = if crowded {
             format!("{eol} · 12 panes are open, so it took this one's place")
@@ -8458,6 +8474,63 @@ while True:
                 assert!(screen.find("light themes").is_some_and(|at| at < heading));
             }
         }
+    }
+    #[test]
+    fn browsing_past_files_open_already_keeps_to_one_preview_pane() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a.rs", "b.rs", "c.rs", "d.rs", "e.rs", "f.rs"] {
+            std::fs::write(dir.path().join(name), format!("// {name}\n")).unwrap();
+        }
+        let mut app = App::new(dir.path().into(), None, false).unwrap();
+        app.open(&dir.path().join("a.rs")).unwrap();
+        // c.rs and d.rs were open before (a pane since closed, a definition gone
+        // to): loaded, but on screen nowhere.
+        for name in ["c.rs", "d.rs"] {
+            let buffer = Buffer::open(&dir.path().join(name)).unwrap();
+            app.buffers.push(buffer);
+        }
+        let shown = |app: &App| -> Vec<String> {
+            let mut names: Vec<String> = app
+                .panes
+                .values()
+                .filter_map(|p| p.buffer().map(|b| app.buffers[b].name()))
+                .collect();
+            names.sort();
+            names
+        };
+        press(&mut app, KeyCode::Char('e'), KeyModifiers::CONTROL);
+        assert_eq!(
+            app.tree.entries[app.tree.selected]
+                .path
+                .file_name()
+                .unwrap(),
+            "a.rs"
+        );
+        // Each file shows beside a.rs in the one preview pane, those open already too.
+        for name in ["b.rs", "c.rs", "d.rs", "e.rs", "f.rs"] {
+            press(&mut app, KeyCode::Down, KeyModifiers::NONE);
+            assert_eq!(shown(&app), ["a.rs", name], "browsing onto {name}");
+            assert!(app.sidebar_focus);
+        }
+        // And back up, past them again.
+        for name in ["e.rs", "d.rs", "c.rs"] {
+            press(&mut app, KeyCode::Up, KeyModifiers::NONE);
+            assert_eq!(shown(&app), ["a.rs", name], "browsing back onto {name}");
+        }
+        // Enter keeps the file it shows: the next file goes beside it.
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('e'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(shown(&app), ["a.rs", "b.rs", "c.rs"]);
+        // Past c.rs, on screen already, d.rs takes the preview's place again.
+        press(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        press(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(shown(&app), ["a.rs", "c.rs", "d.rs"]);
+        // An edit keeps it too.
+        let d = app.buffers.iter().position(|b| b.name() == "d.rs").unwrap();
+        app.buffers[d].insert("edit ");
+        press(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(shown(&app), ["a.rs", "c.rs", "d.rs", "e.rs"]);
     }
     #[test]
     fn browsing_the_explorer_previews_files_in_one_reused_buffer() {
