@@ -1687,6 +1687,27 @@ number.
 The status line says `Markdown · rendered`. `markdown_live = false` in `config.toml`
 draws notes as written, and `.md` files open in the preview, as they used to.
 
+**The `/` menu**, as in Notion: in insert mode, `/` at the start of a line or after
+a space opens a menu of blocks to write. Type to find one, by its name or another
+word (`/h2`, `/todo`, `/checkbox`, `/code`, `/warn`), then Enter or Tab; ↑↓ move,
+Esc closes it and keeps what you typed, as does a space or a word that matches
+nothing. On an empty line (or an empty list item) the line becomes the block; after
+text, the block starts the line below.
+
+| Block | Writes |
+| --- | --- |
+| Text, Heading 1–3 | the line without its marks, `#`, `##`, `###` |
+| Bulleted, Numbered, To-do list | `- `, `1. `, `- [ ] ` |
+| Quote, Callout · Note, Tip, Important, Warning, Caution | `> `, `> [!NOTE]` and the others |
+| Code block | a fenced block, the cursor after its ```` ``` ```` for the language |
+| Table | a table of two columns, the cursor in its first cell |
+| Divider, Toggle, Math block | `---`, `<details>` with a `<summary>`, `$$ … $$` |
+| Link, Image | `[](…)`, `![](…)` where the `/` was, the cursor inside |
+| Date | today's date where the `/` was |
+| Table of contents | a list of links to the note's headings, nested by level |
+
+A `/` in a path (`src/`), in inline code or in a code block is just a `/`.
+
 ### Markdown preview
 
 With `markdown_live = false`, existing `.md`/`.markdown` files open **rendered**

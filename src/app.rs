@@ -314,6 +314,18 @@ pub struct Menu {
     /// picked one with ↑↓ (Tab always does).
     pub auto: bool,
     pub picked: bool,
+    /// What it completes, and so what picking does.
+    pub kind: MenuKind,
+}
+
+/// What a completion menu completes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MenuKind {
+    /// The word being typed: from the language server, its keywords, your files.
+    #[default]
+    Words,
+    /// A note's `/` menu: the block picked replaces the `/` and what was typed.
+    Blocks,
 }
 
 /// How to start an AI CLI pane.
@@ -4809,6 +4821,11 @@ impl App {
         if self.menu.is_some() {
             self.menu_filter();
         }
+        if let (Some('/'), Some(id), None) = (typed, self.buffer_id(), &self.menu) {
+            if self.blocks_menu(id) {
+                return Ok(());
+            }
+        }
         if let (Some(c), Some(id)) = (typed, self.buffer_id()) {
             // In a string or a comment, suggestions only come when asked (Ctrl-Space).
             if self.in_string_or_comment(id) {
@@ -4823,6 +4840,72 @@ impl App {
             }
         }
         Ok(())
+    }
+    /// A `/` just typed in a note, at the start of its text or after a space (not in
+    /// code): the menu of blocks to write, as in Notion. True when it opened.
+    fn blocks_menu(&mut self, id: usize) -> bool {
+        let b = &self.buffers[id];
+        if language::Lang::of(b) != language::Lang::Markdown || b.col == 0 {
+            return false;
+        }
+        let line = b.line(b.row);
+        if !crate::notes::opens_menu(&line, b.col - 1) {
+            return false;
+        }
+        let text = b.text.to_string();
+        if crate::notes::fence_at(text.lines(), b.row).is_some() {
+            return false;
+        }
+        let items: Vec<lsp::Completion> = crate::notes::BLOCKS
+            .iter()
+            .map(|block| {
+                lsp::Completion::found_by(
+                    block.label,
+                    block.detail,
+                    &format!("{} {}", block.label, block.words),
+                )
+            })
+            .collect();
+        self.menu = Some(Menu {
+            shown: (0..items.len()).collect(),
+            items,
+            selected: 0,
+            buffer: id,
+            row: b.row,
+            start: b.col,
+            auto: false,
+            picked: false,
+            kind: MenuKind::Blocks,
+        });
+        true
+    }
+    /// The block picked from a note's `/` menu, written in place of the `/` and
+    /// what was typed after it.
+    fn write_block(&mut self, menu: &Menu, label: &str) {
+        let Some(block) = crate::notes::block(label) else {
+            return;
+        };
+        use crate::notes::Insert;
+        let today = match block.insert {
+            Insert::Date => crate::notes::today(),
+            _ => String::new(),
+        };
+        let contents = match block.insert {
+            Insert::Contents => crate::notes::contents(&self.buffers[menu.buffer].text.to_string()),
+            _ => String::new(),
+        };
+        if block.insert == Insert::Contents && contents.is_empty() {
+            self.notice("No headings in this note yet: a table of contents links to them");
+            return;
+        }
+        let b = &mut self.buffers[menu.buffer];
+        let line = b.line(menu.row);
+        let slash = menu.start.saturating_sub(1);
+        let edit = crate::notes::apply(block, &line, slash, b.col, &today, &contents);
+        let start = b.char_index(menu.row, edit.from);
+        let end = b.char_index(menu.row, edit.to);
+        b.replace(start, end, &edit.text);
+        b.set_index(start + edit.cursor);
     }
     /// The word being typed before the cursor: (start column, text).
     fn typed_word(&self, id: usize) -> (usize, String) {
@@ -4891,6 +4974,7 @@ impl App {
             start,
             auto,
             picked: false,
+            kind: MenuKind::Words,
         });
         self.menu_filter();
         self.menu.is_some()
@@ -5346,6 +5430,7 @@ impl App {
                     start,
                     auto: typing,
                     picked: false,
+                    kind: MenuKind::Words,
                 });
                 self.menu_filter();
             }
@@ -5384,13 +5469,23 @@ impl App {
             .skip(menu.start)
             .take(b.col - menu.start)
             .collect();
-        if prefix.chars().any(|c| !(c.is_alphanumeric() || c == '_')) {
+        let fits = |c: char| match menu.kind {
+            MenuKind::Words => c.is_alphanumeric() || c == '_',
+            MenuKind::Blocks => c.is_alphanumeric() || c == '_' || c == '-',
+        };
+        if !prefix.chars().all(fits) {
             self.menu = None;
             return;
         }
         menu.shown = (0..menu.items.len())
             .filter(|&i| menu.items[i].matches(&prefix))
             .collect();
+        // Blocks whose name starts with what's typed come first (`/t`: Text, Table).
+        if menu.kind == MenuKind::Blocks {
+            let lower = prefix.to_lowercase();
+            menu.shown
+                .sort_by_key(|&i| !menu.items[i].label.to_lowercase().starts_with(&lower));
+        }
         menu.selected = 0;
         // Nothing left to complete: no suggestions, or only the word already typed.
         let done = match menu.shown[..] {
@@ -5417,6 +5512,10 @@ impl App {
             return;
         };
         let item = menu.items[menu.shown[menu.selected]].clone();
+        if menu.kind == MenuKind::Blocks {
+            self.write_block(&menu, &item.label);
+            return;
+        }
         let b = &mut self.buffers[menu.buffer];
         let start_col = item.start.unwrap_or(menu.start).min(b.col);
         let start = b.char_index(menu.row, start_col);
@@ -9468,6 +9567,81 @@ while True:
         let error = app.command("ask anything").unwrap_err().to_string();
         assert!(error.contains("docs_ai"), "{error}");
     }
+    #[test]
+    fn a_slash_in_a_note_offers_its_blocks_as_notion_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.md");
+        std::fs::write(&path, "").unwrap();
+        let mut app = App::new(dir.path().into(), Some(path), false).unwrap();
+        let id = app.buffer_id().unwrap();
+        let typing = |app: &mut App, text: &str| {
+            for c in text.chars() {
+                press(app, KeyCode::Char(c), KeyModifiers::NONE);
+            }
+        };
+        let first = |app: &App| {
+            let menu = app.menu.as_ref().expect("the menu");
+            (
+                menu.kind,
+                menu.items[menu.shown[menu.selected]].label.clone(),
+            )
+        };
+        press(&mut app, KeyCode::Char('i'), KeyModifiers::NONE);
+        // `/` opens the blocks; typing finds one, by name or another word.
+        typing(&mut app, "/");
+        assert_eq!(first(&app), (MenuKind::Blocks, "Text".into()));
+        typing(&mut app, "h2");
+        assert_eq!(first(&app).1, "Heading 2");
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        typing(&mut app, "Plan");
+        assert_eq!(app.buffers[id].line(0), "## Plan");
+        // After text, the block goes on the next line, as in Notion.
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        typing(&mut app, "Ideas /checkbox");
+        assert_eq!(first(&app).1, "To-do list");
+        press(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        typing(&mut app, "buy milk");
+        assert_eq!(app.buffers[id].line(1), "Ideas");
+        assert_eq!(app.buffers[id].line(2), "- [ ] buy milk");
+        // On the list's next (empty) item, a code block takes the line.
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        typing(&mut app, "/code");
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        let b = &app.buffers[id];
+        assert_eq!(
+            (b.line(3), b.line(4), b.line(5)),
+            ("```".into(), String::new(), "```".into())
+        );
+        assert_eq!((b.row, b.col), (3, 3));
+        // In code, a `/` is a `/`.
+        press(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        typing(&mut app, "x = a /");
+        assert!(app.menu.is_none());
+        // Nor in a path, or when nothing's found; Esc keeps what was typed.
+        press(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        press(&mut app, KeyCode::End, KeyModifiers::NONE);
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        typing(&mut app, "see src/");
+        assert!(app.menu.is_none());
+        typing(&mut app, " /zzz");
+        assert!(app.menu.is_none(), "nothing found");
+        typing(&mut app, " /da");
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.buffers[id].line(6), "see src/ /zzz /da");
+        // Today's date, where the `/` was. (Esc closed the menu; again, insert mode.)
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('A'), KeyModifiers::NONE);
+        typing(&mut app, " on /date");
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        let line = app.buffers[id].line(6);
+        let date = line.rsplit(' ').next().unwrap().to_string();
+        assert_eq!(line, format!("see src/ /zzz /da on {date}"));
+        assert!(
+            date.len() == 10 && date.chars().filter(|c| *c == '-').count() == 2,
+            "{date}"
+        );
+    }
+
     #[test]
     fn a_note_is_drawn_rendered_and_a_click_lands_on_what_is_drawn() {
         let dir = tempfile::tempdir().unwrap();

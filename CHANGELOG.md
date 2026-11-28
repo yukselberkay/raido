@@ -10,6 +10,14 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **A `/` menu in notes**, as in Notion: in a Markdown file, `/` at the start of a
+  line or after a space opens a menu of blocks (Text, Heading 1–3, bulleted,
+  numbered and to-do lists, Quote, the five callouts, Code block, Table, Divider,
+  Toggle, Math block, Link, Image, Date, Table of contents), found by name or
+  another word (`/todo`, `/checkbox`, `/warn`). An empty line becomes the block;
+  after text, the block starts the line below. Esc keeps what was typed, and a
+  `/` in a path, inline code or a code block is just a `/`.
+
 - **Markdown notes are drawn rendered while you write them**, like Obsidian's Live
   Preview: headings in their colors without their `#`s, bold, italic, struck and
   `inline code` without their marks, links as underlined text, bullets and to-dos

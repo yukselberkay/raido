@@ -82,6 +82,14 @@ impl Completion {
             resolve: None,
         }
     }
+    /// A suggestion found by other words than its label too (`filter`): a block of a
+    /// note's `/` menu, found as `todo` or `checkbox`.
+    pub fn found_by(label: &str, detail: &str, filter: &str) -> Self {
+        Self {
+            filter: filter.into(),
+            ..Self::word(label, detail)
+        }
+    }
     pub fn matches(&self, prefix: &str) -> bool {
         let prefix = prefix.to_lowercase();
         self.filter.to_lowercase().starts_with(&prefix)

@@ -5376,6 +5376,10 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
             "A note as written / drawn rendered as you edit",
         ),
         (
+            "/ in a note (insert)",
+            "Blocks as in Notion: /h2 /todo /code /table /date",
+        ),
+        (
             ":preview / Ctrl-b m",
             "Toggle rendered view / source, keeping place",
         ),

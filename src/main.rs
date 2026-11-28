@@ -30,6 +30,7 @@ mod minimap;
 mod model_server;
 mod nmap;
 mod notebook;
+mod notes;
 mod omarchy;
 mod outline;
 mod platform;
