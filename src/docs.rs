@@ -1012,7 +1012,7 @@ fn run(
     std::fs::create_dir_all(scratch).map_err(|e| format!("{}: {e}", scratch.display()))?;
     let program = crate::platform::which(agent.program())
         .ok_or_else(|| format!("{} isn't installed", agent.program()))?;
-    let mut command = Command::new(program);
+    let mut command = crate::platform::detached(&program);
     let mut by = agent.name();
     let answer_file = scratch.join(format!(".answer-{}.md", std::process::id()));
     let input = match agent {

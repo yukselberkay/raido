@@ -482,7 +482,7 @@ fn ask(agent: &Agent, prompt: &str) -> Result<(String, Option<Usage>, String), S
         crate::platform::which(program).ok_or_else(|| format!("{program} isn't installed"))
     };
     let mut by = agent.name();
-    let mut command = Command::new(found(agent.program())?);
+    let mut command = crate::platform::detached(&found(agent.program())?);
     match agent {
         Agent::Claude(model) => {
             command.args(["-p", "--model", model.as_deref().unwrap_or(CLAUDE_MODEL)]);

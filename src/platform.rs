@@ -68,6 +68,44 @@ fn with_extensions(path: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// A command for `program` that runs away from Raido's terminal: in a session of
+/// its own on Linux (`setsid`) and macOS (the same through perl), in a hidden
+/// console of its own on Windows. An AI CLI asked something in the background (the
+/// docs, the review's explanations) then can't open the terminal Raido draws on,
+/// read the keys you type there or change how they're sent, as Antigravity does
+/// when it opens `/dev/tty`. Where neither helper is found, it runs as it is.
+pub fn detached(program: &Path) -> std::process::Command {
+    #[cfg(target_os = "linux")]
+    if let Some(setsid) = which("setsid") {
+        // Raido's child isn't a process group leader, so setsid becomes the program
+        // itself (no fork): stopping it stops the program.
+        let mut command = std::process::Command::new(setsid);
+        command.arg(program);
+        return command;
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(perl) = which("perl") {
+        let mut command = std::process::Command::new(perl);
+        command
+            .args([
+                "-MPOSIX",
+                "-e",
+                "POSIX::setsid(); exec { $ARGV[0] } @ARGV or die \"$ARGV[0]: $!\\n\"",
+            ])
+            .arg(program);
+        return command;
+    }
+    #[allow(unused_mut)]
+    let mut command = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
 /// Program to run: resolved to a full path when found, so Windows `.cmd` shims work.
 pub fn resolve(program: &str) -> String {
     which(program)
@@ -169,6 +207,24 @@ pub fn config_base() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A detached program leads a session of its own, with no terminal to open.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_detached_program_has_no_terminal() {
+        if which("setsid").is_none() {
+            return;
+        }
+        let script = "read -r pid _ _ _ _ session _ < /proc/$$/stat; \
+                      [ \"$pid\" = \"$session\" ] && echo own-session; \
+                      (exec 3</dev/tty) 2>/dev/null && echo tty || echo no-tty";
+        let out = detached(&which("sh").unwrap())
+            .args(["-c", script])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "own-session\nno-tty\n");
+    }
 
     #[test]
     fn finds_programs_on_path_and_rejects_missing_ones() {

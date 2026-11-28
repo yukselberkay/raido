@@ -282,6 +282,12 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Fixed
 
+- **Keys typed while an AI answers in the background stay Raido's.** The docs and
+  the review's explanations ran their AI CLI attached to Raido's terminal, and
+  Antigravity opens it (`/dev/tty`) to read keys and set its own modes, so text
+  typed in the docs pane while it worked, Backspace among it, could go to it
+  instead. They now run in a session of their own (`setsid` on Linux, the same
+  through perl on macOS, a hidden console on Windows), with no terminal to open.
 - **A red dot no longer turns up on a line with nothing wrong.** Diagnostics were
   placed by line number in the text as it was when they arrived, so adding or
   removing lines left a dot on whatever line took that number until the language
