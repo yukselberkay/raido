@@ -1,0 +1,205 @@
+%YAML 1.2
+---
+# ARM assembly, written for Raido: 32-bit ARM and Thumb, and AArch64 (A64, with
+# SIMD, SVE and SME), as GNU as, Clang (Apple's too), armasm and Go's assembler
+# write them. A line is read as a statement: its labels, then a directive or an
+# instruction (branches apart), then the operands: registers with their
+# arrangements (v0.4s, z1.d, p0/z), #immediates, shifts and extends, conditions,
+# relocations (:lo12:, @PAGEOFF), strings and the symbols they name. // and ;
+# (armasm's, Apple's) start comments, as do /* */ and # at the start of a line;
+# #include and the like are preprocessor lines. This is 32-bit ARM's grammar, where
+# @ starts a comment too; Raido makes AArch64's from it without that, as there @
+# names symbol types (@function) and Apple's relocations (msg@PAGE).
+name: Assembly (ARM)
+file_extensions:
+  - armasm
+scope: source.asm.arm
+
+variables:
+  label: '[A-Za-z_.$][A-Za-z0-9_.$]*'
+  symbol: '[A-Za-z_.][A-Za-z0-9_.$]*'
+  mnemonic: '[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*'
+  n31: '(?:[0-9]|[12][0-9]|3[01])'
+  register: >-
+    (?i:r(?:[0-9]|[12][0-9]|30)|[xw](?:[0-9]|[12][0-9]|30)|xzr|wzr|wsp|sp|rsp|zr|lr|pc|fp|ip|sb|sl|[vqdshbfz]{{n31}}|p(?:[0-9]|1[0-5])|pn(?:[0-9]|1[0-5])|za(?:[0-9]+[hv]?(?:\.[bhsdq])?)?|zt0|ffr|[acs]psr(?:_[a-z]+)?|fpscr|fpsr|fpcr|fpexc|nzcv|daif|currentel|spsel|c(?:[0-9]|1[0-5])|[a-z][a-z0-9]*_el[0-3])
+  # A vector register's arrangement or element size: .4s, .16b, .d, Go's .S4
+  arrangement: '(?:\.(?i:[0-9]{0,2}[bhsdq]|[bhsdq][0-9]{1,2}))'
+  go_register: '(?:SB|FP|PC|SP)'
+  cond: '(?:eq|ne|cs|hs|cc|lo|mi|pl|vs|vc|hi|ls|ge|lt|gt|le|al|nv)'
+  flow: >-
+    (?i:(?:b|bl|blx|bx|bxj){{cond}}?(?:\.[wn])?|b\.{{cond}}|bc\.{{cond}}|br|blr|bra[ab]z?|blra[ab]z?|reta?[ab]?|eret(?:a[ab])?|cbn?z|tbn?z|cb(?:eq|ne|gt|ge|lt|le|hi|hs|lo|ls)|svc|swi|hvc|smc|bkpt?|udf|brk|hlt|call|jmp|tb[bh])
+  data: >-
+    (?:\.(?i:byte|[248]byte|hword|short|word|int|long|quad|octa|dword|xword|value|single|float|double|ascii|asciz|string(?:8|16|32|64)?|space|skip|zero|fill|[us]leb128|incbin|inst(?:\.[nw])?|comm|lcomm)|(?-i:DCB|DCD|DCDU|DCW|DCWU|DCQ|DCQU|DCFS|DCFD|DCI|SPACE|FILL))
+  # armasm's directives, written in capitals.
+  armasm: '(?-i:AREA|EXPORT|IMPORT|ENTRY|END|ALIGN|PRESERVE8|REQUIRE8|THUMB|ARM|CODE16|CODE32|PROC|ENDP|FUNCTION|ENDFUNC|GLOBAL|EXTERN|RN|LTORG|INCLUDE|GET|INCBIN|IF|ELSE|ELIF|ENDIF|MACRO|MEND|MEXIT|WHILE|WEND|EQU|SETA|SETL|SETS|GBLA|GBLL|GBLS|LCLA|LCLL|LCLS|ASSERT|INFO|KEEP|ROUT)'
+  go_directive: '(?:TEXT|DATA|GLOBL|FUNCDATA|PCDATA|PCALIGN)'
+  go_flag: '(?:NOSPLIT|RODATA|NOPTR|DUPOK|WRAPPER|NEEDCTXT|TLSBSS|NOFRAME|TOPFRAME|NOPROF|REFLECTMETHOD|ABIInternal|ABI0)'
+  preprocessor: '(?:include|include_next|import|define|undef|if|ifdef|ifndef|elif|elifdef|elifndef|else|endif|error|warning|pragma|line)'
+  number: '(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|0[oO][0-7_]+|[0-9][0-9_]*(?:\.[0-9_]+)?(?:[eE][+-]?[0-9]+)?|[0-9]+[bf])'
+  # Apple's relocations: adrp x0, msg@PAGE
+  apple: '(?i:PAGE|PAGEOFF|GOTPAGE|GOTPAGEOFF|TLVPPAGE|TLVPPAGEOFF|GOT|PLT|TLVP|TPOFF)'
+
+contexts:
+  # The start of a statement: labels, then what the statement does.
+  main:
+    - include: comments
+    - include: preprocessor
+    # # at the start of a statement is a comment (GNU as's line comment).
+    - match: '#'
+      scope: punctuation.definition.comment.asm
+      push: hash-comment
+    - match: '({{label}})\s*(:)'
+      captures:
+        1: entity.name.function.label.asm
+        2: punctuation.separator.label.asm
+    - match: '\b([0-9]+)(:)'
+      captures:
+        1: entity.name.function.label.asm
+        2: punctuation.separator.label.asm
+    # A register's other name: fp .req x29
+    - match: '({{label}})\s+(\.(?:req|qn|dn))\b'
+      captures:
+        1: variable.other.constant.asm
+        2: keyword.control.directive.asm
+      push: operands
+    # armasm's labels, which take no colon: main PROC, len EQU 4
+    - match: '^({{label}})(?=\s+(?:PROC|FUNCTION|EQU|RN|SETA|SETL|SETS|{{data}})\b)'
+      scope: entity.name.function.label.asm
+    - match: '({{label}})\s*(=)(?!=)'
+      captures:
+        1: variable.other.constant.asm
+        2: keyword.operator.assignment.asm
+      push: operands
+    - match: '(\.macro)\s+({{label}})'
+      captures:
+        1: keyword.control.directive.asm
+        2: entity.name.function.macro.asm
+      push: operands
+    - match: '(?<![\w.$]){{data}}(?![\w.$])'
+      scope: storage.type.directive.asm
+      push: operands
+    - match: '(?<![\w.$])\.[A-Za-z_][A-Za-z0-9_.$]*'
+      scope: keyword.control.directive.asm
+      push: operands
+    - match: '\b(?:{{go_directive}}|{{armasm}})\b'
+      scope: keyword.control.directive.asm
+      push: operands
+    # A macro called like a function: ENTRY(start), SYM_FUNC_START(memcpy)
+    - match: '\b{{mnemonic}}(?=\()'
+      scope: support.function.macro.asm
+      push: operands
+    - match: '\b{{flow}}(?![\w.$])'
+      scope: keyword.control.flow.asm
+      push: operands
+    - match: '\b{{mnemonic}}'
+      scope: keyword.other.instruction.asm
+      push: operands
+
+  # What follows the instruction or directive, to the end of the line.
+  operands:
+    - match: '$'
+      pop: true
+    - include: comments
+    - include: strings
+    - match: '\b{{register}}{{arrangement}}?\b'
+      scope: variable.language.register.asm
+    - match: '\b{{go_register}}\b'
+      scope: variable.language.register.asm
+    # SVE's predicate qualifiers: p0/z, p1/m
+    - match: '/(?i:[zm])\b'
+      scope: storage.modifier.predicate.asm
+    # #1, #-8, #0x10, #1.5; Go's $1
+    - match: '[#$]-?{{number}}\b'
+      scope: constant.numeric.asm
+    - match: '\b{{number}}\b'
+      scope: constant.numeric.asm
+    - match: '#'
+      scope: punctuation.definition.immediate.asm
+    - match: '(:)(?i:lo12|hi12|got|got_lo12|got_prel|gotpage_lo15|gottprel|gottprel_lo12|gottprel_g[01](?:_nc)?|tprel|tprel_hi12|tprel_lo12(?:_nc)?|tprel_g[0-2](?:_nc)?|dtprel|dtprel_hi12|dtprel_lo12(?:_nc)?|dtprel_g[0-2](?:_nc)?|tlsdesc|tlsdesc_lo12|tlsgd|tlsgd_lo12|pg_hi21(?:_nc)?|lo21|abs_g[0-3](?:_nc|_s)?|prel_g[0-3](?:_nc)?|upper16|lower16|upper0_7|upper8_15|lower0_7|lower8_15)(:)'
+      scope: support.function.relocation.asm
+    - match: '(?<=[\w)])@{{apple}}\b'
+      scope: support.function.relocation.asm
+    - match: '\((?i:PLT|GOT|GOTOFF|GOT_PREL|TARGET1|TARGET2|SBREL|TLSGD|TLSLDM|TLSLDO|GOTTPOFF|TPOFF|PREL31)\)'
+      scope: support.function.relocation.asm
+    - match: '[%@](?:function|object|progbits|nobits|note|init_array|fini_array|preinit_array|gnu_indirect_function|tls_object|common|notype)\b'
+      scope: constant.language.asm
+    - match: '\b(?i:lsl|lsr|asr|ror|rrx|[us]xt[bhwx]|msl)\b'
+      scope: keyword.operator.shift.asm
+    - match: '\b(?i:mul\s+vl|vl[0-9]*|pow2|all)\b'
+      scope: keyword.operator.word.asm
+    - match: '\b(?i:{{cond}})\b'
+      scope: constant.language.condition.asm
+    # Barriers' and system instructions' options: dmb ish, isb sy
+    - match: '\b(?i:sy|ish|ishld|ishst|nsh|nshld|nshst|osh|oshld|oshst|(?:pld|pli|pst)l[123](?:keep|strm)|ivau|cvau|civac|cvac|zva|vmalle1|vmalle1is|vae1|vae1is|aside1|vale1)\b'
+      scope: constant.language.option.asm
+    - match: '\b{{go_flag}}\b'
+      scope: constant.language.flag.asm
+    - match: '\\[A-Za-z_][A-Za-z0-9_]*|\\\(\)'
+      scope: variable.parameter.macro.asm
+    - match: '{{symbol}}'
+    - match: '<<|>>|[-+*/%&|^~!<>=]'
+      scope: keyword.operator.asm
+
+  comments:
+    - include: at-comment
+    - match: '//|;'
+      scope: punctuation.definition.comment.asm
+      push:
+        - meta_scope: comment.line.double-slash.asm
+        - match: '$'
+          pop: true
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.asm
+      push:
+        - meta_scope: comment.block.asm
+        - match: '\*/'
+          scope: punctuation.definition.comment.end.asm
+          pop: true
+
+  # 32-bit ARM's: @ starts a comment anywhere.
+  at-comment:
+    - match: '@'
+      scope: punctuation.definition.comment.asm
+      push:
+        - meta_scope: comment.line.at-sign.asm
+        - match: '$'
+          pop: true
+
+  hash-comment:
+    - meta_scope: comment.line.number-sign.asm
+    - match: '$'
+      pop: true
+
+  # #include <asm/assembler.h>, #define FP x29: the C preprocessor's, in .S files.
+  preprocessor:
+    - match: '^\s*(#)\s*({{preprocessor}})\b'
+      captures:
+        1: keyword.control.directive.preprocessor.asm
+        2: keyword.control.directive.preprocessor.asm
+      push:
+        - meta_scope: meta.preprocessor.asm
+        - match: '$'
+          pop: true
+        - match: '//'
+          push:
+            - meta_scope: comment.line.double-slash.asm
+            - match: '$'
+              pop: true
+        - match: '<[^>\n]*>'
+          scope: string.quoted.other.lt-gt.include.asm
+        - include: strings
+        - match: '\b{{number}}\b'
+          scope: constant.numeric.asm
+
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.asm
+      push:
+        - meta_scope: string.quoted.double.asm
+        - match: '"'
+          scope: punctuation.definition.string.end.asm
+          pop: true
+        - match: '\\.'
+          scope: constant.character.escape.asm
+        - match: '$'
+          pop: true

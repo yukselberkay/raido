@@ -84,8 +84,10 @@ mouse = true
 # Language servers start automatically for Rust, Go, Python, C and C++ files,
 # TypeScript and JavaScript (typescript-language-server, with TypeScript 6), shell
 # scripts (bash-language-server, with ShellCheck and shfmt), YAML and JSON
-# (yaml-language-server, VS Code's vscode-json-language-server), and Dockerfiles
-# and Docker Compose files (Docker's docker-language-server).
+# (yaml-language-server, VS Code's vscode-json-language-server), Dockerfiles and
+# Docker Compose files (Docker's docker-language-server), and x86, ARM and RISC-V
+# assembly (asm-lsp: without a .asm-lsp.toml, only for files it reads right, GNU as
+# for this computer's CPU; :lsp says what to write for the others).
 lsp_enabled = true
 # YAML and JSON files are checked against the schemas published for them
 # (SchemaStore's, Kubernetes'), which their servers download as needed; false keeps
@@ -103,7 +105,7 @@ format_on_save = ["go"]
 # Pastes take the file's line breaks; copies leave Raido with \n.
 line_endings = "lf"
 # Optional: choose a different server per language (keys: rust, go, python, c,
-# typescript, shell, yaml, json, docker).
+# typescript, shell, yaml, json, docker, asm).
 # [lsp.python]
 # program = "pylsp"
 # args = []

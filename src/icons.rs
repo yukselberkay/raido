@@ -99,6 +99,7 @@ pub fn file(path: &Path) -> Icon {
         "svelte" => ("\u{e697}", rgb(0xff3e00)),
         "tf" | "tfvars" | "hcl" => ("\u{e69a}", rgb(0x5f43e9)),
         "ps1" | "psm1" | "psd1" => ("\u{f0a0a}", rgb(0x4273ca)),
+        "s" | "asm" | "sx" | "nasm" | "yasm" => ("\u{e6ab}", rgb(0x0091bd)),
         "lock" => ("\u{f023}", rgb(0xbbbbbb)),
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "avif" => {
             ("\u{e60d}", rgb(0xa074c4))

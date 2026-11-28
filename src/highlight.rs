@@ -15,8 +15,9 @@ use syntect::{
 
 /// Grammars Raido adds to the bundled ones: TOML (`pyproject.toml`, `Cargo.toml`,
 /// Raido's own settings), Dockerfiles, PowerShell, `.env` and INI files, ignore
-/// files, SCSS, Terraform / HCL and Protocol Buffers.
-const EXTRA: [&str; 9] = [
+/// files, SCSS, Terraform / HCL, Protocol Buffers, and x86 and RISC-V assembly
+/// (ARM's below; which one a file gets: [`crate::asm`]).
+const EXTRA: [&str; 11] = [
     include_str!("syntaxes/toml.sublime-syntax"),
     include_str!("syntaxes/dockerfile.sublime-syntax"),
     include_str!("syntaxes/powershell.sublime-syntax"),
@@ -26,13 +27,35 @@ const EXTRA: [&str; 9] = [
     include_str!("syntaxes/scss.sublime-syntax"),
     include_str!("syntaxes/hcl.sublime-syntax"),
     include_str!("syntaxes/protobuf.sublime-syntax"),
+    include_str!("syntaxes/asm-x86.sublime-syntax"),
+    include_str!("syntaxes/asm-riscv.sublime-syntax"),
 ];
+
+/// 32-bit ARM's assembly, and AArch64's made from it: there `@` doesn't start a
+/// comment but names symbol types (`.type f, @function`) and Apple's relocations.
+const ARM: &str = include_str!("syntaxes/asm-arm.sublime-syntax");
+const ARM_HEADER: &str =
+    "name: Assembly (ARM)\nfile_extensions:\n  - armasm\nscope: source.asm.arm\n";
+const AT_COMMENT: &str = "    - include: at-comment\n";
+
+fn arm_grammars() -> [String; 2] {
+    let header =
+        "name: Assembly (AArch64)\nfile_extensions:\n  - arm64asm\nscope: source.asm.arm64\n";
+    [
+        ARM.to_string(),
+        ARM.replacen(ARM_HEADER, header, 1)
+            .replacen(AT_COMMENT, "", 1),
+    ]
+}
 
 pub struct Cached {
     revision: u64,
     name: String,
     /// The grammar is one of Raido's own ([`extra`]), parsed with that set.
     extra: bool,
+    /// An assembly file's grammar, which changes when its code shows it's for
+    /// another CPU.
+    assembly: Option<&'static str>,
     parse: ParseState,
     state: HighlightState,
     pub lines: Vec<Vec<(Style, String)>>,
@@ -83,7 +106,12 @@ fn extra() -> &'static SyntaxSet {
     static EXTRA_SET: std::sync::OnceLock<SyntaxSet> = std::sync::OnceLock::new();
     EXTRA_SET.get_or_init(|| {
         let mut set = SyntaxSetBuilder::new();
-        for source in EXTRA.into_iter().map(String::from).chain(script_grammars()) {
+        let sources = EXTRA
+            .into_iter()
+            .map(String::from)
+            .chain(script_grammars())
+            .chain(arm_grammars());
+        for source in sources {
             set.add(SyntaxDefinition::load_from_str(&source, true, None).expect("bundled grammar"));
         }
         set.build()
@@ -167,11 +195,30 @@ impl Syntax {
                 .map(|g| (g, extra()))
         })
     }
+    /// Raido's grammar for assembly written for `arch`.
+    fn assembly(&self, arch: crate::asm::Arch) -> Option<(&SyntaxReference, &SyntaxSet)> {
+        extra()
+            .find_syntax_by_name(arch.grammar())
+            .map(|g| (g, extra()))
+    }
     /// The grammar for the file at `path`, and the set to parse it with: by its whole
     /// name first (`Makefile`, `.bashrc`, `Dockerfile`), else by its extension.
-    /// Dockerfiles go by their kind too (`Dockerfile.dev`, `api.dockerfile`), and
-    /// shell scripts by every name they go by (`.zshrc`, `PKGBUILD`, `.ksh`).
+    /// Dockerfiles go by their kind too (`Dockerfile.dev`, `api.dockerfile`), shell
+    /// scripts by every name they go by (`.zshrc`, `PKGBUILD`, `.ksh`), and assembly
+    /// by the CPU its name and folders say.
     pub fn for_path(&self, path: &std::path::Path) -> Option<(&SyntaxReference, &SyntaxSet)> {
+        self.for_path_in(path, "")
+    }
+    /// `for_path` for a file with `text` in it (its start is enough), which tells an
+    /// assembly file's CPU.
+    pub fn for_path_in(
+        &self,
+        path: &std::path::Path,
+        text: &str,
+    ) -> Option<(&SyntaxReference, &SyntaxSet)> {
+        if let Some(asm) = crate::asm::read(path, text) {
+            return self.assembly(asm.arch);
+        }
         if crate::language::is_dockerfile(path) {
             return self.by_extension("Dockerfile");
         }
@@ -228,6 +275,9 @@ impl Syntax {
     /// The grammar for `buffer`: by its file's name, else by its first line, as for a
     /// script without an extension (`#!/usr/bin/env bash`, `#!/usr/bin/env python3`).
     pub fn for_buffer(&self, buffer: &Buffer) -> Option<(&SyntaxReference, &SyntaxSet)> {
+        if let Some(asm) = crate::asm::of(buffer) {
+            return self.assembly(asm.arch);
+        }
         if let Some(found) = buffer.path.as_deref().and_then(|p| self.for_path(p)) {
             return Some(found);
         }
@@ -241,9 +291,34 @@ impl Syntax {
     }
     /// The grammar a Markdown code block labeled `token` (`rust`, `toml`) means,
     /// and the set to parse it with.
+    #[cfg(test)]
     pub fn by_token(&self, token: &str) -> Option<(&SyntaxReference, &SyntaxSet)> {
+        self.by_token_in(token, "")
+    }
+    /// `by_token` for a block with `text` in it: an `asm` block is x86, ARM or
+    /// RISC-V by its code.
+    pub fn by_token_in(&self, token: &str, text: &str) -> Option<(&SyntaxReference, &SyntaxSet)> {
+        use crate::asm::Arch;
+        let lower = token.to_ascii_lowercase();
+        let arch = match lower.as_str() {
+            "nasm" | "yasm" | "masm" | "fasm" | "tasm" | "x86asm" | "x86" | "x64" | "x86_64"
+            | "x86-64" | "amd64" | "i386" | "intel" | "att" => Some(Arch::X86),
+            "arm" | "armasm" | "arm32" | "thumb" => Some(Arch::Arm),
+            "arm64" | "aarch64" | "arm64asm" | "armv8" => Some(Arch::Arm64),
+            "riscv" | "risc-v" | "riscv32" | "riscv64" | "rv32" | "rv64" | "riscvasm" => {
+                Some(Arch::RiscV)
+            }
+            // GitHub's names for assembly of any CPU: read like an .s file.
+            "asm" | "assembly" | "s" | "gas" | "as" | "unix-assembly" => {
+                crate::asm::read(std::path::Path::new("block.s"), text).map(|a| a.arch)
+            }
+            _ => None,
+        };
+        if let Some(arch) = arch {
+            return self.assembly(arch);
+        }
         // The other names GitHub knows these blocks by.
-        let token = match token.to_ascii_lowercase().as_str() {
+        let token = match lower.as_str() {
             "shell" | "shellscript" | "ksh" | "dash" | "posix" => "sh",
             "pwsh" | "posh" => "ps1",
             "terraform" => "tf",
@@ -286,6 +361,16 @@ impl Syntax {
     /// `prepare`, highlighting at most `budget` lines in this call.
     pub fn prepare_lines(&mut self, id: usize, buffer: &Buffer, end: usize, budget: usize) -> bool {
         let name = buffer.name();
+        // Code typed into an assembly file can show it's for another CPU: an empty
+        // .s file, read as this computer's, gets `addi a0, zero, 1`.
+        let regrammar = self.cache.get(&id).is_some_and(|c| {
+            c.assembly.is_some()
+                && c.revision != buffer.revision
+                && c.assembly != crate::asm::of(buffer).map(|asm| asm.arch.grammar())
+        });
+        if regrammar {
+            self.cache.remove(&id);
+        }
         let mut first_line_edited = false;
         if let Some(cache) = self
             .cache
@@ -320,6 +405,7 @@ impl Syntax {
                 .for_buffer(buffer)
                 .unwrap_or_else(|| (self.syntaxes.find_syntax_plain_text(), &self.syntaxes));
             let extra = std::ptr::eq(set, extra());
+            let assembly = crate::asm::of(buffer).map(|asm| asm.arch.grammar());
             let highlighter = Highlighter::new(&self.theme);
             self.cache.insert(
                 id,
@@ -327,6 +413,7 @@ impl Syntax {
                     revision: buffer.revision,
                     name,
                     extra,
+                    assembly,
                     parse: ParseState::new(syntax),
                     state: HighlightState::new(&highlighter, ScopeStack::new()),
                     lines: Vec::new(),
@@ -365,6 +452,7 @@ impl Syntax {
     }
     /// The grammar for a file named `name`, unless it's plain text, and the set to
     /// parse it with.
+    #[cfg(test)]
     pub fn grammar(&self, name: &str) -> Option<(&SyntaxReference, &SyntaxSet)> {
         self.for_path(std::path::Path::new(name))
     }
@@ -382,7 +470,18 @@ impl Syntax {
         if lines.len() > 5_000 {
             return None;
         }
-        let (grammar, set) = self.grammar(name)?;
+        // An assembly file's CPU, from the hunk's code.
+        let path = std::path::Path::new(name);
+        let code: String = if crate::asm::is_assembly(path) {
+            lines
+                .iter()
+                .take(400)
+                .map(|l| format!("{}\n", l.text))
+                .collect()
+        } else {
+            String::new()
+        };
+        let (grammar, set) = self.for_path_in(path, &code)?;
         let highlighter = Highlighter::new(&self.theme);
         let fresh = || {
             (
@@ -1163,6 +1262,304 @@ service Orders {
                 (") ", "returns", "keyword.other"),
                 ("(", "stream", "keyword.other"),
             ],
+        );
+    }
+
+    #[test]
+    fn x86_assembly_is_highlighted() {
+        let gas = r#"# A GNU as file, AT&T syntax.
+    .section .rodata
+msg:    .asciz "Hello\n"
+    .text
+    .globl main
+    .type main, @function
+main:
+    pushq %rbp
+    movq %rsp, %rbp
+    leaq msg(%rip), %rdi
+    call puts@PLT
+    movl $0, %eax
+    rep stosb
+    jne 1b
+    popq %rbp
+    ret
+"#;
+        scopes(
+            "hello_x86.s",
+            gas,
+            &[
+                ("# A", "GNU", "comment.line.number-sign"),
+                ("    ", ".section", "keyword.control.directive"),
+                ("msg:", "msg", "entity.name.function.label"),
+                ("msg:    ", ".asciz", "storage.type.directive"),
+                (".asciz ", "\"Hello", "string.quoted.double"),
+                ("Hello", "\\n", "constant.character.escape"),
+                (".type main, ", "@function", "constant.language"),
+                ("\nmain", "main", "entity.name.function.label"),
+                ("pushq", "pushq", "keyword.other.instruction"),
+                ("pushq ", "%rbp", "variable.language.register"),
+                ("leaq msg(", "%rip", "variable.language.register"),
+                ("call", "call", "keyword.control.flow"),
+                ("puts", "@PLT", "support.function.relocation"),
+                ("movl ", "$0", "constant.numeric"),
+                ("rep", "rep", "keyword.other.instruction.prefix"),
+                ("rep ", "stosb", "keyword.other.instruction"),
+                ("jne", "jne", "keyword.control.flow"),
+                ("jne ", "1b", "constant.numeric"),
+                ("    ret", "ret", "keyword.control.flow"),
+            ],
+        );
+        // NASM: ; comments, bare directives, labels without colons, sizes.
+        let nasm = r#"; Exit with 0.
+%define SYS_EXIT 60
+section .data
+msg db "hi", 10
+len equ $ - msg
+section .text
+global _start
+_start:
+    mov rax, SYS_EXIT
+    mov qword [rsp+8], 0x10
+    xor edi, edi   ; status
+    syscall
+.loop:
+    dec ecx
+    jnz .loop
+"#;
+        scopes(
+            "boot.nasm",
+            nasm,
+            &[
+                ("; Exit", "Exit", "comment.line.semicolon"),
+                (
+                    "%define",
+                    "%define",
+                    "keyword.control.directive.preprocessor",
+                ),
+                ("section", "section", "keyword.control.directive"),
+                ("\nmsg", "msg", "entity.name.function.label"),
+                ("msg ", "db", "storage.type.directive"),
+                ("\"hi\", ", "10", "constant.numeric"),
+                ("len equ ", "$", "constant.language"),
+                ("global", "global", "keyword.control.directive"),
+                ("_start:", "_start", "entity.name.function.label"),
+                ("mov ", "rax", "variable.language.register"),
+                ("mov ", "qword", "storage.type.size"),
+                ("[", "rsp", "variable.language.register"),
+                ("], ", "0x10", "constant.numeric"),
+                ("xor edi, edi   ; ", "status", "comment.line.semicolon"),
+                ("syscall", "syscall", "keyword.control.flow"),
+                (".loop:", ".loop", "entity.name.function.label"),
+                ("jnz", "jnz", "keyword.control.flow"),
+            ],
+        );
+        // Plain words stay plain: a symbol named in operands.
+        let found = scope_in("boot.nasm", nasm, "mov rax, ", "SYS_EXIT");
+        assert_eq!(found.trim(), "source.asm.x86", "{found}");
+    }
+
+    #[test]
+    fn arm_assembly_is_highlighted() {
+        let thumb = r#"    .syntax unified
+    .thumb
+    .global _start
+_start:
+    ldr r0, =0x40021000   @ RCC
+    movs r1, #1
+    str r1, [r0, #0x18]
+    push {r4, lr}
+    bl delay
+    bne 1b
+    pop {r4, pc}
+"#;
+        scopes(
+            "startup_armv7m.s",
+            thumb,
+            &[
+                ("    ", ".syntax", "keyword.control.directive"),
+                ("_start:", "_start", "entity.name.function.label"),
+                ("ldr", "ldr", "keyword.other.instruction"),
+                ("ldr ", "r0", "variable.language.register"),
+                ("r0, ", "=", "keyword.operator"),
+                ("=", "0x40021000", "constant.numeric"),
+                ("@ ", "RCC", "comment.line.at-sign"),
+                ("movs r1, ", "#1", "constant.numeric"),
+                ("[r0, ", "#0x18", "constant.numeric"),
+                ("{", "r4", "variable.language.register"),
+                ("r4, ", "lr", "variable.language.register"),
+                ("bl", "bl", "keyword.control.flow"),
+                ("bne", "bne", "keyword.control.flow"),
+                ("bne ", "1b", "constant.numeric"),
+                ("pop {r4, ", "pc", "variable.language.register"),
+            ],
+        );
+        let a64 = r#"// Hello on macOS.
+.global _main
+_main:
+    adrp x0, msg@PAGE
+    add x0, x0, msg@PAGEOFF
+    add x1, x1, :lo12:counter
+    stp x29, x30, [sp, #-16]!
+    ld1 {v0.16b}, [x1]
+    b.eq done
+    csel x2, x3, x4, ne
+    cbz x0, 2f
+    mov x16, #1   ; exit
+    svc #0x80
+done:
+    ret
+"#;
+        scopes(
+            "hello_arm64.s",
+            a64,
+            &[
+                ("// Hello", "Hello", "comment.line.double-slash"),
+                ("adrp", "adrp", "keyword.other.instruction"),
+                ("adrp ", "x0", "variable.language.register"),
+                ("msg", "@PAGE", "support.function.relocation"),
+                ("msg@", "PAGEOFF", "support.function.relocation"),
+                ("x1, x1, ", ":lo12:", "support.function.relocation"),
+                ("stp ", "x29", "variable.language.register"),
+                ("[sp, ", "#-16", "constant.numeric"),
+                ("#-16]", "!", "keyword.operator"),
+                ("{", "v0.16b", "variable.language.register"),
+                ("b.eq", "b.eq", "keyword.control.flow"),
+                ("x4, ", "ne", "constant.language.condition"),
+                ("cbz", "cbz", "keyword.control.flow"),
+                ("cbz x0, ", "2f", "constant.numeric"),
+                ("; ", "exit", "comment.line"),
+                ("svc", "svc", "keyword.control.flow"),
+                ("svc ", "#0x80", "constant.numeric"),
+                ("done:", "done", "entity.name.function.label"),
+                ("done:\n    ", "ret", "keyword.control.flow"),
+            ],
+        );
+        // GNU as for AArch64 names symbol types with @; on 32-bit ARM, % does, as
+        // @ starts a comment there.
+        let elf = "    .type sum,@function\n    .section .rodata,\"a\",@progbits\n";
+        for (after, token) in [("sum,", "@function"), ("\",", "@progbits")] {
+            let found = scope_in("sum_aarch64.s", elf, after, token);
+            assert!(found.contains("constant.language"), "{token}: {found}");
+        }
+        let arm = "    .type sum,%function\n    bx lr @ return\n";
+        assert!(scope_in("sum_armv7.s", arm, "sum,", "%function").contains("constant.language"));
+        assert!(scope_in("sum_armv7.s", arm, "@ ", "return").contains("comment.line.at-sign"));
+        // The two grammars, made from one.
+        assert!(ARM.contains(ARM_HEADER) && ARM.contains(AT_COMMENT));
+    }
+
+    #[test]
+    fn riscv_assembly_is_highlighted() {
+        let text = r#"# Exit with status 1.
+#include <asm/unistd.h>
+    .section .text
+    .globl _start
+_start:
+    addi a0, zero, 1
+    lui t0, %hi(msg)
+    addi t0, t0, %lo(msg)
+    sd ra, 8(sp)
+    csrr t1, mstatus
+    vsetvli t0, a0, e32, m4, ta, ma
+    beqz a0, 1f
+    call puts
+    ecall; nop
+1:  ret
+"#;
+        scopes(
+            "start_riscv.s",
+            text,
+            &[
+                ("# Exit", "Exit", "comment.line"),
+                (
+                    "#include",
+                    "include",
+                    "keyword.control.directive.preprocessor",
+                ),
+                ("#include ", "<asm/unistd.h>", "string.quoted.other"),
+                ("    ", ".section", "keyword.control.directive"),
+                ("_start:", "_start", "entity.name.function.label"),
+                ("addi", "addi", "keyword.other.instruction"),
+                ("addi ", "a0", "variable.language.register"),
+                ("a0, ", "zero", "variable.language.register"),
+                ("zero, ", "1", "constant.numeric"),
+                ("lui t0, ", "%hi", "support.function.relocation"),
+                ("sd ", "ra", "variable.language.register"),
+                ("sd ra, ", "8", "constant.numeric"),
+                ("8(", "sp", "variable.language.register"),
+                ("csrr t1, ", "mstatus", "variable.language.register.csr"),
+                ("a0, ", "e32", "storage.type.vector"),
+                ("m4, ", "ta", "storage.type.vector"),
+                ("beqz", "beqz", "keyword.control.flow"),
+                ("beqz a0, ", "1f", "constant.numeric"),
+                ("call", "call", "keyword.control.flow"),
+                ("ecall", "ecall", "keyword.control.flow"),
+                // ; starts the next statement.
+                ("ecall; ", "nop", "keyword.other.instruction"),
+                ("\n1", "1", "entity.name.function.label"),
+                ("1:  ", "ret", "keyword.control.flow"),
+            ],
+        );
+    }
+
+    #[test]
+    fn an_assembly_file_is_highlighted_for_the_cpu_its_code_is_for() {
+        let syntax = Syntax::new(&config::Theme::default());
+        let dir = tempfile::tempdir().unwrap();
+        for (name, text, grammar) in [
+            (
+                "a.s",
+                "_start:\n    addi a0, zero, 1\n    ecall\n",
+                "Assembly (RISC-V)",
+            ),
+            (
+                "b.S",
+                "_start:\n    mov x0, #1\n    svc #0\n",
+                "Assembly (AArch64)",
+            ),
+            (
+                "c.asm",
+                "main:\n    movq $60, %rax\n    syscall\n",
+                "Assembly (x86)",
+            ),
+        ] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, text).unwrap();
+            let buffer = Buffer::open(&path).unwrap();
+            assert_eq!(syntax.language(&buffer), grammar, "{name}");
+        }
+        // An empty file is read as this computer's CPU's, until its code says
+        // otherwise: then it's highlighted again with that CPU's grammar.
+        let mut syntax = syntax;
+        let path = dir.path().join("new.s");
+        std::fs::write(&path, "").unwrap();
+        let mut buffer = Buffer::open(&path).unwrap();
+        while syntax.prepare(9, &buffer, 10) {}
+        let host = crate::asm::Arch::host().unwrap_or(crate::asm::Arch::X86);
+        assert_eq!(syntax.cache[&9].assembly, Some(host.grammar()));
+        let foreign = if host == crate::asm::Arch::RiscV {
+            ("mov x0, #1\nsvc #0\n", "Assembly (AArch64)")
+        } else {
+            ("addi a0, zero, 1\necall\n", "Assembly (RISC-V)")
+        };
+        buffer.insert(foreign.0);
+        while syntax.prepare(9, &buffer, 10) {}
+        assert_eq!(syntax.cache[&9].assembly, Some(foreign.1));
+        assert_eq!(syntax.language(&buffer), foreign.1);
+        // Markdown's blocks by their names, and a plain `asm` block by its code.
+        let block =
+            |token: &str, text: &str| syntax.by_token_in(token, text).map(|(g, _)| g.name.clone());
+        assert_eq!(block("nasm", "").as_deref(), Some("Assembly (x86)"));
+        assert_eq!(block("armasm", "").as_deref(), Some("Assembly (ARM)"));
+        assert_eq!(block("aarch64", "").as_deref(), Some("Assembly (AArch64)"));
+        assert_eq!(block("riscv", "").as_deref(), Some("Assembly (RISC-V)"));
+        assert_eq!(
+            block("asm", "    addi a0, zero, 1\n").as_deref(),
+            Some("Assembly (RISC-V)")
+        );
+        assert_eq!(
+            block("asm", "    movq %rax, %rbx\n").as_deref(),
+            Some("Assembly (x86)")
         );
     }
 

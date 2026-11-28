@@ -1,6 +1,7 @@
 mod agent_model;
 mod app;
 mod archive;
+mod asm;
 mod clipboard;
 mod config;
 mod conversations;

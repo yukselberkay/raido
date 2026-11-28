@@ -10,6 +10,26 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **Assembly for x86, ARM and RISC-V is highlighted.** `.s`, `.S`, `.asm`, `.nasm`
+  files opened as plain text: syntect has no assembly grammar. Raido's own grammars
+  now color them for x86 and x86-64 (GNU as in AT&T or Intel syntax, NASM, YASM,
+  MASM), 32-bit ARM and Thumb (GNU as, armasm), AArch64 (Apple's assembler too) and
+  RISC-V, and Go's assembler on all of them: labels, instructions, branches and calls
+  in the control-flow color, registers (`%rax`, `x0`, `v0.4s`, `a0`, CSRs),
+  directives, immediates, relocations (`@PLT`, `:lo12:`, `msg@PAGEOFF`, `%hi(x)`),
+  sizes, strings, comments and `.S` files' `#include` lines. The extensions don't
+  say which CPU, so Raido reads it from the project's `.asm-lsp.toml`, the file's
+  name (`memmove_arm64.s`), the registers and instructions in it, its folders
+  (`arch/riscv/`), and last the computer's own CPU; an empty file switches grammar
+  as soon as its code says another CPU. Enter after a label indents, a label typed
+  on an indented line goes back to the labels' column, and `Ctrl-/` comments lines
+  out with the mark the file's assembler reads (`;`, `@`, `//` or `#`). Markdown's
+  `nasm`, `armasm`, `arm64` and `riscv` blocks are highlighted, and `asm` blocks by
+  their code. **asm-lsp** adds hover docs for instructions and registers,
+  completion, go to definition and the assembler's errors: Raido starts it for the
+  files it reads right without settings (GNU as for this computer's CPU), and for
+  the others `:lsp` says what to put in `.asm-lsp.toml`.
+
 - **Operators reach as far as relative numbers show**, as in Vim: `d3j` deletes the
   cursor's line and the 3 below it, `y3k` copies it and the 3 above, `gc3j`
   comments them. Typing the count with `:set rnu` on says what `j` and `k` will do.

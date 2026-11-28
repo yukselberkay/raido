@@ -1,0 +1,231 @@
+%YAML 1.2
+---
+# x86 and x86-64 assembly, written for Raido: GNU as (AT&T, and Intel after
+# .intel_syntax), NASM, YASM, MASM and Go's assembler. A line is read as a
+# statement: its labels, a prefix, then a directive or an instruction (control
+# flow apart), then the operands: registers with or without %, immediates, sizes,
+# memory operands, relocations, strings and the symbols they name. ; and # start
+# comments (and // and /* */, which the C preprocessor takes out of .S files);
+# #include and the like are preprocessor lines.
+name: Assembly (x86)
+file_extensions:
+  - nasm
+  - yasm
+scope: source.asm.x86
+
+variables:
+  # A label as NASM and GNU as write them: .loop, ..@1, $name, _start, L1$pb.
+  label: '[A-Za-z_.?$@][A-Za-z0-9_.$?@]*'
+  # A symbol named in operands: no $ (an AT&T immediate) or @ (a relocation) ahead.
+  symbol: '[A-Za-z_.?][A-Za-z0-9_.$?]*'
+  mnemonic: '[A-Za-z_][A-Za-z0-9_.]*'
+  register: >-
+    (?i:[re]?(?:ax|bx|cx|dx|si|di|sp|bp|ip)|[abcd][lh]|(?:si|di|sp|bp)l|r(?:[89]|[12][0-9]|3[01])[dwbl]?|[re]?flags|[cdefgs]s|[cdt]r(?:[0-9]|1[0-5])|[xyz]mm(?:[0-9]|[12][0-9]|3[01])|mm[0-7]|k[0-7]|bnd[0-3]|tmm[0-7]|mxcsr|gdtr|idtr|ldtr|st[0-7]?)
+  # The pseudo-registers and vector registers of Go's assembler (case matters).
+  go_register: '(?:SB|FP|PC|[XYZ](?:[0-9]|[12][0-9]|3[01]))'
+  flow: '(?i:j[a-z]+|l?call[lqw]?|l?ret[lqwfn]?|iret[dq]?|l?jmp[lqw]?|loop(?:n?[ez])?|syscall|sysenter|sysexit|sysret[lq]?|int[13o]?|into|ud[012]|hlt|vmcall|vmmcall|vmlaunch|vmresume)'
+  prefix: '(?i:lock|rep|repe|repz|repne|repnz|xacquire|xrelease|bnd|notrack|data16|data32|addr16|addr32|addr64|rex(?:\.[wrxb]+)?|rex64|[oa](?:16|32|64)|\{(?:vex[23]?|evex|rex2?)\})'
+  data: >-
+    (?i:\.(?:byte|[248]byte|hword|short|word|int|long|quad|octa|dword|value|single|float|double|tfloat|ascii|asciz|string(?:8|16|32|64)?|space|skip|zero|fill|[us]leb128|incbin|rva|base64|comm|lcomm)|d[bwdqtoyz]|res[bwdqtoyz]|dup)
+  directive: >-
+    (?i:section|segment|global|globl|extern|extrn|externdef|bits|default|org|align|alignb|sectalign|cpu|common|static|absolute|use16|use32|use64|struc|endstruc|istruc|iend|at|times|incbin|equ|warning|map|group|uppercase|import|export|library|module|float|proc|endp|end|ends|assume|include|includelib|invoke|option|public|proto|local|macro|endm|exitm|purge|label|title|subtitle|struct|union|record|typedef|textequ|even|if|ifdef|ifndef|else|elseif|endif|repeat|rept|irp|while|for|endw)
+  # Go's directives and the flags written after them.
+  go_directive: '(?:TEXT|DATA|GLOBL|FUNCDATA|PCDATA|PCALIGN)'
+  go_flag: '(?:NOSPLIT|RODATA|NOPTR|DUPOK|WRAPPER|NEEDCTXT|TLSBSS|NOFRAME|TOPFRAME|NOPROF|REFLECTMETHOD|ABIInternal|ABI0)'
+  preprocessor: '(?:include|include_next|import|define|undef|if|ifdef|ifndef|elif|elifdef|elifndef|else|endif|error|warning|pragma|line)'
+  number: >-
+    (?:0[xX][0-9a-fA-F_]+|0[bByY][01_]+|0[oOqQ][0-7_]+|[0-9][0-9a-fA-F_]*[hH]|[01][01_]*[bByY]|[0-7][0-7_]*[oOqQ]|[0-9][0-9_]*(?:\.[0-9_]+)?(?:[eE][+-]?[0-9]+)?[dDtTfF]?|[0-9]+[bf])
+
+contexts:
+  # The start of a statement: labels, then what the statement does.
+  main:
+    - include: comments
+    - include: preprocessor
+    - match: '#'
+      scope: punctuation.definition.comment.asm
+      push: hash-comment
+    # NASM's local labels inside macros: %%skip:
+    - match: '((?:%%)?{{label}})\s*(::?)(?!=)'
+      captures:
+        1: entity.name.function.label.asm
+        2: punctuation.separator.label.asm
+    - match: '\b([0-9]+)(:)'
+      captures:
+        1: entity.name.function.label.asm
+        2: punctuation.separator.label.asm
+    # A label without a colon before data or a constant: msg db "hi", len equ $ - msg
+    - match: '({{label}})(?=\s+(?i:d[bwdqtoyz]|res[bwdqtoyz]|equ|times|proc|endp|segment|ends|struct|struc|union|macro|textequ|typedef|record)\b)'
+      scope: entity.name.function.label.asm
+    # A constant: SIZE = 64
+    - match: '({{label}})\s*(=)(?!=)'
+      captures:
+        1: variable.other.constant.asm
+        2: keyword.operator.assignment.asm
+      push: operands
+    - match: '\[|\]'
+      scope: punctuation.section.brackets.asm
+    - match: '(\.macro)\s+({{label}})'
+      captures:
+        1: keyword.control.directive.asm
+        2: entity.name.function.macro.asm
+      push: operands
+    - match: '(%(?i:i?macro|rmacro|imacro))\s+({{label}})'
+      captures:
+        1: keyword.control.directive.preprocessor.asm
+        2: entity.name.function.macro.asm
+      push: operands
+    - match: '%[A-Za-z]+\b'
+      scope: keyword.control.directive.preprocessor.asm
+      push: operands
+    - match: '(?<![\w.$?@]){{data}}(?![\w.$?@])'
+      scope: storage.type.directive.asm
+      push: operands
+    - match: '(?<![\w.$?@])(?:\.[A-Za-z_][A-Za-z0-9_.$]*|\.[0-9]+[A-Za-z]*)'
+      scope: keyword.control.directive.asm
+      push: operands
+    - match: '\b{{go_directive}}\b'
+      scope: keyword.control.directive.asm
+      push: operands
+    - match: '\b{{directive}}\b'
+      scope: keyword.control.directive.asm
+      push: operands
+    - match: '(?<![\w.]){{prefix}}(?=\s+[A-Za-z{])'
+      scope: keyword.other.instruction.prefix.asm
+    # A macro called like a function: ENTRY(start), SYM_FUNC_START(memcpy)
+    - match: '\b{{mnemonic}}(?=\()'
+      scope: support.function.macro.asm
+      push: operands
+    - match: '\b{{flow}}(?![\w.$?@])'
+      scope: keyword.control.flow.asm
+      push: operands
+    - match: '\b{{mnemonic}}'
+      scope: keyword.other.instruction.asm
+      push: operands
+
+  # What follows the instruction or directive, to the end of the line.
+  operands:
+    - match: '$'
+      pop: true
+    - include: comments
+    - match: '#'
+      scope: punctuation.definition.comment.asm
+      push: hash-comment
+    - include: strings
+    - match: '(%)?\b{{register}}\b(?:\(\s*[0-7]\s*\))?'
+      scope: variable.language.register.asm
+      captures:
+        1: punctuation.definition.variable.asm
+    - match: '\b{{go_register}}\b'
+      scope: variable.language.register.asm
+    # AT&T immediates: $60, $-1, $0x10
+    - match: '\$-?{{number}}\b'
+      scope: constant.numeric.asm
+    - match: '\b{{number}}\b'
+      scope: constant.numeric.asm
+    # NASM's $ (here) and $$ (the section's start).
+    - match: '\$\$?(?![\w.$?@])'
+      scope: constant.language.asm
+    - match: '\$(?=[A-Za-z_.?])'
+      scope: punctuation.definition.immediate.asm
+    # NASM's macro parameters (%1, %{2}) and GNU as's (\name).
+    - match: '%(?:[0-9]+|\{[^}]*\})|\\[A-Za-z_][A-Za-z0-9_]*|\\\(\)'
+      scope: variable.parameter.macro.asm
+    - match: '%%{{label}}'
+      scope: entity.name.function.label.asm
+    - match: '@(?i:plt|gotpcrel|gotpcrelx|got|gotoff|gotntpoff|gottpoff|gotplt|tpoff|ntpoff|dtpoff|dtpmod|tlsgd|tlsld|tlsdesc|tlscall|indntpoff|size|secrel32|imgrel|abs)\b'
+      scope: support.function.relocation.asm
+    - match: '\.\.(?i:plt|got|gotpc|gotoff|gottpoff|sym|tlsie|start|imagebase|@[\w.]*)\b'
+      scope: support.function.relocation.asm
+    - match: '[@%](?:function|object|progbits|nobits|note|init_array|fini_array|preinit_array|gnu_indirect_function|gnu_unique_object|tls_object|common|notype)\b'
+      scope: constant.language.asm
+    # Before NASM's sizes and modifiers, which take nosplit in any case.
+    - match: '\b{{go_flag}}\b'
+      scope: constant.language.flag.asm
+    - match: '\b(?i:byte|word|dword|qword|tword|oword|yword|zword|xmmword|ymmword|zmmword|mmword|fword|tbyte|real4|real8|real10|sbyte|sword|sdword|sqword)\b'
+      scope: storage.type.size.asm
+    - match: '\b(?i:ptr|rel|abs|near|far|short|strict|nosplit|offset|seg|wrt|flat|noprefix|prefix)\b'
+      scope: storage.modifier.asm
+    - match: '\{(?i:z|sae|r[nduz]-sae|1to(?:2|4|8|16|32))\}'
+      scope: storage.modifier.decorator.asm
+    - match: '\b{{data}}\b'
+      scope: storage.type.directive.asm
+    - match: '{{symbol}}'
+    - match: '<<|>>|[-+*/%&|^~!<>=]'
+      scope: keyword.operator.asm
+
+  comments:
+    - match: ';'
+      scope: punctuation.definition.comment.asm
+      push:
+        - meta_scope: comment.line.semicolon.asm
+        - match: '$'
+          pop: true
+    - match: '//'
+      scope: punctuation.definition.comment.asm
+      push:
+        - meta_scope: comment.line.double-slash.asm
+        - match: '$'
+          pop: true
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.asm
+      push:
+        - meta_scope: comment.block.asm
+        - match: '\*/'
+          scope: punctuation.definition.comment.end.asm
+          pop: true
+
+  hash-comment:
+    - meta_scope: comment.line.number-sign.asm
+    - match: '$'
+      pop: true
+
+  # #include <asm/unistd.h>, #define SYS_exit 60: the C preprocessor's, in .S files.
+  preprocessor:
+    - match: '^\s*(#)\s*({{preprocessor}})\b'
+      captures:
+        1: keyword.control.directive.preprocessor.asm
+        2: keyword.control.directive.preprocessor.asm
+      push:
+        - meta_scope: meta.preprocessor.asm
+        - match: '$'
+          pop: true
+        - include: comments
+        - match: '<[^>\n]*>'
+          scope: string.quoted.other.lt-gt.include.asm
+        - include: strings
+        - match: '\b{{number}}\b'
+          scope: constant.numeric.asm
+
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.asm
+      push:
+        - meta_scope: string.quoted.double.asm
+        - match: '"'
+          scope: punctuation.definition.string.end.asm
+          pop: true
+        - match: '\\.'
+          scope: constant.character.escape.asm
+        - match: '$'
+          pop: true
+    - match: "'"
+      scope: punctuation.definition.string.begin.asm
+      push:
+        - meta_scope: string.quoted.single.asm
+        - match: "'"
+          scope: punctuation.definition.string.end.asm
+          pop: true
+        - match: '$'
+          pop: true
+    # NASM's backquoted strings, with C's escapes.
+    - match: '`'
+      scope: punctuation.definition.string.begin.asm
+      push:
+        - meta_scope: string.quoted.other.backquote.asm
+        - match: '`'
+          scope: punctuation.definition.string.end.asm
+          pop: true
+        - match: '\\.'
+          scope: constant.character.escape.asm
+        - match: '$'
+          pop: true

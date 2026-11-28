@@ -758,7 +758,7 @@ impl Renderer<'_> {
         self.emit(pad(top, width, base));
         let grammar = Some(label)
             .filter(|l| !l.is_empty())
-            .and_then(|l| self.syntax.by_token(l));
+            .and_then(|l| self.syntax.by_token_in(l, text));
         let set = grammar.map(|(_, set)| set);
         let mut highlighter = grammar.map(|(g, _)| HighlightLines::new(g, &self.syntax.theme));
         for line in LinesWithEndings::from(text) {

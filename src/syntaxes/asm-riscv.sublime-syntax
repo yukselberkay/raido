@@ -1,0 +1,165 @@
+%YAML 1.2
+---
+# RISC-V assembly, written for Raido: RV32 and RV64 with their extensions (M, A,
+# F, D, C, V, Zicsr, Zb*), as GNU as, Clang and Go's assembler write them. A line
+# is read as a statement: its labels, then a directive or an instruction
+# (branches, jumps and calls apart), then the operands: registers by number (x5,
+# f10, v8) or ABI name (a0, t1, sp, zero), CSRs, immediates, %hi / %lo and the
+# other relocations, vector types (e32, m4, ta, ma), rounding modes, strings and
+# the symbols they name. # and // start comments, as do /* */; ; separates
+# statements on a line; #include and the like are preprocessor lines.
+name: Assembly (RISC-V)
+file_extensions:
+  - riscv
+scope: source.asm.riscv
+
+variables:
+  label: '[A-Za-z_.$][A-Za-z0-9_.$]*'
+  symbol: '[A-Za-z_.][A-Za-z0-9_.$]*'
+  mnemonic: '[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*'
+  register: >-
+    (?i:[xfv](?:[0-9]|[12][0-9]|3[01])|zero|ra|sp|gp|tp|fp|t[0-6]|s(?:[0-9]|1[01])|a[0-7]|ft(?:[0-9]|1[01])|fs(?:[0-9]|1[01])|fa[0-7])
+  csr: >-
+    (?i:[msuvh]s?(?:status|tvec|epc|cause|tval|ie|ip|scratch|counteren|envcfg|atp|edeleg|ideleg|tinst|tval2|iselect|ireg|topei|topi|timecmp)|misa|mhartid|mvendorid|marchid|mimpid|mconfigptr|mcountinhibit|mseccfg|satp|hgatp|hgeie|hgeip|hvip|htimedelta|vsatp|cycleh?|timeh?|instreth?|mcycleh?|minstreth?|m?hpmcounter[0-9]+h?|mhpmevent[0-9]+|pmpcfg[0-9]+|pmpaddr[0-9]+|fflags|frm|fcsr|vl|vtype|vlenb|vstart|vxrm|vxsat|vcsr|seed|jvt|tselect|tdata[123]|tcontrol|mcontext|scontext|dcsr|dpc|dscratch[01])
+  flow: >-
+    (?i:(?:c\.)?(?:j|jal|jalr|jr|ret|call|tail|beqz?|bnez?|bltu?|bgeu?|bgtu?|bleu?|blez|bgez|bltz|bgtz|ecall|ebreak|mret|sret|uret|dret|mnret|scall|sbreak|jmp)|cm\.(?:jt|jalt|popret|popretz))
+  data: >-
+    (?i:\.(?:byte|[248]byte|half|hword|short|word|int|long|quad|octa|dword|dtprelword|dtpreldword|value|single|float|double|ascii|asciz|string(?:8|16|32|64)?|space|skip|zero|fill|[us]leb128|incbin|insn|comm|lcomm))
+  go_register: '(?:SB|FP|PC|SP)'
+  go_directive: '(?:TEXT|DATA|GLOBL|FUNCDATA|PCDATA|PCALIGN)'
+  go_flag: '(?:NOSPLIT|RODATA|NOPTR|DUPOK|WRAPPER|NEEDCTXT|TLSBSS|NOFRAME|TOPFRAME|NOPROF|REFLECTMETHOD|ABIInternal|ABI0)'
+  preprocessor: '(?:include|include_next|import|define|undef|if|ifdef|ifndef|elif|elifdef|elifndef|else|endif|error|warning|pragma|line)'
+  number: '(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|0[oO][0-7_]+|[0-9][0-9_]*(?:\.[0-9_]+)?(?:[eE][+-]?[0-9]+)?|[0-9]+[bf])'
+
+contexts:
+  # The start of a statement: labels, then what the statement does.
+  main:
+    # Before comments: #include isn't one.
+    - include: preprocessor
+    - include: comments
+    - match: '({{label}})\s*(:)'
+      captures:
+        1: entity.name.function.label.asm
+        2: punctuation.separator.label.asm
+    - match: '\b([0-9]+)(:)'
+      captures:
+        1: entity.name.function.label.asm
+        2: punctuation.separator.label.asm
+    - match: '({{label}})\s*(=)(?!=)'
+      captures:
+        1: variable.other.constant.asm
+        2: keyword.operator.assignment.asm
+      push: operands
+    - match: '(\.macro)\s+({{label}})'
+      captures:
+        1: keyword.control.directive.asm
+        2: entity.name.function.macro.asm
+      push: operands
+    - match: '(?<![\w.$]){{data}}(?![\w.$])'
+      scope: storage.type.directive.asm
+      push: operands
+    - match: '(?<![\w.$])\.[A-Za-z_][A-Za-z0-9_.$]*'
+      scope: keyword.control.directive.asm
+      push: operands
+    - match: '\b{{go_directive}}\b'
+      scope: keyword.control.directive.asm
+      push: operands
+    # A macro called like a function: ENTRY(start), SYM_FUNC_START(memcpy)
+    - match: '\b{{mnemonic}}(?=\()'
+      scope: support.function.macro.asm
+      push: operands
+    - match: '\b{{flow}}(?![\w.$])'
+      scope: keyword.control.flow.asm
+      push: operands
+    - match: '\b{{mnemonic}}'
+      scope: keyword.other.instruction.asm
+      push: operands
+
+  # What follows the instruction or directive, to the end of the line or the ;
+  # that starts the next statement.
+  operands:
+    - match: '$'
+      pop: true
+    - match: ';'
+      scope: punctuation.terminator.statement.asm
+      pop: true
+    - include: comments
+    - include: strings
+    - match: '\b{{register}}\b'
+      scope: variable.language.register.asm
+    - match: '\b{{csr}}\b'
+      scope: variable.language.register.csr.asm
+    - match: '\b{{go_register}}\b'
+      scope: variable.language.register.asm
+    # Go's immediates: $1, $-8
+    - match: '\$-?{{number}}\b'
+      scope: constant.numeric.asm
+    - match: '\b{{number}}\b'
+      scope: constant.numeric.asm
+    - match: '%(?i:hi|lo|pcrel_hi|pcrel_lo|tprel_hi|tprel_lo|tprel_add|got_pcrel_hi|tls_ie_pcrel_hi|tls_gd_pcrel_hi|tlsdesc_hi|tlsdesc_load_lo|tlsdesc_add_lo|tlsdesc_call|gprel)\b'
+      scope: support.function.relocation.asm
+    - match: '@(?i:plt|got|gotpcrel|tlsdesc)\b'
+      scope: support.function.relocation.asm
+    - match: '[@%](?:function|object|progbits|nobits|note|init_array|fini_array|preinit_array|gnu_indirect_function|tls_object|common|notype)\b'
+      scope: constant.language.asm
+    # The vector type vsetvli sets: e32, m4 (or mf2), ta / tu, ma / mu.
+    - match: '\b(?i:e(?:8|16|32|64)|mf?[1248]|t[au]|m[au])\b'
+      scope: storage.type.vector.asm
+    - match: '\b(?i:rne|rtz|rdn|rup|rmm|dyn)\b'
+      scope: constant.language.rounding.asm
+    - match: '\b{{go_flag}}\b'
+      scope: constant.language.flag.asm
+    - match: '\\[A-Za-z_][A-Za-z0-9_]*|\\\(\)'
+      scope: variable.parameter.macro.asm
+    - match: '{{symbol}}'
+    - match: '<<|>>|[-+*/%&|^~!<>=]'
+      scope: keyword.operator.asm
+
+  comments:
+    - match: '#|//'
+      scope: punctuation.definition.comment.asm
+      push:
+        - meta_scope: comment.line.number-sign.asm
+        - match: '$'
+          pop: true
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.asm
+      push:
+        - meta_scope: comment.block.asm
+        - match: '\*/'
+          scope: punctuation.definition.comment.end.asm
+          pop: true
+
+  # #include <asm/csr.h>, #define SBI_EXT 0x10: the C preprocessor's, in .S files.
+  preprocessor:
+    - match: '^\s*(#)\s*({{preprocessor}})\b'
+      captures:
+        1: keyword.control.directive.preprocessor.asm
+        2: keyword.control.directive.preprocessor.asm
+      push:
+        - meta_scope: meta.preprocessor.asm
+        - match: '$'
+          pop: true
+        - match: '//'
+          push:
+            - meta_scope: comment.line.double-slash.asm
+            - match: '$'
+              pop: true
+        - match: '<[^>\n]*>'
+          scope: string.quoted.other.lt-gt.include.asm
+        - include: strings
+        - match: '\b{{number}}\b'
+          scope: constant.numeric.asm
+
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.asm
+      push:
+        - meta_scope: string.quoted.double.asm
+        - match: '"'
+          scope: punctuation.definition.string.end.asm
+          pop: true
+        - match: '\\.'
+          scope: constant.character.escape.asm
+        - match: '$'
+          pop: true

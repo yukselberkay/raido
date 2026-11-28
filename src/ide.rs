@@ -522,6 +522,7 @@ fn call(app: &mut App, params: &Value) -> Result<Value, Failure> {
                         "label": b.name(),
                         "languageId": match crate::language::Lang::of(b) {
                             crate::language::Lang::Shell => "shellscript".to_string(),
+                            crate::language::Lang::Asm => "asm".to_string(),
                             _ => app.syntax.language(b).to_lowercase(),
                         },
                         "isDirty": b.dirty,

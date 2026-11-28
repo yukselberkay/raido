@@ -32,6 +32,8 @@ pub enum Lang {
     Ruby,
     Markdown,
     Make,
+    /// x86, ARM and RISC-V assembly.
+    Asm,
     Plain,
 }
 
@@ -55,6 +57,9 @@ impl Lang {
         }
         if shell(Some(path), "").is_some() {
             return Self::Shell;
+        }
+        if crate::asm::is_assembly(path) {
+            return Self::Asm;
         }
         let ext = path
             .extension()
@@ -99,7 +104,8 @@ impl Lang {
             | Self::Make => Some("#"),
             Self::Lua => Some("--"),
             Self::Rust | Self::Go | Self::C | Self::Js | Self::Brace => Some("//"),
-            Self::Markdown | Self::Plain => None,
+            // Which mark an assembly file takes depends on its assembler.
+            Self::Markdown | Self::Asm | Self::Plain => None,
         }
     }
     /// Characters that close themselves, as (opener, closer).
@@ -656,7 +662,7 @@ impl Lang {
                 "false",
                 "null",
             ],
-            Self::Markdown | Self::Make | Self::Plain => &[],
+            Self::Markdown | Self::Make | Self::Asm | Self::Plain => &[],
         }
     }
 }
@@ -745,6 +751,18 @@ impl Rules {
                     || (first == "case" && last == "in")
                     // A case's pattern on a line of its own: `start)`, `-h|--help)`.
                     || (code.ends_with(')') && !code.contains('(') && code != ")")
+            }
+            // A label on a line of its own (`main:`, `.loop:`), and a macro.
+            Lang::Asm => {
+                let code = asm_code(before).trim();
+                let lower = code.to_ascii_lowercase();
+                let words: Vec<&str> = lower.split_whitespace().collect();
+                is_label_line(code)
+                    || matches!(
+                        words.first().copied().unwrap_or_default(),
+                        ".macro" | "%macro" | "%imacro" | ".rept" | ".irp" | ".irpc" | "%rep"
+                    )
+                    || matches!(words.get(1).copied(), Some("proc" | "macro"))
             }
             Lang::Lua => {
                 matches!(last, "then" | "do" | "else" | "repeat")
@@ -1080,6 +1098,10 @@ pub enum Comment {
 
 /// How the file in `buffer` comments a line out, if its language has comments.
 pub fn comment_marks(buffer: &Buffer) -> Option<Comment> {
+    if let Some(asm) = crate::asm::of(buffer) {
+        let mark = crate::asm::comment(asm, &crate::asm::sample(buffer));
+        return Some(Comment::Line(mark));
+    }
     let path = buffer.path.as_deref();
     let name = path
         .and_then(|p| p.file_name())
@@ -1276,6 +1298,10 @@ pub fn type_char(b: &mut Buffer, rules: &Rules, c: char, typing: Typing) {
     if typing.smart_indent && rules.lang == Lang::Python && c == ':' {
         python_dedent(b);
     }
+    // Assembly: a label typed on an indented line goes back to where labels start.
+    if typing.smart_indent && rules.lang == Lang::Asm && c == ':' {
+        label_dedent(b);
+    }
     // Shell: `fi`, `done`, `esac`, `else`, `elif` once the word is typed out.
     if typing.smart_indent && rules.lang == Lang::Shell && " ;&|<>".contains(c) {
         let here = line(b);
@@ -1284,6 +1310,64 @@ pub fn type_char(b: &mut Buffer, rules: &Rules, c: char, typing: Typing) {
             shell_dedent(b);
         }
     }
+}
+
+/// An assembly line without its comment, roughly: `;`, `//`, `/*`, and `#` and
+/// `@` at the start or after a space (not ARM's `#1` or Apple's `msg@PAGE`).
+fn asm_code(line: &str) -> &str {
+    let mut end = line.len();
+    let mut after_space = true;
+    for (at, c) in line.char_indices() {
+        let comment = match c {
+            ';' => true,
+            '/' => line[at + 1..].starts_with(['/', '*']),
+            '#' | '@' => after_space,
+            _ => false,
+        };
+        if comment {
+            end = at;
+            break;
+        }
+        after_space = c.is_whitespace();
+    }
+    &line[..end]
+}
+
+/// An assembly line that's only a label: `main:`, `.L2:`, `1:`, NASM's `%%skip:`.
+fn is_label_line(code: &str) -> bool {
+    code.strip_suffix(':').is_some_and(|name| {
+        !name.is_empty()
+            && name
+                .trim_start_matches("%%")
+                .chars()
+                .all(|c| c.is_alphanumeric() || "_.$?@".contains(c))
+    })
+}
+
+/// Assembly: a label typed on an indented line of its own goes back to where the
+/// labels above it start (the left edge, unless they're indented), out of the
+/// instructions it follows.
+fn label_dedent(b: &mut Buffer) {
+    let here = line(b);
+    if here.indent.is_empty() || !here.after.trim().is_empty() || !is_label_line(here.before.trim())
+    {
+        return;
+    }
+    let width = |s: &str| s.chars().take_while(|c| *c == ' ' || *c == '\t').count();
+    let target: String = (0..b.row)
+        .rev()
+        .map(|row| b.line(row))
+        .find(|text| is_label_line(asm_code(text).trim()))
+        .map(|text| text.chars().take(width(&text)).collect())
+        .unwrap_or_default();
+    let ours = here.indent.chars().count();
+    let theirs = target.chars().count();
+    if theirs >= ours {
+        return;
+    }
+    let col = b.col;
+    b.replace(here.start, here.start + ours, &target);
+    b.set_index(here.start + col - ours + theirs);
 }
 
 /// Shell: a line starting with `fi`, `else` or `elif`, `done` or `esac` goes back
@@ -1784,6 +1868,56 @@ mod tests {
         let rules = Rules::new(&buffer("a.sh", ""), 4);
         assert!(rules.opens_block("if [ ${#list[@]} -gt 0 ]; then"));
         assert!(rules.opens_block("if x; then # check"));
+    }
+
+    #[test]
+    fn assembly_indents_under_labels_and_comments_out_as_its_assembler_does() {
+        // Enter after a label indents; a label typed on an indented line goes back to
+        // where the labels above it start.
+        let mut b = buffer("start.s", "");
+        typed(
+            &mut b,
+            "_start:\nmovq $60, %rax\nsyscall\nexit:  # done\nret",
+        );
+        assert_eq!(
+            b.text.to_string(),
+            "_start:\n    movq $60, %rax\n    syscall\nexit:  # done\n    ret"
+        );
+        let mut b = buffer("loop.asm", "    .L1:\n        dec ecx\n        ");
+        typed(&mut b, ".L2:");
+        assert_eq!(b.text.to_string(), "    .L1:\n        dec ecx\n    .L2:");
+        // Not a label with an instruction after it, nor a segment in an operand.
+        let rules = Rules::new(&buffer("a.s", ""), 4);
+        assert!(rules.opens_block("main:"));
+        assert!(rules.opens_block("1:"));
+        assert!(rules.opens_block(".loop:  ; again"));
+        assert!(rules.opens_block("%macro print 1"));
+        assert!(!rules.opens_block("main: ret"));
+        assert!(!rules.opens_block("    mov ax, es:"));
+        assert_eq!(Lang::detect(Some(Path::new("crt0.S"))), Lang::Asm);
+        // Ctrl-/ comments a line out with the mark its assembler reads.
+        for (name, text, commented) in [
+            (
+                "boot.asm",
+                "section .text\n    mov eax, 1\n",
+                "section .text\n    ; mov eax, 1\n",
+            ),
+            (
+                "a.s",
+                "_start:\n    addi a0, zero, 1\n",
+                "_start:\n    # addi a0, zero, 1\n",
+            ),
+            (
+                "b.s",
+                "_start:\n    mov x0, #1\n    ret\n",
+                "_start:\n    // mov x0, #1\n    ret\n",
+            ),
+        ] {
+            let mut b = buffer(name, text);
+            let marks = comment_marks(&b).unwrap();
+            toggle_comment(&mut b, 1, 1, marks);
+            assert_eq!(b.text.to_string(), commented, "{name}");
+        }
     }
 
     #[test]

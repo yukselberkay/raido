@@ -190,6 +190,8 @@ fn language(path: &Path, first_line: &str) -> Option<Language> {
         "json" if json_with_comments(path, &name) => ("json", "jsonc"),
         "json" => ("json", "json"),
         "jsonc" | "code-workspace" => ("json", "jsonc"),
+        // x86, ARM and RISC-V: asm-lsp, told which by its own settings.
+        "s" | "asm" | "sx" | "nasm" | "yasm" => ("asm", "asm"),
         _ => return None,
     };
     Some(Language { key, id })
@@ -238,6 +240,7 @@ fn defaults(key: &str) -> &'static [(&'static str, &'static [&'static str])] {
             ("vscode-json-languageserver", &["--stdio"]),
         ],
         "docker" => &[("docker-language-server", &["start", "--stdio"])],
+        "asm" => &[("asm-lsp", &[])],
         _ => &[],
     }
 }
@@ -253,6 +256,7 @@ fn install_hint(key: &str) -> &'static str {
         "json" => "npm install -g vscode-langservers-extracted  (or: brew install vscode-langservers-extracted · pacman -S vscode-json-languageserver)",
         "shell" => "npm install -g bash-language-server, with shellcheck and shfmt for its warnings and :format (brew / apt / dnf / pacman install shellcheck shfmt)",
         "docker" => "go install github.com/docker/docker-language-server/cmd/docker-language-server@latest  (or a release binary from github.com/docker/docker-language-server)",
+        "asm" => "cargo install asm-lsp --locked  (or: brew install asm-lsp)",
         _ => "see the README",
     }
 }
@@ -275,8 +279,9 @@ pub(crate) fn on_path(program: &str) -> bool {
 }
 
 /// Folders a server installed the usual way can be in without being on PATH: `go
-/// install`'s for gopls, shfmt and Docker's server; for clangd, Homebrew's LLVM and Apple's Command Line Tools
-/// on macOS, and the LLVM installer's on Windows. The install scripts rely on these.
+/// install`'s for gopls, shfmt and Docker's server; `cargo install`'s for asm-lsp;
+/// for clangd, Homebrew's LLVM and Apple's Command Line Tools on macOS, and the
+/// LLVM installer's on Windows. The install scripts rely on these.
 fn off_path(program: &str) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     match program {
@@ -289,6 +294,12 @@ fn off_path(program: &str) -> Vec<PathBuf> {
                 directories::BaseDirs::new().map(|d| d.home_dir().join("go").join("bin")),
             );
         }
+        "asm-lsp" => dirs.extend(
+            std::env::var_os("CARGO_HOME")
+                .map(PathBuf::from)
+                .or_else(|| directories::BaseDirs::new().map(|d| d.home_dir().join(".cargo")))
+                .map(|cargo| cargo.join("bin")),
+        ),
         "clangd" if cfg!(target_os = "macos") => dirs.extend(
             [
                 "/opt/homebrew/opt/llvm/bin",
@@ -748,6 +759,10 @@ pub struct Lsp {
     /// lines' hashes, to move them with their lines as the text changes.
     placed: HashMap<usize, (u64, Vec<u64>)>,
     announced: HashSet<&'static str>,
+    /// Assembly files asm-lsp isn't started for, by buffer, and why
+    /// ([`crate::asm::not_served`]); whether that's been said this session.
+    asm_skipped: HashMap<usize, String>,
+    asm_told: bool,
     /// YAML and JSON files are checked against the schemas published for them
     /// (`lsp_schemas`), which their servers download; off, only their syntax is.
     pub schemas: bool,
@@ -795,6 +810,8 @@ impl Lsp {
             diagnostics: HashMap::new(),
             placed: HashMap::new(),
             announced: HashSet::new(),
+            asm_skipped: HashMap::new(),
+            asm_told: false,
             schemas: true,
             tab_width: 4,
             kubernetes: BTreeSet::new(),
@@ -896,6 +913,22 @@ impl Lsp {
         self.docs.clear();
         self.diagnostics.clear();
         self.announced.clear();
+        self.asm_skipped.clear();
+        self.asm_told = false;
+    }
+
+    /// Why asm-lsp isn't started for the assembly in `buffer`, if it isn't: without
+    /// settings it reads every file as GNU as for this computer's CPU.
+    /// Another server of yours (`[lsp.asm]`) is started for every assembly file.
+    fn asm_reason(&self, buffer: &Buffer) -> Option<String> {
+        let yours = self.overrides.get("asm").is_some_and(|custom| {
+            Path::new(&custom.program).file_stem() != Some(std::ffi::OsStr::new("asm-lsp"))
+        });
+        if yours {
+            return None;
+        }
+        let asm = crate::asm::of(buffer)?;
+        crate::asm::not_served(asm, crate::asm::lsp_settings(&self.root), &self.root)
     }
 
     /// The server for `key`: yours from `[lsp.<key>]`, else the first default the
@@ -1073,6 +1106,24 @@ impl Lsp {
             let Some(lang) = language(path, &crate::language::first_line(buffer)) else {
                 continue;
             };
+            if lang.key == "asm" {
+                if let Some(reason) = self.asm_reason(buffer) {
+                    // Its code now says another CPU: what was said of it no longer holds.
+                    if self.docs.remove(&id).is_some() {
+                        self.diagnostics.remove(&id);
+                    }
+                    // Said once, and only when asm-lsp is there to start.
+                    if !self.asm_told {
+                        self.asm_told = true;
+                        if self.server("asm", None).is_some() {
+                            events.push(Event::Notice(reason.clone()));
+                        }
+                    }
+                    self.asm_skipped.insert(id, reason);
+                    continue;
+                }
+                self.asm_skipped.remove(&id);
+            }
             if let Some(reason) = self.ensure(lang.key, path) {
                 if self.announced.insert(lang.key) {
                     events.push(Event::Error(reason));
@@ -1228,9 +1279,15 @@ impl Lsp {
             bail!("Language servers are disabled (lsp_enabled = false)");
         }
         let lang = language_of(buffer).context(
-            "No language server for this file type (Rust, Go, Python, C, C++, TypeScript, JavaScript, shell, YAML, JSON, Docker)",
+            "No language server for this file type (Rust, Go, Python, C, C++, TypeScript, JavaScript, shell, YAML, JSON, Docker, assembly)",
         )?;
         if let Some(reason) = self.failed.get(lang.key) {
+            bail!("{reason}");
+        }
+        if let Some(reason) = (lang.key == "asm")
+            .then(|| self.asm_reason(buffer))
+            .flatten()
+        {
             bail!("{reason}");
         }
         let Some(uri) = self.docs.get(&id).map(|d| d.uri.clone()) else {
@@ -1296,6 +1353,9 @@ impl Lsp {
         if self.failed.contains_key(lang.key) {
             return Some("no LSP".into());
         }
+        if lang.key == "asm" && self.asm_skipped.contains_key(&id) {
+            return None;
+        }
         let client = self.clients.get(lang.key)?;
         Some(if client.ready && self.docs.contains_key(&id) {
             client.program.clone()
@@ -1317,7 +1377,11 @@ impl Lsp {
             "yaml",
             "json",
             "docker",
+            "asm",
         ] {
+            let skipped = (key == "asm")
+                .then(|| self.asm_skipped.values().next())
+                .flatten();
             let state = if let Some(client) = self.clients.get(key) {
                 let on = match &client.python {
                     Some(python) => format!(" on {}", self.venv_name(python.venv.as_deref())),
@@ -1330,6 +1394,8 @@ impl Lsp {
                 )
             } else if self.failed.contains_key(key) {
                 "unavailable".into()
+            } else if let (Some(reason), Some(_)) = (skipped, self.server(key, None)) {
+                format!("not started: {reason}")
             } else if let Some((program, ..)) =
                 self.server(key, self.venv(key, &self.root).as_deref())
             {
@@ -2007,6 +2073,14 @@ mod tests {
         assert_eq!(language("a.hpp").unwrap().id, "cpp");
         assert_eq!(language("a.py").unwrap().key, "python");
         assert!(language("a.md").is_none());
+        // asm-lsp takes assembly for every CPU, told which by its settings.
+        for name in ["boot.s", "head.S", "kernel.asm", "x.nasm"] {
+            assert_eq!(
+                language(name).map(|l| (l.key, l.id)),
+                Some(("asm", "asm")),
+                "{name}"
+            );
+        }
         // Docker's server takes Dockerfiles and Compose files, by their names.
         for (name, id) in [
             ("Dockerfile", "dockerfile"),
@@ -2327,6 +2401,132 @@ while True:
         assert_eq!(found.len(), 1);
         assert_eq!((found[0].row, found[0].start, found[0].end), (5, 4, 9));
         assert_eq!(buffers[0].line(5), "x = re.search(a, b).group(1)");
+    }
+
+    /// Without settings asm-lsp reads every file as GNU as for this computer's CPU:
+    /// it gets only those, and the others say what settings would serve them.
+    #[cfg(unix)]
+    #[test]
+    fn asm_lsp_gets_only_the_assembly_it_reads_right() {
+        use crate::asm::Arch;
+        let Some(host) = Arch::host() else { return };
+        if !on_path("python3") {
+            return;
+        }
+        const SERVER: &str = r#"#!/usr/bin/env python3
+import json, sys
+def send(msg):
+    body = json.dumps(msg)
+    sys.stdout.write("Content-Length: %d\r\n\r\n%s" % (len(body.encode()), body)); sys.stdout.flush()
+def read():
+    length = 0
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line: sys.exit(0)
+        line = line.strip()
+        if not line: break
+        if line.lower().startswith(b"content-length:"): length = int(line.split(b":")[1])
+    return json.loads(sys.stdin.buffer.read(length))
+while True:
+    msg = read()
+    if msg.get("method") == "initialize":
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {"capabilities": {}}})
+"#;
+        // A stand-in for asm-lsp, by its name.
+        let tools = tempfile::tempdir().unwrap();
+        let fake = tools.path().join("asm-lsp");
+        std::fs::write(&fake, SERVER).unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let server = |program: &str, args: Vec<String>| {
+            let mut overrides = BTreeMap::new();
+            overrides.insert(
+                "asm".to_string(),
+                CommandPlugin {
+                    program: program.into(),
+                    args,
+                },
+            );
+            overrides
+        };
+        let own = match host {
+            Arch::X86 => "main:\n    movq $60, %rax\n    syscall\n",
+            Arch::Arm64 => "_start:\n    mov x0, #1\n    svc #0\n",
+            Arch::Arm => "    .thumb\n    bx lr\n",
+            Arch::RiscV => "_start:\n    addi a0, zero, 1\n    ecall\n",
+        };
+        let (other, other_set) = if host == Arch::RiscV {
+            ("main:\n    movq $60, %rax\n    syscall\n", "x86/x86-64")
+        } else {
+            ("_start:\n    addi a0, zero, 1\n    ecall\n", "riscv")
+        };
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("own.s"), own).unwrap();
+        std::fs::write(dir.path().join("other.s"), other).unwrap();
+        let buffers = vec![
+            Buffer::open(&dir.path().join("own.s")).unwrap(),
+            Buffer::open(&dir.path().join("other.s")).unwrap(),
+        ];
+        let asm_lsp = server(&fake.to_string_lossy(), Vec::new());
+        let mut lsp = Lsp::new(dir.path().into(), true, asm_lsp);
+        let mut said = Vec::new();
+        for _ in 0..300 {
+            said.extend(lsp.sync(&buffers, &[0, 1]));
+            lsp.poll(&buffers);
+            if lsp.docs.contains_key(&0) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            lsp.docs.contains_key(&0),
+            "this computer's own assembly is served"
+        );
+        assert!(!lsp.docs.contains_key(&1), "another CPU's isn't");
+        // It's said once, with the settings that would serve it.
+        let notices: Vec<&String> = said
+            .iter()
+            .filter_map(|event| match event {
+                Event::Notice(text) => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains(".asm-lsp.toml"), "{}", notices[0]);
+        assert!(notices[0].contains(other_set), "{}", notices[0]);
+        let error = lsp.request(Kind::Hover, 1, &buffers[1], 4).unwrap_err();
+        assert!(error.to_string().contains(".asm-lsp.toml"), "{error}");
+        assert_eq!(lsp.status(1, &buffers[1]), None);
+        assert!(lsp.report().contains("asm: "), "{}", lsp.report());
+        // With the project's settings, asm-lsp reads it as they say: it's served.
+        std::fs::write(
+            dir.path().join(".asm-lsp.toml"),
+            format!("[default_config]\nassembler = \"gas\"\ninstruction_set = \"{other_set}\"\n"),
+        )
+        .unwrap();
+        lsp.restart();
+        for _ in 0..300 {
+            lsp.sync(&buffers, &[0, 1]);
+            lsp.poll(&buffers);
+            if lsp.docs.contains_key(&1) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(lsp.docs.contains_key(&1));
+        // Another server of yours ([lsp.asm]) gets every file, settings or not.
+        std::fs::remove_file(dir.path().join(".asm-lsp.toml")).unwrap();
+        let yours = server("python3", vec!["-c".into(), SERVER.into()]);
+        let mut lsp = Lsp::new(dir.path().into(), true, yours);
+        for _ in 0..300 {
+            lsp.sync(&buffers, &[0, 1]);
+            lsp.poll(&buffers);
+            if lsp.docs.contains_key(&0) && lsp.docs.contains_key(&1) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(lsp.docs.contains_key(&0) && lsp.docs.contains_key(&1));
     }
 
     #[cfg(unix)]

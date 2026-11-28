@@ -466,6 +466,14 @@ the history graph appears after you make commits.
   (`fi`, `done` and `esac` line up with what they close); with the Bash language
   server, ShellCheck's warnings, completion, hover, go to definition and shfmt's
   formatting. [Details](#shell-scripts).
+- **Assembly for x86, ARM and RISC-V:** `.s`, `.S`, `.asm`, `.nasm` files in GNU
+  as's syntax (AT&T or Intel), NASM's, MASM's or Go's, for x86 and x86-64, 32-bit
+  ARM and Thumb, AArch64 (Apple's too) and RISC-V. Instructions, branches,
+  registers, directives, labels, immediates and relocations each have their color;
+  which CPU a file is for comes from its code (`%rax`, `x0`, `a0`), its name
+  (`memmove_arm64.s`) or the project's `.asm-lsp.toml`. With asm-lsp, hover docs
+  for instructions and registers, completion and go to definition.
+  [Details](#assembly-x86-arm-and-risc-v).
 - **YAML and JSON, checked against their schemas:** GitHub Actions workflows,
   Kubernetes manifests, `package.json`, `tsconfig.json` and the hundreds of other
   files SchemaStore knows, with errors, completion and hover docs from the schema.
@@ -1369,6 +1377,7 @@ are installed); by hand, install a server once:
 | JSON | `vscode-json-language-server` (VS Code's) | `npm install -g vscode-langservers-extracted` (Homebrew: `vscode-langservers-extracted` · Arch: `vscode-json-languageserver`) |
 | Shell (sh, bash, ksh) | `bash-language-server`, with `shellcheck` for warnings and `shfmt` for formatting (also found in `~/go/bin`) | `npm install -g bash-language-server` (Homebrew and Arch: `bash-language-server`) · `brew` / `apt` / `pacman install shellcheck shfmt` (Fedora, openSUSE: `ShellCheck`) |
 | Dockerfile, Docker Compose | `docker-language-server` (also found in `~/go/bin`) | `go install github.com/docker/docker-language-server/cmd/docker-language-server@latest`, or a binary from its [releases](https://github.com/docker/docker-language-server/releases) |
+| Assembly (x86, ARM, RISC-V) | `asm-lsp` (also found in `~/.cargo/bin`), for the files it reads right: [details](#assembly-x86-arm-and-risc-v) | `cargo install asm-lsp --locked` (Homebrew: `asm-lsp`) |
 
 | Feature | How |
 | --- | --- |
@@ -1538,6 +1547,69 @@ once installed:
   and, with `K` on a `FROM` image, what Docker Scout knows about it.
 
 Raido tells the server not to send usage reports to Docker (`telemetry: off`).
+
+#### Assembly (x86, ARM and RISC-V)
+
+`.s`, `.S`, `.sx`, `.asm`, `.nasm` and `.yasm` files are highlighted with the
+grammar for the CPU they're written for, and the status line names it: *Assembly
+(x86)*, *Assembly (ARM)* for 32-bit ARM and Thumb, *Assembly (AArch64)*, *Assembly
+(RISC-V)*. Each knows its assembler's syntax: GNU as (AT&T, and Intel after
+`.intel_syntax`), NASM, YASM and MASM on x86; GNU as, Clang (Apple's too) and armasm
+on ARM; GNU as on RISC-V; Go's assembler on all of them. Labels, instructions,
+branches and calls (in the control-flow color), registers (`%rax`, `eax`, `x0`,
+`v0.4s`, `a0`, `mstatus`), directives (`.globl`, `section`, `.word`), immediates
+(`$60`, `#1`, `0x10`, `0FFh`), relocations (`@PLT`, `:lo12:`, `msg@PAGEOFF`,
+`%hi(msg)`), sizes (`qword ptr`), strings, comments and `.S` files' `#include` and
+`#define` lines each get their color.
+
+The extensions don't say which CPU, so Raido reads it from, in turn:
+
+1. the project's `.asm-lsp.toml` (the nearest one above the file, up to the folder
+   with `.git`), whose `instruction_set` (`"x86/x86-64"`, `"arm"`, `"arm64"`,
+   `"riscv"`) names it for the whole project or, in a `[[project]]`, for a folder;
+2. the file's name: `memmove_arm64.s`, `asm_amd64.s`, `start-riscv.S`,
+   `boot_rv64gc.S` (`.nasm` and `.yasm` are x86's);
+3. its code: registers and instructions only one CPU has (`%rax`, `w0`, `adrp`,
+   `a0`, `ecall`, `8(sp)`); comments and strings don't count;
+4. its folders: `arch/arm64/kernel/head.S`;
+5. the CPU Raido runs on.
+
+An empty `.s` file starts as this computer's, and switches as soon as the code
+typed in it says otherwise. ```` ```nasm ````, ```` ```armasm ````, ```` ```arm64 ````
+and ```` ```riscv ```` blocks in Markdown are highlighted too, and an ```` ```asm ````
+block by its code.
+
+Enter after a label on a line of its own (`loop:`) indents the next line; a label
+typed on an indented line goes back to where the labels above it start. `Ctrl-/`
+and `gc` comment lines out with the mark the file's assembler reads, the one its
+comments already use: `;` for NASM, `@` for 32-bit ARM, `//` for AArch64 and Go,
+`#` for GNU as on x86 and RISC-V (GNU as reads `;` as a statement separator, not a
+comment).
+
+**asm-lsp** adds hover docs for instructions, registers and directives, completion,
+go to definition and references for labels, and the assembler's errors. Without
+settings it reads every file as GNU as for the CPU it runs on, and checks files by
+assembling them with `gcc`, so Raido starts it only for those files: another CPU's
+code, or NASM's, would get the wrong docs and an error on most lines. For the rest,
+`:lsp` says what to write. Put a `.asm-lsp.toml` in the project's root (or in
+`~/.config/asm-lsp/`, `%APPDATA%\asm-lsp\` on Windows) naming the CPU and the
+assembler, and Raido serves every file with it; its `instruction_set` also picks Raido's grammar, so one setting does both:
+
+```toml
+[default_config]
+assembler = "gas"        # or "nasm", "masm", "go"
+instruction_set = "riscv"  # or "x86/x86-64", "arm", "arm64"
+
+# A folder of the project with another CPU's code.
+[[project]]
+path = "firmware"
+assembler = "gas"
+instruction_set = "arm"
+```
+
+`asm-lsp gen-config` writes one by asking. A `compile_commands.json` or
+`compile_flags.txt` tells it how the project assembles (a cross-assembler, include
+folders); see [asm-lsp's README](https://github.com/bergercookie/asm-lsp#readme).
 
 #### JSON formatting
 
