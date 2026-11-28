@@ -2463,6 +2463,7 @@ plugins are intentionally not part of v0.1.
 | Need a specific Raido executable | `command -v raido` shows which installation your shell selects. |
 | “Raido needs an interactive terminal” | Launch directly in Terminal, iTerm2, a Linux terminal emulator or an SSH terminal; do not pipe stdout. |
 | No syntax colors / monochrome UI | Use a color-capable terminal. If you intentionally inherited `NO_COLOR`, `env -u NO_COLOR raido .` enables normal colors for this run. |
+| Backspace or Ctrl-C does nothing | Ctrl-H deletes as Backspace (terminals such as xterm send ^H for it), and Raido turns off xterm's modifyOtherKeys and kitty's keyboard mode when it starts. `raido --keys` shows what your terminal really sends: a key that prints nothing there never reaches Raido; fix it in the terminal's settings (Backspace sends `^?` / DEL). |
 | Sidebar missing or tiny panes | In a [small window](#a-small-window) the sidebar hides by itself: widen the terminal, `Ctrl-e` opens the explorer, `Ctrl-b s` keeps the sidebar, `auto_hide_sidebar = false` stops it. Ctrl-b z zooms a pane. |
 | A split shortcut does nothing | Release Ctrl-b before the second key. Use `:vsplit` or `:split` if your keyboard makes `%`/`"` awkward. |
 | Running Raido inside tmux | tmux reads Ctrl-b first. Press it twice, then the Raido key (`Ctrl-b Ctrl-b v` opens the review), or give tmux another prefix. (`Ctrl-b b` is the other way round: tmux running in a Raido terminal pane.) |

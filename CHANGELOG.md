@@ -282,6 +282,13 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Fixed
 
+- **Backspace and Ctrl-C work in terminals that send them differently.** A
+  terminal that sends ^H for Backspace (xterm as it comes, some others too) had
+  Backspace do nothing in Raido: Ctrl-H now deletes as Backspace, as in Vim,
+  except in a terminal pane (the program there gets it as typed) and the find bar
+  (where it opens replace). And a terminal left by an earlier program in xterm's
+  modifyOtherKeys or kitty's keyboard mode sends Ctrl-C in a form Raido couldn't
+  read: Raido turns those modes off when it starts.
 - **Keys typed while an AI answers in the background stay Raido's.** The docs and
   the review's explanations ran their AI CLI attached to Raido's terminal, and
   Antigravity opens it (`/dev/tty`) to read keys and set its own modes, so text

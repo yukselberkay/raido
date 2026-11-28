@@ -120,6 +120,10 @@ fn reset_terminal_colors() {
 /// Mouse clicks and the wheel, reported in SGR form; motion only while a button is
 /// held (dragging the minimap).
 const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+/// Keys as terminals send them by default: xterm's modifyOtherKeys and kitty's
+/// keyboard flags off. A program before Raido (or one it ran) that left them on
+/// would have Ctrl-C and others arrive in a form Raido can't read.
+const PLAIN_KEYS: &str = "\x1b[>4;0m\x1b[=0;1u";
 const MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
 
 /// The terminal tab's title while Raido runs: the project folder's name, so a tab
@@ -316,6 +320,11 @@ fn main() -> Result<()> {
         EnableFocusChange,
         Hide
     )?;
+    {
+        let mut out = io::stdout();
+        let _ = write!(out, "{PLAIN_KEYS}");
+        let _ = out.flush();
+    }
     set_title(&title(&app.root));
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     terminal.clear()?;

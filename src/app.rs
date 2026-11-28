@@ -3239,6 +3239,7 @@ impl App {
     }
     fn key(&mut self, key: KeyEvent) -> Result<()> {
         self.grab = None;
+        let key = self.backspace_for_ctrl_h(key);
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         // F1 opens the guide focused, refocuses an open one, and closes a focused one.
         // Everything else keeps working while it is open.
@@ -6194,6 +6195,26 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+    /// Ctrl-H as Backspace, as in Vim: terminals that send ^H for Backspace (xterm
+    /// as it comes, some others too) reach Raido as Ctrl-H, which nothing else in
+    /// Raido needs but the find bar, where it opens replace. A terminal pane gets it
+    /// as typed: the program there decides (Kali's zsh deletes a word with it).
+    fn backspace_for_ctrl_h(&self, key: KeyEvent) -> KeyEvent {
+        if key.code != KeyCode::Char('h') || key.modifiers != KeyModifiers::CONTROL {
+            return key;
+        }
+        let overlay = self.copy.is_some()
+            || self.picker.is_some()
+            || self.finder.is_some()
+            || self.input.is_some()
+            || self.prefix
+            || self.sidebar_focus;
+        let terminal = matches!(self.panes.get(&self.focused), Some(Pane::Terminal(_)));
+        if (terminal && !overlay) || (self.find.is_some() && !overlay) {
+            return key;
+        }
+        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)
     }
     /// Back to the code: the editor you were in last, else the first on screen.
     fn focus_editor(&mut self) {
@@ -9567,6 +9588,45 @@ while True:
         let error = app.command("ask anything").unwrap_err().to_string();
         assert!(error.contains("docs_ai"), "{error}");
     }
+    #[test]
+    fn ctrl_h_deletes_as_backspace_where_text_is_typed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, "").unwrap();
+        let mut app = App::new(dir.path().into(), Some(path), false).unwrap();
+        let id = app.buffer_id().unwrap();
+        let ctrl_h = |app: &mut App| press(app, KeyCode::Char('h'), KeyModifiers::CONTROL);
+        // In insert mode, as in Vim.
+        press(&mut app, KeyCode::Char('i'), KeyModifiers::NONE);
+        for c in "abc".chars() {
+            press(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        ctrl_h(&mut app);
+        assert_eq!(app.buffers[id].line(0), "ab");
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        // On the command line.
+        press(&mut app, KeyCode::Char(':'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('w'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('x'), KeyModifiers::NONE);
+        ctrl_h(&mut app);
+        assert_eq!(app.input.as_ref().unwrap().text, "w");
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        // In the find bar it still opens replace.
+        press(&mut app, KeyCode::Char('f'), KeyModifiers::CONTROL);
+        ctrl_h(&mut app);
+        assert!(app.find.as_ref().unwrap().replacing);
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        let typed = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL);
+        assert_eq!(app.backspace_for_ctrl_h(typed).code, KeyCode::Backspace);
+        // A terminal pane gets ^H as typed: the program there decides.
+        #[cfg(unix)]
+        {
+            app.open_terminal(Some(("cat", Vec::new())), Some(Axis::Vertical))
+                .unwrap();
+            assert_eq!(app.backspace_for_ctrl_h(typed).code, KeyCode::Char('h'));
+        }
+    }
+
     #[test]
     fn a_slash_in_a_note_offers_its_blocks_as_notion_does() {
         let dir = tempfile::tempdir().unwrap();
