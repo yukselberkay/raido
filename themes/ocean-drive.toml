@@ -1,0 +1,31 @@
+# Ocean Drive — a Raido original, inspired by the neon-sunset look of Grand Theft
+# Auto VI's trailers and key art (Rockstar Games; Raido is not affiliated): a deep
+# indigo night, the logo's hot neon pink, sunset orange and golden-hour yellow,
+# ocean aqua and dusky violet, after Miami's Ocean Drive.
+# Built in: :theme ocean-drive. Copy under a new name to customize.
+background = "#171127"
+foreground = "#f3e6f1"
+muted = "#a291bd"
+accent = "#ff4fa3"
+secondary = "#2ee6d6"
+warning = "#ffa24c"
+border = "#3d2c5c"
+selection = "#3a2150"
+line_number = "#8a77ac"
+# ANSI 0–7, then bright 8–15: neon on the night, the sunset in the warm ones.
+ansi = [
+  "#211936", "#ff5c7a", "#5ef2b2", "#ffd166", "#5aa9ff", "#ff4fa3", "#2ee6d6", "#d9cbe6",
+  "#6e5c90", "#ff8197", "#8af7c8", "#ffe08a", "#86c2ff", "#ff7cc0", "#70f3e8", "#f3e6f1",
+]
+
+[syntax_colors]
+comment = "#8f7fb0"
+keyword = "#ff4fa3"
+control = "#c38bff"
+function = "#ffa24c"
+type = "#2ee6d6"
+string = "#ffd166"
+number = "#ff7a6b"
+constant = "#ff7a6b"
+operator = "#7fd3ff"
+variable = "#f3e6f1"

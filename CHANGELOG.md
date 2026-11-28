@@ -10,6 +10,11 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **The Ocean Drive theme** (`:theme ocean-drive`), a Raido original after the
+  neon-sunset look of GTA VI's trailers and key art: a deep indigo night, hot neon
+  pink, sunset orange and golden-hour yellow, ocean aqua and dusky violet, across
+  the UI, syntax colors and the terminal's 16 colors.
+
 - **A `/` menu in notes**, as in Notion: in a Markdown file, `/` at the start of a
   line or after a space opens a menu of blocks (Text, Heading 1–3, bulleted,
   numbered and to-do lists, Quote, the five callouts, Code block, Table, Divider,

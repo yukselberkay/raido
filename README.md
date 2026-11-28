@@ -2320,6 +2320,7 @@ ANSI colors. **Visual Studio Dark is the default.** Raido's original `phosphor` 
 | Solarized Dark | `:theme solarized-dark` | Deep teal, restrained blue, green, yellow |
 | Monokai | `:theme monokai` | Warm black, lime, hot pink, cyan |
 | GitHub Dark | `:theme github-dark` | Near-black, blue, coral, lavender |
+| Ocean Drive | `:theme ocean-drive` | A Raido original after GTA VI's neon sunset: indigo night, hot pink, sunset orange, gold, aqua |
 
 ![All bundled dark themes side by side](docs/raido-dark-themes.png)
 

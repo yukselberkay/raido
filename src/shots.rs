@@ -555,6 +555,7 @@ fn shots_dark_themes() {
             "solarized-dark",
             "monokai",
             "github-dark",
+            "ocean-drive",
         ],
         "#111",
     );

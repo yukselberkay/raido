@@ -68,6 +68,7 @@ pub const BUNDLED_THEMES: &[(&str, &str)] = &[
     ),
     ("monokai", include_str!("../themes/monokai.toml")),
     ("github-dark", include_str!("../themes/github-dark.toml")),
+    ("ocean-drive", include_str!("../themes/ocean-drive.toml")),
     (
         "visual-studio-light",
         include_str!("../themes/visual-studio-light.toml"),
@@ -832,7 +833,7 @@ mod tests {
     }
     #[test]
     fn all_bundled_themes_have_complete_valid_palettes() {
-        assert_eq!(BUNDLED_THEMES.len(), 18);
+        assert_eq!(BUNDLED_THEMES.len(), 19);
         // Light themes may share white; no two share the whole look.
         let mut palettes = std::collections::HashSet::new();
         for (name, _) in BUNDLED_THEMES {

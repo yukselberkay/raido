@@ -1,6 +1,6 @@
 # Raido themes
 
-Eleven coordinated, built-in dark palettes and seven light ones, plus any theme you
+Twelve coordinated, built-in dark palettes and seven light ones, plus any theme you
 drop into your themes directory (Raido TOML or VS Code JSON — no rebuild), for
 editor panes, the sidebar, Git view, AI launcher, syntax highlighting, and embedded
 terminals. Visual Studio Dark is Raido's default; Raido's original Phosphor and
@@ -48,6 +48,7 @@ Names identify their inspiration; Raido is not affiliated with the original proj
 | [solarized-dark](solarized-dark.toml) | [Solarized](https://ethanschoonover.com/solarized/) | `#002b36` | `#2aa198` |
 | [monokai](monokai.toml) | [Monokai](https://monokai.pro/) | `#272822` | `#a6e22e` |
 | [github-dark](github-dark.toml) | [GitHub themes](https://github.com/primer/github-vscode-theme) | `#0d1117` | `#58a6ff` |
+| [ocean-drive](ocean-drive.toml) | A Raido original after the neon-sunset look of [Grand Theft Auto VI](https://www.rockstargames.com/VI)'s key art (not affiliated) | `#171127` | `#ff4fa3` |
 
 Light:
 
