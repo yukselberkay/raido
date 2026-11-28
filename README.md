@@ -263,7 +263,24 @@ there, and editor command paths are resolved relative to it.
 `--demo` looks for `examples/beacon.rs` in the selected directory. It opens an
 AI **launcher**, not an authenticated model session. It does not use an API key
 or make model requests. Recommended screen: **140 × 40** or larger; a three-pane
-layout is more comfortable at **168 × 48**. Below 70 columns the sidebar is hidden.
+layout is more comfortable at **168 × 48**. In a smaller window the sidebar hides by
+itself, so the code keeps its room ([details](#a-small-window)).
+
+### A small window
+
+When the window gets too small for the sidebar, it hides by itself and comes back as
+soon as there's room again, so the code isn't squeezed into a few columns beside it:
+
+- **Narrow:** the explorer and the Git section hide when the panes would have fewer
+  than 70 columns beside them: under 99 columns with the default `sidebar_width` of
+  29. The first time, the status line says so.
+- **Short:** under 24 rows the Git section hides first and the explorer gets its
+  rows; under 16 rows the whole sidebar does.
+- **Still there when you ask:** `Ctrl-e` (or `:files`) opens the explorer and
+  `Ctrl-b g` the Git section while you use them, beside panes that keep 25 columns;
+  back in a pane, they hide again. `Ctrl-b s` keeps the sidebar on screen whatever
+  the size, and again hides it as before.
+- `auto_hide_sidebar = false` keeps the sidebar in any window 70 columns or wider.
 
 ## Install and update
 
@@ -545,7 +562,7 @@ Shift on many keyboard layouts. On macOS, **Ctrl means Control, not Command**.
 | `Ctrl-b y` | Hand the mouse to the terminal for selecting and copying (layout unchanged); again to take it back ([Mouse](#mouse)) |
 | `Ctrl-b d` / `Ctrl-b D` | Dock (hide) the pane, still running / list docked panes to bring one back ([Docking panes](#docking-panes)) |
 | `Ctrl-b +` / `-` / `0` | [Text size](#text-size) bigger / smaller / reset; keep pressing `+` or `-` to repeat |
-| `Ctrl-b s` / `g` | Toggle sidebar / focus the sidebar's Git section |
+| `Ctrl-b s` / `g` | Toggle the sidebar (one hidden in a [small window](#a-small-window) comes back and stays) / focus the sidebar's Git section |
 | `Ctrl-b G` | Open the [Git pane](#git-pane); again focuses it, and when focused maximizes / restores it |
 | `Ctrl-b v` | [Review what AI agents changed](#review-ai-changes): keep or undo each change; again focuses the review, and when focused maximizes / restores it |
 | `Ctrl-b i` | [Hand the AI pane where you are](#ai-panes-see-your-editor): the file and the lines you selected, typed into its prompt as `@file#L10-20`, and on to that pane |
@@ -2321,6 +2338,7 @@ theme immediately. The configuration supports:
 | --- | --- | --- |
 | `theme` | `"visual-studio-dark"` | Any bundled dark or light theme above, `phosphor`/`amber`, or a user theme name |
 | `sidebar_width` | `29` | Columns, clamped to 18–60 |
+| `auto_hide_sidebar` | `true` | In a [small window](#a-small-window) the sidebar hides by itself (under `sidebar_width` + 70 columns or 16 rows; its Git section under 24 rows) and comes back with room; `false` keeps it, but under 70 columns |
 | `tab_width` | `4` | Indentation width when a file and its language don't decide it, clamped to 1–16 |
 | `line_endings` | `"lf"` | How lines end in saved files: `"lf"` (`\n`; a file with Windows `\r\n` endings, or lines ending in a lone `\r`, opens with `\n` and is saved so, the status bar showing `CRLF→LF` until then), `"crlf"` (`\r\n`) or `"auto"` (each file's own, what most of its lines use). `.bat` / `.cmd` files keep theirs. Pasted text takes the file's line breaks, whatever it came with (a terminal sends a paste's as `\r`), and copied text leaves with `\n` |
 | `smart_indent` | `true` | [Language-aware](#language-aware-typing) Enter, `o`, Tab/Shift-Tab and closers |
@@ -2375,7 +2393,7 @@ plugins are intentionally not part of v0.1.
 | Need a specific Raido executable | `command -v raido` shows which installation your shell selects. |
 | “Raido needs an interactive terminal” | Launch directly in Terminal, iTerm2, a Linux terminal emulator or an SSH terminal; do not pipe stdout. |
 | No syntax colors / monochrome UI | Use a color-capable terminal. If you intentionally inherited `NO_COLOR`, `env -u NO_COLOR raido .` enables normal colors for this run. |
-| Sidebar missing or tiny panes | Widen the terminal; the sidebar hides below 70 columns. Ctrl-b s toggles it; Ctrl-b z zooms a pane. |
+| Sidebar missing or tiny panes | In a [small window](#a-small-window) the sidebar hides by itself: widen the terminal, `Ctrl-e` opens the explorer, `Ctrl-b s` keeps the sidebar, `auto_hide_sidebar = false` stops it. Ctrl-b z zooms a pane. |
 | A split shortcut does nothing | Release Ctrl-b before the second key. Use `:vsplit` or `:split` if your keyboard makes `%`/`"` awkward. |
 | Running Raido inside tmux | tmux reads Ctrl-b first. Press it twice, then the Raido key (`Ctrl-b Ctrl-b v` opens the review), or give tmux another prefix. (`Ctrl-b b` is the other way round: tmux running in a Raido terminal pane.) |
 | C compilation fails | Run from the Raido project directory; ensure `cc` exists and create `target` with `mkdir -p target`. |

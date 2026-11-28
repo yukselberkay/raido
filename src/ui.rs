@@ -178,18 +178,34 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     app.explorer_rows = Rect::default();
     app.git_area = Rect::default();
     app.help_area = Rect::default();
-    // On narrower screens the open guide takes the sidebar's room.
-    let sidebar_shown =
-        !bare && app.sidebar_visible && area.width >= 70 && !(app.help && area.width < 140);
+    // In a small window the sidebar hides by itself, so the code keeps its room;
+    // opened by hand (Ctrl-e, Ctrl-b g, :files) it shows while you use it, and
+    // Ctrl-b s keeps it. On narrower screens the open guide takes its room.
+    let (room, git_room) = app.sidebar_room(area.width, area.height);
+    let kept = app.sidebar_pinned || app.sidebar_focus;
+    let sidebar_shown = !bare
+        && app.sidebar_visible
+        && ((room && !(app.help && area.width < 140)) || kept && body.width >= 45);
+    if !bare && app.sidebar_visible {
+        if !room && !kept && app.sidebar_had_room == Some(true) {
+            app.notice("Sidebar hidden to give the code room · Ctrl-e opens it, Ctrl-b s keeps it");
+        }
+        app.sidebar_had_room = Some(room);
+    }
+    app.sidebar_shown = sidebar_shown;
     let content = if sidebar_shown {
+        // Without room, the panes keep 25 columns beside it.
+        let width = if room {
+            app.config.sidebar_width
+        } else {
+            app.config.sidebar_width.min(body.width.saturating_sub(25))
+        };
         let columns = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(app.config.sidebar_width),
-                Constraint::Min(25),
-            ])
+            .constraints([Constraint::Length(width), Constraint::Min(25)])
             .split(body);
-        sidebar(frame, app, columns[0]);
+        let git = git_room || app.git_focus || app.sidebar_pinned;
+        sidebar(frame, app, columns[0], git);
         columns[1]
     } else {
         body
@@ -1623,16 +1639,23 @@ fn explorer_search(frame: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
-fn sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
-    let git_height = (area.height / 3).clamp(8, 16).min(area.height / 2);
+/// The explorer, with the Git section under it when `git` (a short window hides it).
+fn sidebar(frame: &mut Frame, app: &mut App, area: Rect, git: bool) {
+    let git_height = if git {
+        (area.height / 3).clamp(8, 16).min(area.height / 2)
+    } else {
+        0
+    };
     let regions = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(4), Constraint::Length(git_height)])
         .split(area);
-    app.git_area = regions[1];
+    app.git_area = if git { regions[1] } else { Rect::default() };
     if app.explorer_search.is_some() {
         explorer_search(frame, app, regions[0]);
-        git_section(frame, app, regions[1]);
+        if git {
+            git_section(frame, app, regions[1]);
+        }
         return;
     }
     let theme = &app.theme;
@@ -1757,7 +1780,9 @@ fn sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
             color(&theme.muted),
         );
     }
-    git_section(frame, app, regions[1]);
+    if git {
+        git_section(frame, app, regions[1]);
+    }
 }
 
 /// The fewest columns a diagnostic's message is shown in after its line.
@@ -4679,7 +4704,10 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
             ":sound",
             "Chime when an AI prompt finishes (ai_sound picks it)",
         ),
-        ("Ctrl-b z / x / s", "Zoom / close pane / toggle sidebar"),
+        (
+            "Ctrl-b z / x / s",
+            "Zoom / close pane / toggle sidebar (keep it)",
+        ),
         (
             "Ctrl-b + / - / 0",
             "Text bigger / smaller / reset (repeat + or -); :zoom in/out",

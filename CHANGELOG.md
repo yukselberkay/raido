@@ -10,6 +10,14 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **The sidebar hides by itself in a small window**, so the code isn't squeezed
+  beside it, and comes back when the window grows: the explorer and the Git section
+  when the panes would have under 70 columns beside them (under 99 at the default
+  width), the Git section alone under 24 rows, the whole sidebar under 16. The status
+  line says why the first time. `Ctrl-e`, `:files` and `Ctrl-b g` still show them
+  while you use them, `Ctrl-b s` keeps the sidebar on screen, and
+  `auto_hide_sidebar = false` turns it off. It used to hide only under 70 columns.
+
 - **Assembly for x86, ARM and RISC-V is highlighted.** `.s`, `.S`, `.asm`, `.nasm`
   files opened as plain text: syntect has no assembly grammar. Raido's own grammars
   now color them for x86 and x86-64 (GNU as in AT&T or Intel syntax, NASM, YASM,

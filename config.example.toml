@@ -8,6 +8,11 @@ theme = "visual-studio-dark"
 # Runtime switch: :theme dracula; :themes lists all. Drop NAME.toml or a VS Code
 # NAME.json into ~/.config/raido/themes/ to add a theme without rebuilding.
 sidebar_width = 29
+# In a small window the sidebar hides by itself, so the code keeps its room: when
+# the panes would have under 70 columns beside it (under 99 at width 29) or the
+# window is under 16 rows; its Git section under 24 rows. It comes back with room;
+# Ctrl-e opens it meanwhile, Ctrl-b s keeps it. false keeps it but under 70 columns.
+auto_hide_sidebar = true
 tab_width = 4
 # Language-aware typing: Enter indents after `def f():` / `{` / `then`, dedents
 # after `return`; closers and Python's else:/except: line up with their opener.

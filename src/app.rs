@@ -505,6 +505,13 @@ pub struct App {
     pub focused: usize,
     pub sidebar_focus: bool,
     pub sidebar_visible: bool,
+    /// Kept on screen with `Ctrl-b s` in a window too small for it, where it would
+    /// hide by itself ([`App::sidebar_room`]).
+    pub sidebar_pinned: bool,
+    /// Whether the sidebar was drawn last time, and whether it had room then: it
+    /// says why it went when the window gets too small for it.
+    pub sidebar_shown: bool,
+    pub sidebar_had_room: Option<bool>,
     pub tree: FileTree,
     pub mode: Mode,
     pub prefix: bool,
@@ -713,6 +720,9 @@ impl App {
             focused: 0,
             sidebar_focus: false,
             sidebar_visible: true,
+            sidebar_pinned: false,
+            sidebar_shown: false,
+            sidebar_had_room: None,
             tree,
             mode: Mode::Normal,
             prefix: false,
@@ -4166,7 +4176,13 @@ impl App {
             KeyCode::Char('A') => self.open_ai(Some(Axis::Vertical))?,
             KeyCode::Char('e') => self.toggle_explorer(),
             KeyCode::Char('s') => {
-                self.sidebar_visible = !self.sidebar_visible;
+                if self.sidebar_visible && !self.sidebar_shown {
+                    // Hidden for room: show it, and keep it.
+                    self.sidebar_pinned = true;
+                } else {
+                    self.sidebar_visible = !self.sidebar_visible;
+                    self.sidebar_pinned = false;
+                }
                 self.sidebar_focus = false;
             }
             KeyCode::Char('g') => {
@@ -4252,6 +4268,21 @@ impl App {
     }
     /// Ctrl-e: focus the file explorer, even from the sidebar's Git section;
     /// pressed in the explorer, return to the active pane.
+    /// Whether a `width` × `height` window has room for the sidebar, and for its
+    /// Git section under the explorer. In a smaller one they hide by themselves, so
+    /// the code keeps its room: the sidebar when the panes would have fewer than
+    /// [`PANES_BESIDE_SIDEBAR`] columns beside it or the window is under
+    /// [`SIDEBAR_ROWS`] rows, the Git section under [`GIT_SECTION_ROWS`] rows. They
+    /// come back when it grows. `auto_hide_sidebar = false` keeps them, but for
+    /// the sidebar in a window under 70 columns.
+    pub fn sidebar_room(&self, width: u16, height: u16) -> (bool, bool) {
+        if !self.config.auto_hide_sidebar {
+            return (width >= 70, true);
+        }
+        let sidebar =
+            width >= self.config.sidebar_width + PANES_BESIDE_SIDEBAR && height >= SIDEBAR_ROWS;
+        (sidebar, height >= GIT_SECTION_ROWS)
+    }
     fn toggle_explorer(&mut self) {
         if self.sidebar_focus && !self.git_focus {
             self.sidebar_focus = false;
@@ -7385,6 +7416,13 @@ impl App {
     }
 }
 
+/// Columns the panes keep beside the sidebar: in a narrower window it hides by
+/// itself ([`App::sidebar_room`]).
+pub const PANES_BESIDE_SIDEBAR: u16 = 70;
+/// Rows a window needs for the sidebar, and for its Git section under the explorer.
+pub const SIDEBAR_ROWS: u16 = 16;
+pub const GIT_SECTION_ROWS: u16 = 24;
+
 /// Entries PgUp / PgDn move in the sidebar's lists (files, Git changes, search
 /// results): a short hop that keeps your place, not a whole screenful.
 const SIDEBAR_PAGE: isize = 5;
@@ -7765,8 +7803,8 @@ mod tests {
             marked.contains("\"group\" is") && marked.contains('…'),
             "{marked}"
         );
-        // Too narrow for a few words: only the dot.
-        let rows = screen(&mut app, 75, 20);
+        // Too narrow for a few words: only the dot. (Here the sidebar has hidden.)
+        let rows = screen(&mut app, 47, 20);
         assert!(!line(&rows, "re.search").contains("group\" is"));
         // On the cursor's line it's in the footer, not after the text.
         app.command("2").unwrap();
@@ -8001,6 +8039,59 @@ mod tests {
         assert_eq!(app.tree.selected, app.tree.entries.len() - 1);
         press(&mut app, KeyCode::Home, KeyModifiers::NONE);
         assert_eq!(app.tree.selected, 0);
+    }
+
+    #[test]
+    fn the_sidebar_hides_in_a_small_window_and_comes_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::write(root.join("notes.txt"), "hello\n").unwrap();
+        let mut app = App::new(root.clone(), Some(root.join("notes.txt")), false).unwrap();
+        let drawn = |app: &mut App, width, height| screen(app, width, height).join("\n");
+        // With room: the explorer and the Git section under it.
+        let wide = drawn(&mut app, 120, 30);
+        assert!(wide.contains("EXPLORER") && wide.contains("GIT / TREE"));
+        // Narrow: it hides, says why once, and the code gets the width.
+        let narrow = drawn(&mut app, 90, 30);
+        assert!(!narrow.contains("EXPLORER"));
+        assert!(app.message.contains("Sidebar hidden"), "{}", app.message);
+        assert!(
+            drawn(&mut app, 120, 30).contains("EXPLORER"),
+            "back with room"
+        );
+        // Short: the Git section goes first, then the sidebar.
+        let short = drawn(&mut app, 120, 20);
+        assert!(short.contains("EXPLORER") && !short.contains("GIT / TREE"));
+        assert!(!drawn(&mut app, 120, 14).contains("EXPLORER"));
+        // Asked for in a small window, they show while you use them.
+        press(&mut app, KeyCode::Char('e'), KeyModifiers::CONTROL);
+        assert!(drawn(&mut app, 90, 20).contains("EXPLORER"));
+        press(&mut app, KeyCode::Char('e'), KeyModifiers::CONTROL);
+        assert!(
+            !drawn(&mut app, 90, 20).contains("EXPLORER"),
+            "back to the code"
+        );
+        press(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('g'), KeyModifiers::NONE);
+        assert!(drawn(&mut app, 120, 20).contains("GIT / TREE"));
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        app.sidebar_focus = false;
+        assert!(!drawn(&mut app, 90, 20).contains("EXPLORER"));
+        // Ctrl-b s keeps it; again, it hides as before.
+        press(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('s'), KeyModifiers::NONE);
+        let kept = drawn(&mut app, 90, 20);
+        assert!(kept.contains("EXPLORER") && kept.contains("GIT / TREE"));
+        press(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('s'), KeyModifiers::NONE);
+        assert!(!drawn(&mut app, 90, 20).contains("EXPLORER"));
+        assert!(!app.sidebar_visible && !app.sidebar_pinned);
+        // auto_hide_sidebar = false keeps them in any window but a very narrow one.
+        app.sidebar_visible = true;
+        app.config.auto_hide_sidebar = false;
+        let off = drawn(&mut app, 90, 20);
+        assert!(off.contains("EXPLORER") && off.contains("GIT / TREE"));
+        assert!(!drawn(&mut app, 60, 20).contains("EXPLORER"));
     }
 
     #[test]

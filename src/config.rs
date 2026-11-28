@@ -161,6 +161,9 @@ pub const DEFAULT_FONT_SIZE: f32 = 14.0;
 pub struct Config {
     pub theme: String,
     pub sidebar_width: u16,
+    /// The sidebar hides by itself in a small window, so the code keeps its room,
+    /// and comes back when the window grows (see `App::sidebar_room`).
+    pub auto_hide_sidebar: bool,
     pub tab_width: usize,
     /// Enter indents after a line that opens a block and dedents after `return`;
     /// closers and Python's `else:` go back under their opener (see `language`).
@@ -276,6 +279,7 @@ impl Default for Config {
         Self {
             theme: "visual-studio-dark".into(),
             sidebar_width: 29,
+            auto_hide_sidebar: true,
             tab_width: 4,
             smart_indent: true,
             auto_pairs: true,
