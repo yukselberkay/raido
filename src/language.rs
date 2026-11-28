@@ -1016,6 +1016,23 @@ pub fn enter(b: &mut Buffer, rules: &Rules) {
         after,
     } = line(b);
     let newline = eol(b);
+    // A code block's opening fence with none to close it: Enter makes the closing
+    // one too, the cursor on the line between, as Notion makes a code block.
+    if rules.lang == Lang::Markdown && after.trim().is_empty() {
+        let text = b.text.to_string();
+        let lines: Vec<&str> = text.split('\n').collect();
+        if crate::notes::unclosed(&lines, b.row) {
+            let fence: String = before
+                .trim_start()
+                .chars()
+                .take_while(|c| *c == '`' || *c == '~')
+                .collect();
+            let at = b.index();
+            b.insert(&format!("{newline}{indent}{newline}{indent}{fence}"));
+            b.set_index(at + newline.chars().count() + indent.chars().count());
+            return;
+        }
+    }
     // Markdown lists go on; Enter on an empty item ends the list.
     if rules.lang == Lang::Markdown && after.trim().is_empty() {
         if let Some((marker, empty)) = list_item(&before) {
@@ -1255,6 +1272,17 @@ pub fn type_char(b: &mut Buffer, rules: &Rules, c: char, typing: Typing) {
         {
             b.insert(&c.to_string().repeat(4));
             b.set_index(b.index() - 3);
+            return;
+        }
+        // A Markdown fence's third backtick doesn't pair: ``` opens a code block,
+        // and Enter closes it (see `enter`).
+        let fence = back(1) == Some('`') && back(2) == Some('`') && {
+            let here = line(b);
+            here.before.trim_end_matches('`').trim().is_empty()
+                && here.before.trim_start().chars().count() == 2
+        };
+        if rules.lang == Lang::Markdown && c == '`' && fence {
+            b.insert("`");
             return;
         }
         let block_comments = matches!(

@@ -326,6 +326,10 @@ pub enum MenuKind {
     Words,
     /// A note's `/` menu: the block picked replaces the `/` and what was typed.
     Blocks,
+    /// A code block's language, after its fence: picked, the cursor goes in.
+    Languages,
+    /// A link's target in a note, after its `](`: files, and `#headings`.
+    Paths,
 }
 
 /// How to start an AI CLI pane.
@@ -440,7 +444,10 @@ fn in_raido(program: &str, args: &mut Vec<String>) {
             let value = toml::Value::String(text).to_string();
             // `codex resume` takes it after its subcommand, as the others.
             let at = usize::from(args.first().is_some_and(|a| a == "resume"));
-            args.splice(at..at, ["-c".to_string(), format!("developer_instructions={value}")]);
+            args.splice(
+                at..at,
+                ["-c".to_string(), format!("developer_instructions={value}")],
+            );
         }
         _ => {}
     }
@@ -4872,12 +4879,29 @@ impl App {
             KeyCode::Char(c) if !ctrl => Some(c),
             _ => None,
         };
+        // In a note, Tab moves through a table's cells and nests a list item.
+        if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
+            let back = key.code == KeyCode::BackTab;
+            if let Some(id) = self.buffer_id() {
+                if self.table_tab(id, back) || self.list_tab(id, back) {
+                    return Ok(());
+                }
+            }
+        }
         self.insert_edit(key)?;
         if self.menu.is_some() {
             self.menu_filter();
         }
         if let (Some('/'), Some(id), None) = (typed, self.buffer_id(), &self.menu) {
             if self.blocks_menu(id) {
+                return Ok(());
+            }
+        }
+        if let (Some(c), Some(id), None) = (typed, self.buffer_id(), &self.menu) {
+            if (c == '`' || c == '~') && self.languages_menu(id) {
+                return Ok(());
+            }
+            if c == '(' && self.paths_menu(id) {
                 return Ok(());
             }
         }
@@ -4934,6 +4958,215 @@ impl App {
         });
         true
     }
+    /// A note's code block just opened (```): the languages to write after it, the
+    /// note's own first. True when the menu opened.
+    fn languages_menu(&mut self, id: usize) -> bool {
+        let b = &self.buffers[id];
+        if language::Lang::of(b) != language::Lang::Markdown {
+            return false;
+        }
+        let line = b.line(b.row);
+        let before: String = line.chars().take(b.col).collect();
+        let mark = before.trim_start();
+        let fence =
+            mark.len() >= 3 && (mark.chars().all(|c| c == '`') || mark.chars().all(|c| c == '~'));
+        if !fence || line.chars().count() != b.col {
+            return false;
+        }
+        let text = b.text.to_string();
+        if crate::notes::fence_at(text.lines(), b.row).map(|(open, _)| open) != Some(b.row) {
+            return false;
+        }
+        let used = crate::notes::used_languages(&text);
+        let items: Vec<lsp::Completion> = crate::notes::languages(&used)
+            .into_iter()
+            .map(|(language, what)| lsp::Completion::word(&language, what))
+            .collect();
+        self.menu = Some(Menu {
+            shown: (0..items.len()).collect(),
+            items,
+            selected: 0,
+            buffer: id,
+            row: b.row,
+            start: b.col,
+            auto: true,
+            picked: false,
+            kind: MenuKind::Languages,
+        });
+        true
+    }
+    /// The language picked for a code block: written after its fence, the closing
+    /// fence added when there's none, and the cursor on the block's first line.
+    fn write_language(&mut self, menu: &Menu, language: &str) {
+        let b = &mut self.buffers[menu.buffer];
+        let start = b.char_index(menu.row, menu.start);
+        let end = b.index();
+        b.replace(start, end, language);
+        let line = b.line(menu.row);
+        let indent: String = line
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect();
+        let fence: String = line
+            .trim_start()
+            .chars()
+            .take_while(|c| *c == '`' || *c == '~')
+            .collect();
+        let text = b.text.to_string();
+        let lines: Vec<&str> = text.split('\n').collect();
+        if crate::notes::unclosed(&lines, menu.row) {
+            let end = b.char_index(menu.row, b.line_len(menu.row));
+            b.set_index(end);
+            b.insert(&format!("\n{indent}\n{indent}{fence}"));
+        }
+        b.row = menu.row + 1;
+        b.col = b.line_len(b.row).min(indent.chars().count());
+        b.clamp();
+    }
+    /// A note's link just given its target's `(` (`[text](`): the project's files,
+    /// as written from the note's folder (notes first), and its own `#headings`.
+    fn paths_menu(&mut self, id: usize) -> bool {
+        let b = &self.buffers[id];
+        if language::Lang::of(b) != language::Lang::Markdown || b.col < 2 {
+            return false;
+        }
+        let line: Vec<char> = b.line(b.row).chars().collect();
+        if line.get(b.col - 1) != Some(&'(') || line.get(b.col - 2) != Some(&']') {
+            return false;
+        }
+        let root = self
+            .root
+            .canonicalize()
+            .unwrap_or_else(|_| self.root.clone());
+        let Some(note_dir) = b
+            .path
+            .as_deref()
+            .and_then(Path::parent)
+            .map(|d| d.canonicalize().unwrap_or_else(|_| d.to_path_buf()))
+        else {
+            return false;
+        };
+        let text = b.text.to_string();
+        let row = b.row;
+        let start = b.col;
+        if self.known_files.is_empty() {
+            self.known_files = crate::finder::project_files(&self.root);
+        }
+        let mut items: Vec<lsp::Completion> = crate::notes::headings(&text)
+            .into_iter()
+            .map(|(_, title)| {
+                let anchor = format!("#{}", crate::notes::anchor(&title));
+                lsp::Completion::found_by(&anchor, "heading here", &format!("{anchor} {title}"))
+            })
+            .collect();
+        items.extend(
+            crate::notes::link_targets(&root, &note_dir, &self.known_files)
+                .into_iter()
+                .take(2_000)
+                .map(|(path, what)| lsp::Completion::word(&path, what)),
+        );
+        if items.is_empty() {
+            return false;
+        }
+        self.menu = Some(Menu {
+            shown: (0..items.len()).collect(),
+            items,
+            selected: 0,
+            buffer: id,
+            row,
+            start,
+            auto: false,
+            picked: false,
+            kind: MenuKind::Paths,
+        });
+        // Headings come after a `#`; the files first.
+        self.menu_filter();
+        true
+    }
+    /// Tab in a note's table: to the next cell (Shift-Tab the one before), the
+    /// table lined up as it goes; past its last cell, a new row. True when the
+    /// cursor was in a table.
+    fn table_tab(&mut self, id: usize, back: bool) -> bool {
+        let b = &self.buffers[id];
+        if language::Lang::of(b) != language::Lang::Markdown {
+            return false;
+        }
+        let text = b.text.to_string();
+        let lines: Vec<&str> = text.split('\n').collect();
+        let Some((first, last)) = crate::notes::table_at(&lines, b.row) else {
+            return false;
+        };
+        let mut rows: Vec<String> = lines[first..=last].iter().map(|l| l.to_string()).collect();
+        let columns = crate::notes::columns(&rows[0]).max(1);
+        let mut row = b.row - first;
+        let mut cell = crate::notes::cell_of(&rows[row], b.col).min(columns - 1);
+        // The `| --- |` line is stepped over.
+        match (back, row) {
+            (false, 1) => (row, cell) = (2, 0),
+            (true, 1) => (row, cell) = (0, columns - 1),
+            (false, _) if cell + 1 < columns => cell += 1,
+            (false, _) => (row, cell) = (if row == 0 { 2 } else { row + 1 }, 0),
+            (true, _) if cell > 0 => cell -= 1,
+            (true, 0) => {}
+            (true, _) => (row, cell) = (if row == 2 { 0 } else { row - 1 }, columns - 1),
+        }
+        if row >= rows.len() {
+            rows.push(crate::notes::empty_row(&rows[0]));
+        }
+        let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+        let lined = crate::notes::format_table(&refs);
+        let b = &mut self.buffers[id];
+        let start = b.char_index(first, 0);
+        let end = b.char_index(last, b.line_len(last));
+        b.replace(start, end, &lined.join("\n"));
+        b.row = first + row;
+        b.col = crate::notes::cell_start(&lined[row], cell);
+        b.clamp();
+        true
+    }
+    /// Tab on a note's list item nests it under the one above (Shift-Tab takes it
+    /// back out a level), wherever the cursor is in it. True when it did.
+    fn list_tab(&mut self, id: usize, back: bool) -> bool {
+        let b = &self.buffers[id];
+        if language::Lang::of(b) != language::Lang::Markdown {
+            return false;
+        }
+        let line = b.line(b.row);
+        let Some(own) = crate::notes::nests_by(&line) else {
+            return false;
+        };
+        let indent = |l: &str| l.chars().take_while(|c| *c == ' ').count();
+        let here = indent(&line);
+        // The list item above at a lower level, and the one just above.
+        let above: Vec<String> = (0..b.row)
+            .rev()
+            .map(|r| b.line(r))
+            .take_while(|l| !l.trim().is_empty())
+            .collect();
+        if back && here == 0 {
+            return false;
+        }
+        let target = if back {
+            above
+                .iter()
+                .find(|l| crate::notes::nests_by(l).is_some() && indent(l) < here)
+                .map_or(0, |l| indent(l))
+        } else {
+            // As far as the text of the item above starts: under it.
+            here + above
+                .first()
+                .and_then(|l| crate::notes::nests_by(l))
+                .unwrap_or(own)
+        };
+        let b = &mut self.buffers[id];
+        let (row, col) = (b.row, b.col);
+        let start = b.char_index(row, 0);
+        b.replace(start, start + here, &" ".repeat(target));
+        b.row = row;
+        b.col = (col + target).saturating_sub(here);
+        b.clamp();
+        true
+    }
     /// The block picked from a note's `/` menu, written in place of the `/` and
     /// what was typed after it.
     fn write_block(&mut self, menu: &Menu, label: &str) {
@@ -4961,6 +5194,9 @@ impl App {
         let end = b.char_index(menu.row, edit.to);
         b.replace(start, end, &edit.text);
         b.set_index(start + edit.cursor);
+        if block.label == "Code block" {
+            self.languages_menu(menu.buffer);
+        }
     }
     /// The word being typed before the cursor: (start column, text).
     fn typed_word(&self, id: usize) -> (usize, String) {
@@ -5006,13 +5242,27 @@ impl App {
         if word.is_empty() && !any_length {
             return false;
         }
-        let lang = language::Lang::of(&self.buffers[id]);
-        let texts: Vec<String> = self
-            .buffers
-            .iter()
-            .filter(|b| language::Lang::of(b) == lang)
-            .map(|b| b.text.slice(..b.text.len_chars().min(400_000)).to_string())
-            .collect();
+        let mut lang = language::Lang::of(&self.buffers[id]);
+        let mut texts: Vec<String> = Vec::new();
+        // In a note's code block: its language's keywords, and the words of the
+        // note and of your files in that language.
+        if lang == language::Lang::Markdown {
+            let b = &self.buffers[id];
+            let note = b.text.slice(..b.text.len_chars().min(400_000)).to_string();
+            if let Some((_, label)) = crate::notes::fence_at(note.lines(), b.row) {
+                let code = crate::notes::language_of(&label);
+                if code != language::Lang::Plain {
+                    lang = code;
+                    texts.push(note);
+                }
+            }
+        }
+        texts.extend(
+            self.buffers
+                .iter()
+                .filter(|b| language::Lang::of(b) == lang)
+                .map(|b| b.text.slice(..b.text.len_chars().min(400_000)).to_string()),
+        );
         let items: Vec<lsp::Completion> = language::suggestions(lang, &texts, &word)
             .into_iter()
             .map(|(label, detail)| lsp::Completion::word(&label, detail))
@@ -5527,16 +5777,29 @@ impl App {
         let fits = |c: char| match menu.kind {
             MenuKind::Words => c.is_alphanumeric() || c == '_',
             MenuKind::Blocks => c.is_alphanumeric() || c == '_' || c == '-',
+            MenuKind::Languages => c.is_alphanumeric() || "+#-_.".contains(c),
+            MenuKind::Paths => !c.is_whitespace() && !"()[]<>".contains(c),
         };
         if !prefix.chars().all(fits) {
             self.menu = None;
             return;
         }
+        // A link's target matches anywhere in its path: `cat` finds `../img/cat.png`.
+        let lower = prefix.to_lowercase();
         menu.shown = (0..menu.items.len())
-            .filter(|&i| menu.items[i].matches(&prefix))
+            .filter(|&i| match menu.kind {
+                MenuKind::Paths => menu.items[i].label.to_lowercase().contains(&lower),
+                _ => menu.items[i].matches(&prefix),
+            })
             .collect();
-        // Blocks whose name starts with what's typed come first (`/t`: Text, Table).
-        if menu.kind == MenuKind::Blocks {
+        // A link's headings only after its `#`, its files only before.
+        if menu.kind == MenuKind::Paths {
+            let anchor = prefix.starts_with('#');
+            menu.shown
+                .retain(|&i| menu.items[i].label.starts_with('#') == anchor);
+        }
+        // Those whose name starts with what's typed come first (`/t`: Text, Table).
+        if menu.kind != MenuKind::Words {
             let lower = prefix.to_lowercase();
             menu.shown
                 .sort_by_key(|&i| !menu.items[i].label.to_lowercase().starts_with(&lower));
@@ -5567,9 +5830,10 @@ impl App {
             return;
         };
         let item = menu.items[menu.shown[menu.selected]].clone();
-        if menu.kind == MenuKind::Blocks {
-            self.write_block(&menu, &item.label);
-            return;
+        match menu.kind {
+            MenuKind::Blocks => return self.write_block(&menu, &item.label),
+            MenuKind::Languages => return self.write_language(&menu, &item.label),
+            MenuKind::Words | MenuKind::Paths => {}
         }
         let b = &mut self.buffers[menu.buffer];
         let start_col = item.start.unwrap_or(menu.start).min(b.col);
@@ -9649,12 +9913,19 @@ while True:
         let mut args = vec!["--session-id".to_string(), "x".into()];
         in_raido("claude", &mut args);
         assert_eq!(args[2], "--append-system-prompt");
-        assert!(args[3].starts_with("You are running inside a pane of Raido"), "{}", args[3]);
+        assert!(
+            args[3].starts_with("You are running inside a pane of Raido"),
+            "{}",
+            args[3]
+        );
         assert!(args[3].contains("raido skill"));
         // Codex: developer instructions, after `resume`, as TOML.
         let mut args = vec!["resume".to_string(), "id".into()];
         in_raido("codex", &mut args);
-        assert_eq!((args[0].as_str(), args[1].as_str(), args[3].as_str()), ("resume", "-c", "id"));
+        assert_eq!(
+            (args[0].as_str(), args[1].as_str(), args[3].as_str()),
+            ("resume", "-c", "id")
+        );
         let value: toml::Value = toml::from_str(&args[2]).unwrap();
         assert!(value["developer_instructions"]
             .as_str()
@@ -9667,7 +9938,10 @@ while True:
             "model = \"x\"\ndeveloper_instructions = \"Be terse.\"\n",
         )
         .unwrap();
-        assert_eq!(codex_instructions_in(dir.path()).as_deref(), Some("Be terse."));
+        assert_eq!(
+            codex_instructions_in(dir.path()).as_deref(),
+            Some("Be terse.")
+        );
         assert_eq!(codex_instructions_in(&dir.path().join("none")), None);
         // The others read the skill's description.
         let mut args = Vec::new();
@@ -9760,6 +10034,9 @@ while True:
             ("```".into(), String::new(), "```".into())
         );
         assert_eq!((b.row, b.col), (3, 3));
+        // It asks which language (Esc: none).
+        assert_eq!(first(&app).0, MenuKind::Languages);
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
         // In code, a `/` is a `/`.
         press(&mut app, KeyCode::Down, KeyModifiers::NONE);
         typing(&mut app, "x = a /");
@@ -9787,6 +10064,129 @@ while True:
             date.len() == 10 && date.chars().filter(|c| *c == '-').count() == 2,
             "{date}"
         );
+    }
+
+    #[test]
+    fn a_note_suggests_code_languages_links_and_moves_through_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for file in ["notes/ideas.md", "README.md", "img/cat.png"] {
+            std::fs::create_dir_all(root.join(file).parent().unwrap()).unwrap();
+            std::fs::write(root.join(file), "x\n").unwrap();
+        }
+        let path = root.join("notes/today.md");
+        std::fs::write(&path, "# Plan\n\n```python\nx = 1\n```\n").unwrap();
+        let mut app = App::new(root.into(), Some(path), false).unwrap();
+        let id = app.buffer_id().unwrap();
+        let typing = |app: &mut App, text: &str| {
+            for c in text.chars() {
+                press(app, KeyCode::Char(c), KeyModifiers::NONE);
+            }
+        };
+        let menu = |app: &App| {
+            let menu = app.menu.as_ref().expect("a menu");
+            let shown: Vec<String> = menu
+                .shown
+                .iter()
+                .map(|&i| menu.items[i].label.clone())
+                .collect();
+            (menu.kind, shown)
+        };
+        let line = |app: &App, row: usize| app.buffers[id].line(row);
+        // ``` is a fence (not four backticks); its languages pop up, the note's first.
+        press(&mut app, KeyCode::Char('G'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('o'), KeyModifiers::NONE);
+        typing(&mut app, "```");
+        let fence = app.buffers[id].row;
+        assert_eq!(line(&app, fence), "```");
+        let (kind, shown) = menu(&app);
+        assert_eq!((kind, shown[0].as_str()), (MenuKind::Languages, "python"));
+        typing(&mut app, "ru");
+        assert_eq!(menu(&app).1[0], "rust");
+        // Tab picks it: the block closes, the cursor goes in.
+        press(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(
+            (
+                line(&app, fence),
+                line(&app, fence + 1),
+                line(&app, fence + 2)
+            ),
+            ("```rust".into(), String::new(), "```".into())
+        );
+        assert_eq!((app.buffers[id].row, app.buffers[id].col), (fence + 1, 0));
+        // In it, that language's keywords.
+        typing(&mut app, "fn main() { ret");
+        let (kind, shown) = menu(&app);
+        assert!(
+            kind == MenuKind::Words && shown.contains(&"return".to_string()),
+            "{shown:?}"
+        );
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        // A fence typed and Enter: the block closes itself.
+        press(&mut app, KeyCode::Char('G'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('o'), KeyModifiers::NONE);
+        typing(&mut app, "~~~");
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        let row = app.buffers[id].row;
+        assert_eq!(
+            (line(&app, row - 1), line(&app, row), line(&app, row + 1)),
+            ("~~~".into(), String::new(), "~~~".into())
+        );
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        // A link's target: the files, as written from the note, notes first.
+        press(&mut app, KeyCode::Char('G'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('o'), KeyModifiers::NONE);
+        typing(&mut app, "see [x](");
+        let (kind, shown) = menu(&app);
+        assert_eq!(kind, MenuKind::Paths);
+        assert_eq!(
+            shown,
+            ["ideas.md", "today.md", "../README.md", "../img/cat.png"]
+        );
+        typing(&mut app, "cat");
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        let row = app.buffers[id].row;
+        assert_eq!(line(&app, row), "see [x](../img/cat.png)");
+        // And `#`: this note's headings.
+        press(&mut app, KeyCode::End, KeyModifiers::NONE);
+        typing(&mut app, " and [top](#");
+        assert_eq!(menu(&app), (MenuKind::Paths, vec!["#plan".to_string()]));
+        press(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(line(&app, row), "see [x](../img/cat.png) and [top](#plan)");
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        // Tab through a table: cell by cell, lined up, a new row at its end.
+        let at = app.buffers[id].text.len_chars();
+        app.buffers[id].set_index(at);
+        app.buffers[id].insert("\n| a | bee |\n|-|-|\n| 1 | 2 |");
+        let table = app.buffers[id].row - 2;
+        (app.buffers[id].row, app.buffers[id].col) = (table, 2);
+        press(&mut app, KeyCode::Char('i'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(line(&app, table), "| a   | bee |");
+        assert_eq!(line(&app, table + 1), "| --- | --- |");
+        assert_eq!((app.buffers[id].row, app.buffers[id].col), (table, 8));
+        press(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!((app.buffers[id].row, app.buffers[id].col), (table + 2, 2));
+        press(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        press(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(line(&app, table + 3), "|     |     |");
+        assert_eq!(app.buffers[id].row, table + 3);
+        press(&mut app, KeyCode::BackTab, KeyModifiers::NONE);
+        assert_eq!((app.buffers[id].row, app.buffers[id].col), (table + 2, 8));
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        // Tab nests a list item under the one above, Shift-Tab takes it out.
+        let at = app.buffers[id].text.len_chars();
+        app.buffers[id].set_index(at);
+        app.buffers[id].insert("\n\n1. one\n- two");
+        let item = app.buffers[id].row;
+        press(&mut app, KeyCode::Char('A'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(line(&app, item), "   - two");
+        assert_eq!(app.buffers[id].col, 8);
+        press(&mut app, KeyCode::BackTab, KeyModifiers::NONE);
+        assert_eq!(line(&app, item), "- two");
     }
 
     #[test]

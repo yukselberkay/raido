@@ -223,7 +223,10 @@ mod tests {
             .stdin(std::process::Stdio::null())
             .output()
             .unwrap();
-        assert_eq!(String::from_utf8_lossy(&out.stdout), "own-session\nno-tty\n");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "own-session\nno-tty\n"
+        );
     }
 
     #[test]

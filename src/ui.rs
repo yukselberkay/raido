@@ -5380,6 +5380,10 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
             "Blocks as in Notion: /h2 /todo /code /table /date",
         ),
         (
+            "``` / ]( / Tab (a note)",
+            "Code languages / link targets / next table cell, nest item",
+        ),
+        (
             ":preview / Ctrl-b m",
             "Toggle rendered view / source, keeping place",
         ),

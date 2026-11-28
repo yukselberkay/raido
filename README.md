@@ -1708,6 +1708,17 @@ text, the block starts the line below.
 
 A `/` in a path (`src/`), in inline code or in a code block is just a `/`.
 
+**Suggestions while you write**, in insert mode:
+
+| You type | What happens |
+| --- | --- |
+| ```` ``` ```` (or `~~~`) on a line of its own | A code block opens: the languages pop up, the note's own first; type a few letters and Tab picks one. The closing fence comes with it, and the cursor goes inside |
+| Enter after a block's opening fence | The block closes itself if nothing closes it yet, the cursor on the line between |
+| A word in a code block | That language's keywords, and words from the note and your files in it |
+| `](` in a link | The project's files, as written from the note's folder: notes first, then images, then the rest (`cat` finds `../img/cat.png`); after a `#`, this note's headings (`#set-up--run`). Enter or Tab writes it |
+| Tab in a table | The next cell, the table lined up as you go; past its last cell, a new row. Shift-Tab goes back |
+| Tab on a list item | It nests under the item above (as far as that item's text); Shift-Tab takes it back out a level |
+
 ### Markdown preview
 
 With `markdown_live = false`, existing `.md`/`.markdown` files open **rendered**

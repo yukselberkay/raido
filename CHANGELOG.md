@@ -10,6 +10,16 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **Suggestions while you write notes.** ```` ``` ```` on a line of its own opens a
+  code block: the languages pop up (the note's own first), and the one you pick
+  comes with the closing fence, the cursor inside; Enter on an opening fence
+  closes it too. In a code block, words come from that language's keywords. After
+  a link's `](`, the project's files as written from the note (notes first, then
+  images) and, after `#`, the note's headings. Tab moves through a table's cells,
+  lining it up and adding a row past its end, and nests a list item under the one
+  above; Shift-Tab goes back. The third backtick of a fence no longer pairs into
+  four (```` ```` ````).
+
 - **The Ocean Drive theme** (`:theme ocean-drive`), a Raido original after the
   neon-sunset look of GTA VI's trailers and key art: a deep indigo night, hot neon
   pink, sunset orange and golden-hour yellow, ocean aqua and dusky violet, across
