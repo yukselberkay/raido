@@ -2113,9 +2113,19 @@ It gets there, and stays current with your Raido version:
   leaves the agents' folders alone, and nothing in Raido needs an agent.
 - **Launching an agent** from Raido's launcher checks it again.
 
-The skill bundles this manual, the theme guide and the example config, so answers
-match your Raido version. Agents without skill support can still read it: every Raido
-pane sets **`$RAIDO_DOCS`** to the manual's path. You can read it yourself with `:docs`.
+**An agent in a Raido pane knows it's there**, so *"how do I split this?"* or *"make
+the text bigger"* is answered from the skill without you saying "in Raido". Claude
+Code is told so in its system prompt (`--append-system-prompt`), Codex in its
+developer instructions (after any of yours in `~/.codex/config.toml`). Gemini CLI,
+Antigravity and OpenCode learn it from the skill's description: Raido sets
+**`RAIDO=1`** in its panes, and the skill tells them to check it when a question is
+about "the editor" or "this terminal".
+
+The skill is part of Raido itself: its source is `skills/raido/SKILL.md` in this
+repository, built into the `raido` binary with this manual, the theme guide and the
+example config, so answers match your Raido version and any machine you install
+Raido on gets it. Agents without skill support can still read it: every Raido pane
+sets **`$RAIDO_DOCS`** to the manual's path. You can read it yourself with `:docs`.
 
 | Do it yourself | |
 | --- | --- |

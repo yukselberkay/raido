@@ -409,6 +409,60 @@ fn auto_mode(program: &str, args: &mut Vec<String>) {
     args.splice(at..at, flags.iter().map(|f| f.to_string()));
 }
 
+/// What an AI CLI in a Raido pane is told about where it runs, so a question about
+/// the editor, its panes or keys is answered from the `raido` skill rather than
+/// guessed at: the user rarely says "in Raido" about the app they're in.
+fn in_raido_text() -> String {
+    format!(
+        "You are running inside a pane of Raido, the user's terminal workspace: a modal \
+         editor with a file explorer, a Git sidebar, terminal and AI panes, a docs pane \
+         and Markdown notes drawn rendered. Questions about the editor, its panes, the \
+         terminal here, keys, commands, settings (config.toml), themes or the AI panes \
+         are about Raido: answer them from the raido skill (or Raido's manual, {}) with \
+         the exact keys or commands, and never guess them.",
+        crate::skill::manual().display()
+    )
+}
+
+/// Tell the AI CLI it runs in Raido (see `in_raido_text`): Claude Code in its
+/// system prompt; Codex as developer instructions, after any of yours from its
+/// config, which a `-c` would replace. The others read the skill's description,
+/// which says how to tell (Raido sets `RAIDO=1` in its panes).
+fn in_raido(program: &str, args: &mut Vec<String>) {
+    let text = in_raido_text();
+    match program {
+        "claude" => args.extend(["--append-system-prompt".to_string(), text]),
+        "codex" => {
+            let text = match codex_instructions() {
+                Some(yours) if !yours.trim().is_empty() => format!("{yours}\n\n{text}"),
+                _ => text,
+            };
+            let value = toml::Value::String(text).to_string();
+            // `codex resume` takes it after its subcommand, as the others.
+            let at = usize::from(args.first().is_some_and(|a| a == "resume"));
+            args.splice(at..at, ["-c".to_string(), format!("developer_instructions={value}")]);
+        }
+        _ => {}
+    }
+}
+
+/// The developer instructions in your Codex config (`$CODEX_HOME/config.toml`).
+fn codex_instructions() -> Option<String> {
+    let home = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| directories::BaseDirs::new().map(|d| d.home_dir().join(".codex")))?;
+    codex_instructions_in(&home)
+}
+
+fn codex_instructions_in(home: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(home.join("config.toml")).ok()?;
+    let config: toml::Value = toml::from_str(&text).ok()?;
+    config
+        .get("developer_instructions")?
+        .as_str()
+        .map(str::to_string)
+}
+
 /// How long Ctrl-b n waits for the second press that stops an agent mid-answer.
 const ASK_AGAIN: Duration = Duration::from_secs(5);
 
@@ -7072,6 +7126,7 @@ impl App {
         if self.config.ai_auto_mode {
             auto_mode(program, &mut args);
         }
+        in_raido(program, &mut args);
         // OpenCode on the model you chose (`:ai opencode <model>`, the choice): on
         // your model server when you have one, else on your Ollama.
         let mut env = Vec::new();
@@ -9588,6 +9643,38 @@ while True:
         let error = app.command("ask anything").unwrap_err().to_string();
         assert!(error.contains("docs_ai"), "{error}");
     }
+    #[test]
+    fn ai_clis_are_told_they_run_inside_raido() {
+        // Claude Code: in its system prompt.
+        let mut args = vec!["--session-id".to_string(), "x".into()];
+        in_raido("claude", &mut args);
+        assert_eq!(args[2], "--append-system-prompt");
+        assert!(args[3].starts_with("You are running inside a pane of Raido"), "{}", args[3]);
+        assert!(args[3].contains("raido skill"));
+        // Codex: developer instructions, after `resume`, as TOML.
+        let mut args = vec!["resume".to_string(), "id".into()];
+        in_raido("codex", &mut args);
+        assert_eq!((args[0].as_str(), args[1].as_str(), args[3].as_str()), ("resume", "-c", "id"));
+        let value: toml::Value = toml::from_str(&args[2]).unwrap();
+        assert!(value["developer_instructions"]
+            .as_str()
+            .unwrap()
+            .contains("inside a pane of Raido"));
+        // Yours stay, Raido's after them.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "model = \"x\"\ndeveloper_instructions = \"Be terse.\"\n",
+        )
+        .unwrap();
+        assert_eq!(codex_instructions_in(dir.path()).as_deref(), Some("Be terse."));
+        assert_eq!(codex_instructions_in(&dir.path().join("none")), None);
+        // The others read the skill's description.
+        let mut args = Vec::new();
+        in_raido("gemini", &mut args);
+        assert!(args.is_empty());
+    }
+
     #[test]
     fn ctrl_h_deletes_as_backspace_where_text_is_typed() {
         let dir = tempfile::tempdir().unwrap();

@@ -2,12 +2,14 @@
 name: raido
 description: >
   Interactive documentation for Raido, the Rust terminal workspace (modal editor,
-  file explorer, Git sidebar, terminals, AI panes). Use whenever the user asks how
-  to do something in Raido — keyboard shortcuts, commands, config.toml settings,
-  themes, fonts and font size, opening Git, splits and panes, copy/paste, language
-  servers, Markdown preview, AI CLIs or local LLMs, Windows/macOS/Linux setup, or
-  troubleshooting — or says "in raido", or the RAIDO environment variable is set
-  (the agent runs inside a Raido pane) and the question is about the editor or UI.
+  file explorer, Git sidebar, terminal and AI panes, docs pane, Markdown notes drawn
+  rendered). Use whenever the user asks how to do something in Raido: keyboard
+  shortcuts, commands, config.toml settings, themes, fonts and font size, Git,
+  splits and panes, copy/paste, language servers, Markdown notes, AI CLIs or local
+  LLMs, setup on Linux, macOS or Windows, or troubleshooting. Raido runs AI agents in
+  its panes and sets RAIDO=1 there: when the user asks about "the editor", "this
+  terminal", panes, keys or settings without naming an app, run `echo $RAIDO`; if
+  it prints 1, the question is about Raido and this skill answers it.
 ---
 
 # Raido — answer "how do I …" questions

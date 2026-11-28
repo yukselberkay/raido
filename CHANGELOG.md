@@ -282,6 +282,12 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Fixed
 
+- **An AI agent in a Raido pane answers questions about Raido from its skill.**
+  Agents found the skill but weren't told they run inside Raido, so a question
+  like "how do I split this pane?" didn't make them load it unless you said "in
+  Raido". Claude Code is now told in its system prompt, and Codex in its developer
+  instructions (after any of yours); the skill's description tells Gemini CLI,
+  Antigravity and OpenCode that `RAIDO=1` marks a Raido pane.
 - **Backspace and Ctrl-C work in terminals that send them differently.** A
   terminal that sends ^H for Backspace (xterm as it comes, some others too) had
   Backspace do nothing in Raido: Ctrl-H now deletes as Backspace, as in Vim,
