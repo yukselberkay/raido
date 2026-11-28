@@ -464,6 +464,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 );
                 let lines = app.syntax.cache.get(&buffer_id).map(|c| &c.lines);
                 let selection = if active { selection } else { None };
+                // A note drawn rendered: the focused pane's cursor line shows its
+                // Markdown, to edit.
+                let live = app
+                    .live
+                    .get(
+                        buffer_id,
+                        buffer,
+                        app.config.markdown_live && !bare,
+                        &app.syntax,
+                    )
+                    .map(|doc| (doc, active.then_some(buffer.row)));
                 let diagnostics = app
                     .lsp
                     .diagnostics
@@ -489,6 +500,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     app.config.inline_diagnostics,
                     app.config.tab_width,
                     bare,
+                    live,
                 );
                 if active {
                     app.cursor_at = cursor;
@@ -539,6 +551,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                         let language = match shell {
                             _ if compose => "Docker Compose".to_string(),
                             Some(shell) => format!("Shell ({})", shell.name()),
+                            None if app.live.rendered(
+                                buffer_id,
+                                buffer,
+                                app.config.markdown_live,
+                            ) =>
+                            {
+                                format!("{} · rendered (^B R)", app.syntax.language(buffer))
+                            }
                             None => app.syntax.language(buffer),
                         };
                         let errors = diagnostics.iter().filter(|d| d.severity == 1).count();
@@ -1978,7 +1998,24 @@ fn editor(
     inline: bool,
     tab_width: usize,
     bare: bool,
+    live: Option<(&crate::livemd::Doc, Option<usize>)>,
 ) -> Option<(u16, u16)> {
+    if let Some((doc, written)) = live.filter(|_| !bare) {
+        let view = NoteView {
+            highlight,
+            selection,
+            diagnostics,
+            changes,
+            theme,
+            active,
+            relative,
+            inline,
+            tab: tab_width,
+            doc,
+            written,
+        };
+        return note(frame, buffer, area, &view);
+    }
     let digits = buffer.lines().to_string().len().max(3);
     // Copy view leaves out line numbers and marks: only the text is on screen.
     let gutter = if bare { 0 } else { (digits + 2) as u16 };
@@ -2200,6 +2237,281 @@ fn editor(
         return Some(at);
     }
     None
+}
+
+/// What a note is drawn with (see `note`): the same as an editor, and the note as
+/// read for drawing rendered, with the line shown as written (the cursor's).
+struct NoteView<'a> {
+    highlight: Option<&'a Vec<Vec<(syntect::highlighting::Style, String)>>>,
+    selection: Option<(usize, usize)>,
+    diagnostics: &'a [Diagnostic],
+    changes: &'a [Option<Change>],
+    theme: &'a Theme,
+    active: bool,
+    relative: bool,
+    inline: bool,
+    tab: usize,
+    doc: &'a crate::livemd::Doc,
+    written: Option<usize>,
+}
+
+/// A Markdown note drawn rendered (see `livemd`), its long lines wrapped at words:
+/// every line as it reads, but the cursor's and a selection's, which show their
+/// Markdown to edit. Like `editor`, it says where the cursor is.
+fn note(frame: &mut Frame, buffer: &mut Buffer, area: Rect, v: &NoteView) -> Option<(u16, u16)> {
+    let theme = v.theme;
+    let digits = buffer.lines().to_string().len().max(3);
+    let gutter = (digits + 2) as u16;
+    if area.width <= gutter + 1 || area.height == 0 {
+        return None;
+    }
+    let width = usize::from(area.width - gutter);
+    let height = usize::from(area.height);
+    buffer.hscroll = 0;
+    let palette = crate::markdown::Palette::new(theme);
+    let plain = Style::default().fg(color(&theme.foreground));
+    let selected = v.selection.map(|(start, end)| {
+        let last = buffer.text.len_chars();
+        buffer.text.char_to_line(start.min(last))..=buffer.text.char_to_line(end.min(last))
+    });
+    let lay = |buffer: &Buffer, row: usize| {
+        let raw = buffer.line(row);
+        let rendered =
+            v.written != Some(row) && !selected.as_ref().is_some_and(|r| r.contains(&row));
+        let regions = v
+            .highlight
+            .and_then(|lines| lines.get(row))
+            .filter(|line| !line.is_empty())
+            .map(Vec::as_slice);
+        crate::livemd::lay(
+            v.doc, row, &raw, rendered, regions, &palette, plain, v.tab, width,
+        )
+    };
+    // The cursor's row stays on screen, a wrapped line taking the rows it takes.
+    if buffer.row < buffer.scroll {
+        buffer.scroll = buffer.row;
+    }
+    let cursor = lay(buffer, buffer.row);
+    let cursor_col = cursor
+        .at
+        .get(buffer.col)
+        .or(cursor.at.last())
+        .copied()
+        .unwrap_or(0);
+    let (cursor_sub, cursor_x) = cursor.place(cursor_col);
+    let above: Vec<usize> = (buffer.scroll..buffer.row)
+        .map(|row| lay(buffer, row).rows.len())
+        .collect();
+    let mut used = above.iter().sum::<usize>() + cursor_sub + 1;
+    for rows in above {
+        if used <= height {
+            break;
+        }
+        used -= rows;
+        buffer.scroll += 1;
+    }
+    let mut placed = None;
+    let mut y = 0;
+    let mut row = buffer.scroll;
+    while y < height {
+        if row >= buffer.lines() {
+            text(
+                frame,
+                Rect::new(area.x, area.y + y as u16, gutter, 1),
+                "  ~",
+                color(&theme.border),
+            );
+            y += 1;
+            continue;
+        }
+        let laid = lay(buffer, row);
+        let current = row == buffer.row;
+        let marks: Vec<&Diagnostic> = v.diagnostics.iter().filter(|d| d.row == row).collect();
+        let top = y;
+        for sub in 0..laid.rows.len() {
+            if y >= height {
+                break;
+            }
+            let sy = area.y + y as u16;
+            if current {
+                frame.render_widget(
+                    Block::default().style(Style::default().bg(color(&theme.selection))),
+                    Rect::new(area.x, sy, area.width, 1),
+                );
+            }
+            let bar = if current { "▎" } else { "│" };
+            let number_color = color(if current {
+                &theme.accent
+            } else {
+                theme.line_number.as_ref().unwrap_or(&theme.muted)
+            });
+            if sub == 0 {
+                let number = if v.relative && !current {
+                    row.abs_diff(buffer.row)
+                } else {
+                    row + 1
+                };
+                text(
+                    frame,
+                    Rect::new(area.x, sy, gutter, 1),
+                    format!("{number:>digits$} {bar}"),
+                    number_color,
+                );
+                if let Some(Some(change)) = v.changes.get(row) {
+                    let glyph = match change {
+                        Change::Added | Change::Modified => "▌",
+                        Change::Deleted => "▁",
+                        Change::DeletedAbove => "▔",
+                    };
+                    text(
+                        frame,
+                        Rect::new(area.x + digits as u16 + 1, sy, 1, 1),
+                        glyph,
+                        change_color(*change, theme),
+                    );
+                }
+                if let Some(worst) = marks.iter().map(|d| d.severity).min() {
+                    text(
+                        frame,
+                        Rect::new(area.x + digits as u16 + 1, sy, 1, 1),
+                        "●",
+                        severity_color(theme, worst),
+                    );
+                }
+            } else {
+                text(
+                    frame,
+                    Rect::new(area.x, sy, gutter, 1),
+                    format!("{:>digits$} {bar}", ""),
+                    number_color,
+                );
+            }
+            let area = Rect::new(area.x + gutter, sy, width as u16, 1);
+            if let Some(bg) = laid.fill {
+                frame.render_widget(Block::default().style(Style::default().bg(bg)), area);
+            }
+            // A row the line wraps to: a quote's bars again, then under the text.
+            let mut spans = Vec::new();
+            if sub > 0 {
+                let mut col = 0;
+                for (at, glyph, style) in laid.bars.iter().filter(|b| b.0 < laid.hang) {
+                    spans.push(Span::raw(" ".repeat(at - col)));
+                    spans.push(Span::styled(glyph.clone(), *style));
+                    col = at + glyph.width();
+                }
+                spans.push(Span::raw(" ".repeat(laid.hang.saturating_sub(col))));
+            }
+            spans.extend(
+                laid.row(sub)
+                    .into_iter()
+                    .map(|(text, style)| Span::styled(text, style)),
+            );
+            frame.render_widget(Paragraph::new(Line::from(spans)), area);
+            y += 1;
+        }
+        // The marks put where the characters were drawn: under a problem, behind
+        // the selection and what the search found.
+        let mark = |frame: &mut Frame, col: usize, set: &dyn Fn(&mut ratatui::buffer::Cell)| {
+            let (sub, x) = laid.place(col);
+            if top + sub < height && x < width {
+                let at = (area.x + gutter + x as u16, area.y + (top + sub) as u16);
+                if let Some(cell) = frame.buffer_mut().cell_mut(at) {
+                    set(cell);
+                }
+            }
+        };
+        let col_of = |i: usize| laid.at.get(i).or(laid.at.last()).copied().unwrap_or(0);
+        for d in &marks {
+            let (x0, x1) = (col_of(d.start), col_of(d.end).max(col_of(d.start) + 1));
+            let mut style = Style::default().add_modifier(Modifier::UNDERLINED);
+            if crate::platform::colored_underlines() {
+                style = style.underline_color(severity_color(theme, d.severity));
+            }
+            for col in x0..x1 {
+                mark(frame, col, &|cell| {
+                    cell.set_style(style);
+                });
+            }
+        }
+        if let Some((start, end)) = v.selection {
+            let raw = buffer.line(row);
+            let line_start = buffer.text.line_to_char(row);
+            let line_end = line_start + raw.chars().count();
+            if start <= line_end && end > line_start {
+                let from = start.max(line_start) - line_start;
+                let to = end.min(line_end) - line_start;
+                let bg = crate::markdown::mix(color(&theme.selection), color(&theme.accent), 0.45);
+                let x1 = col_of(to) + usize::from(end > line_end);
+                for col in col_of(from)..x1 {
+                    mark(frame, col, &|cell| {
+                        cell.set_bg(bg);
+                    });
+                }
+            }
+        }
+        if !buffer.search.is_empty() {
+            let raw = buffer.line(row);
+            let found = crate::editor::find_all(
+                &raw,
+                &buffer.search,
+                !buffer.search_case,
+                buffer.search_word,
+            );
+            for (byte, end) in found {
+                let first = raw[..byte].chars().count();
+                let here = current && first == buffer.col;
+                let bg = color(if here { &theme.accent } else { &theme.warning });
+                let fg = color(&theme.background);
+                for col in col_of(first)..col_of(raw[..end].chars().count()) {
+                    mark(frame, col, &|cell| {
+                        cell.set_bg(bg).set_fg(fg);
+                    });
+                }
+            }
+        }
+        // Why a line has a dot, after its text where there's room.
+        if v.inline && !current {
+            if let Some(d) = marks.iter().find(|d| d.severity <= 2) {
+                let (sub, end) = laid.place(col_of(usize::MAX));
+                let at = end + 3;
+                let room = width.saturating_sub(at);
+                if room >= INLINE_ROOM && top + sub < height {
+                    let message = printable(&d.message);
+                    let shown = if message.width() > room {
+                        format!("{}…", cut(&message, room - 1))
+                    } else {
+                        message
+                    };
+                    let faint = crate::markdown::mix(
+                        severity_color(theme, d.severity),
+                        color(&theme.background),
+                        0.4,
+                    );
+                    text(
+                        frame,
+                        Rect::new(
+                            area.x + gutter + at as u16,
+                            area.y + (top + sub) as u16,
+                            room as u16,
+                            1,
+                        ),
+                        shown,
+                        faint,
+                    );
+                }
+            }
+        }
+        if current && v.active && top + cursor_sub < height {
+            let at = (
+                area.x + gutter + (cursor_x as u16).min(width as u16 - 1),
+                area.y + (top + cursor_sub) as u16,
+            );
+            frame.set_cursor_position(at);
+            placed = Some(at);
+        }
+        row += 1;
+    }
+    placed
 }
 
 /// Text selected with the mouse outside an editor: highlighted where it was drawn,
@@ -5058,6 +5370,10 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         (
             "MARKDOWN · NOTEBOOK · NMAP",
             ".md, .ipynb and Nmap scans open rendered, live",
+        ),
+        (
+            ":render / Ctrl-b R",
+            "A note as written / drawn rendered as you edit",
         ),
         (
             ":preview / Ctrl-b m",

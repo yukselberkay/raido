@@ -164,6 +164,10 @@ pub struct Config {
     /// The sidebar hides by itself in a small window, so the code keeps its room,
     /// and comes back when the window grows (see `App::sidebar_room`).
     pub auto_hide_sidebar: bool,
+    /// Markdown files are drawn rendered while you edit them (headings, emphasis,
+    /// lists, to-dos, quotes, code blocks, tables), the cursor's line as written;
+    /// `Ctrl-b R` switches one file.
+    pub markdown_live: bool,
     pub tab_width: usize,
     /// Enter indents after a line that opens a block and dedents after `return`;
     /// closers and Python's `else:` go back under their opener (see `language`).
@@ -280,6 +284,7 @@ impl Default for Config {
             theme: "visual-studio-dark".into(),
             sidebar_width: 29,
             auto_hide_sidebar: true,
+            markdown_live: true,
             tab_width: 4,
             smart_indent: true,
             auto_pairs: true,

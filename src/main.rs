@@ -21,6 +21,7 @@ mod json;
 mod language;
 mod layout;
 mod link;
+mod livemd;
 mod local_ai;
 mod lsp;
 mod markdown;

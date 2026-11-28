@@ -499,6 +499,8 @@ pub struct App {
     pub theme: Theme,
     pub syntax: Syntax,
     pub previews: Previews,
+    /// Markdown notes as drawn rendered.
+    pub live: crate::livemd::Cache,
     pub buffers: Vec<Buffer>,
     pub panes: BTreeMap<usize, Pane>,
     pub tiles: Tile,
@@ -711,6 +713,7 @@ impl App {
         let mut app = Self {
             syntax: Syntax::new(&theme),
             previews: Previews::default(),
+            live: crate::livemd::Cache::default(),
             root: root.clone(),
             config,
             theme,
@@ -1395,9 +1398,14 @@ impl App {
             _ => String::new(),
         };
         // Existing Markdown files and Nmap scans open rendered; new or empty ones open
-        // for writing.
-        let rendered =
-            markdown::kind(&self.buffers[id]).is_some() && self.buffers[id].text.len_chars() > 0;
+        // for writing. A note drawn rendered as it's edited (`markdown_live`) opens
+        // in the editor.
+        let live = self
+            .live
+            .rendered(id, &self.buffers[id], self.config.markdown_live);
+        let rendered = !live
+            && markdown::kind(&self.buffers[id]).is_some()
+            && self.buffers[id].text.len_chars() > 0;
         // CSV and TSV open as a grid, the same way.
         let table = !rendered
             && crate::sheet::is_table(&self.buffers[id])
@@ -2913,11 +2921,43 @@ impl App {
         let Some((row, col)) = self.editor_point(id, buffer, rect, at, false) else {
             return;
         };
+        // A to-do's box in a rendered note, clicked: ticked or unticked, the cursor
+        // staying where it is.
+        let task = self
+            .rendered_doc(id, buffer, row)
+            .and_then(|doc| doc.lines.get(row)?.task)
+            .filter(|(box_at, _)| *box_at == col);
+        if let Some((box_at, checked)) = task {
+            let b = &mut self.buffers[buffer];
+            let at = b.char_index(row, box_at + 1);
+            let cursor = (b.row, b.col);
+            b.end_group();
+            b.replace(at, at + 1, if checked { " " } else { "x" });
+            b.end_group();
+            (b.row, b.col) = cursor;
+            b.clamp();
+            return;
+        }
         let b = &mut self.buffers[buffer];
         b.end_group();
         b.row = row;
         b.col = col;
         b.clamp();
+    }
+    /// The note in editor pane `id` (buffer `buffer`) as last drawn, when its line
+    /// `row` is drawn rendered: not the focused cursor's line, nor a selection's.
+    fn rendered_doc(&self, id: usize, buffer: usize, row: usize) -> Option<&crate::livemd::Doc> {
+        let b = &self.buffers[buffer];
+        let doc = self.live.peek(buffer, b, self.config.markdown_live)?;
+        if id == self.focused && row == b.row {
+            return None;
+        }
+        let selected = self.selection().is_some_and(|(start, end)| {
+            let last = b.text.len_chars();
+            (b.text.char_to_line(start.min(last))..=b.text.char_to_line(end.min(last)))
+                .contains(&row)
+        });
+        (!selected).then_some(doc)
     }
     /// The character of editor pane `id` (drawn at `rect`) at screen cell `at`.
     /// With `follow`, a point outside the text is taken to the nearest character,
@@ -2944,6 +2984,47 @@ impl App {
             .find(|m| m.pane == id)
             .map_or(rect.right().saturating_sub(1), |m| m.area.x)
             .max(left + 1);
+        // A note drawn rendered wraps its lines: the rows are walked to the line.
+        if let Some(doc) = self.live.peek(buffer, b, self.config.markdown_live) {
+            if !follow && (at.0 < left || at.1 < top) {
+                return None;
+            }
+            let palette = crate::markdown::Palette::new(&self.theme);
+            let width = usize::from(right.saturating_sub(left)).max(1);
+            let x = usize::from(at.0.clamp(left, right - 1) - left);
+            let lay = |row: usize| {
+                let rendered = self.rendered_doc(id, buffer, row).is_some();
+                let line = b.line(row);
+                crate::livemd::lay(
+                    doc,
+                    row,
+                    &line,
+                    rendered,
+                    None,
+                    &palette,
+                    ratatui::style::Style::default(),
+                    tab,
+                    width,
+                )
+            };
+            if at.1 < top {
+                return Some((b.scroll.saturating_sub(1), 0));
+            }
+            let y = usize::from(at.1 - top);
+            let mut used = 0;
+            for row in b.scroll..b.lines() {
+                if used >= usize::from(height) {
+                    return follow.then_some((row, 0));
+                }
+                let laid = lay(row);
+                if y < used + laid.rows.len() {
+                    return Some((row, laid.char_at(y - used, x)));
+                }
+                used += laid.rows.len();
+            }
+            let last = b.lines().saturating_sub(1);
+            return follow.then(|| (last, b.line(last).chars().count()));
+        }
         let row = if follow {
             if at.1 < top {
                 b.scroll.saturating_sub(1)
@@ -4204,6 +4285,7 @@ impl App {
             KeyCode::Char('m') => self.toggle_preview()?,
             KeyCode::Char('t') => self.open_picker(),
             KeyCode::Char('M') => self.split_preview()?,
+            KeyCode::Char('R') => self.switch_rendered()?,
             KeyCode::Char('?') => self.toggle_help(),
             KeyCode::Char('/') => self.docs("")?,
             KeyCode::Char('[') => self.enter_copy_mode(),
@@ -5440,6 +5522,22 @@ impl App {
         )
     }
     /// Switch the focused pane between the rendered view and its source, keeping place.
+    /// `Ctrl-b R`, `:render`: the Markdown file here drawn rendered, or as written.
+    fn switch_rendered(&mut self) -> Result<()> {
+        let Some(id) = self.buffer_id() else {
+            bail!("Open a Markdown file to draw it rendered");
+        };
+        if language::Lang::of(&self.buffers[id]) != language::Lang::Markdown {
+            bail!("Only Markdown files are drawn rendered");
+        }
+        let live = self.config.markdown_live;
+        if self.live.switch(id, &self.buffers[id], live) {
+            self.notice("Rendered · the line you're on shows its Markdown · Ctrl-b R shows it all as written");
+        } else {
+            self.notice("As written · Ctrl-b R draws it rendered");
+        }
+        Ok(())
+    }
     fn toggle_preview(&mut self) -> Result<()> {
         match self.panes.get(&self.focused) {
             Some(Pane::Editor(id)) if crate::sheet::is_table(&self.buffers[*id]) => {
@@ -7469,6 +7567,7 @@ impl App {
                 }
             }
             "theme" | "themes" => self.open_picker(),
+            "render" => self.switch_rendered()?,
             "ask" => self.docs(arg)?,
             "ask-with" => self.ask_with(arg)?,
             "mention" => self.mention()?,
@@ -9369,6 +9468,101 @@ while True:
         let error = app.command("ask anything").unwrap_err().to_string();
         assert!(error.contains("docs_ai"), "{error}");
     }
+    #[test]
+    fn a_note_is_drawn_rendered_and_a_click_lands_on_what_is_drawn() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.md");
+        let long = "word ".repeat(40);
+        std::fs::write(
+            &path,
+            format!(
+                "# Notes\n\n## Plan\n\n- [ ] write tests\n\nSome **bold** words.\n\n{long}end\n"
+            ),
+        )
+        .unwrap();
+        let mut app = App::new(dir.path().into(), Some(path.clone()), false).unwrap();
+        // It opens in the editor, drawn rendered: the cursor's line as written.
+        assert!(matches!(app.panes.get(&app.focused), Some(Pane::Editor(_))));
+        let lines = screen(&mut app, 100, 24);
+        let has = |lines: &[String], text: &str| lines.iter().any(|l| l.contains(text));
+        assert!(has(&lines, "# Notes"), "{lines:#?}");
+        assert!(has(&lines, "Plan ───"), "{lines:#?}");
+        assert!(has(&lines, "☐ write tests"), "{lines:#?}");
+        assert!(has(&lines, "Some bold words."), "{lines:#?}");
+        assert!(has(&lines, "Markdown · rendered (^B R)"), "{lines:#?}");
+        // The long line wraps at words: "end" is on a row of its own number.
+        let end = lines
+            .iter()
+            .position(|l| l.contains("word end"))
+            .expect("wrapped");
+        assert!(!lines[end].contains(" 9 "), "{}", lines[end]);
+        let mouse = |app: &mut App, kind, (column, row): (u16, u16)| {
+            app.event(Event::Mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            }));
+        };
+        let find = |lines: &[String], text: &str| {
+            let y = lines.iter().position(|l| l.contains(text)).unwrap();
+            let x = lines[y][..lines[y].find(text).unwrap()].chars().count();
+            (x as u16, y as u16)
+        };
+        let click = |app: &mut App, at| {
+            mouse(app, MouseEventKind::Down(MouseButton::Left), at);
+            mouse(app, MouseEventKind::Up(MouseButton::Left), at);
+        };
+        // A click on "bold": the cursor goes to its b, past the hidden `**`.
+        let at = find(&lines, "bold words");
+        click(&mut app, at);
+        let id = app.buffer_id().unwrap();
+        assert_eq!((app.buffers[id].row, app.buffers[id].col), (6, 7));
+        // A click on the wrapped row's "end": the last word of line 9.
+        let lines = screen(&mut app, 100, 24);
+        let (x, y) = find(&lines, "word end");
+        click(&mut app, (x + 5, y));
+        assert_eq!((app.buffers[id].row, app.buffers[id].col), (8, 200));
+        // The to-do's box, clicked: ticked, the cursor staying where it is.
+        let lines = screen(&mut app, 100, 24);
+        click(&mut app, find(&lines, "☐ write tests"));
+        assert_eq!(app.buffers[id].line(4), "- [x] write tests");
+        assert_eq!(app.buffers[id].row, 8);
+        let lines = screen(&mut app, 100, 24);
+        assert!(has(&lines, "☑ write tests"), "{lines:#?}");
+        // A selection's lines are as written, to see what's selected.
+        (app.buffers[id].row, app.buffers[id].col) = (4, 0);
+        press(&mut app, KeyCode::Char('V'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('j'), KeyModifiers::NONE);
+        let lines = screen(&mut app, 100, 24);
+        assert!(has(&lines, "- [x] write tests"), "{lines:#?}");
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        let lines = screen(&mut app, 100, 24);
+        assert!(has(&lines, "☑ write tests"), "{lines:#?}");
+        // Ctrl-b R: all of it as written, and back.
+        (app.buffers[id].row, app.buffers[id].col) = (0, 0);
+        press(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('R'), KeyModifiers::NONE);
+        assert!(app.message.contains("As written"), "{}", app.message);
+        let lines = screen(&mut app, 100, 24);
+        assert!(
+            has(&lines, "## Plan") && has(&lines, "- [x] write tests"),
+            "{lines:#?}"
+        );
+        assert!(!has(&lines, "rendered (^B R)"));
+        app.command("render").unwrap();
+        assert!(app.message.starts_with("Rendered"), "{}", app.message);
+        // With markdown_live off, a note opens in the preview, as it used to.
+        let other = dir.path().join("other.md");
+        std::fs::write(&other, "# Other\n").unwrap();
+        app.config.markdown_live = false;
+        app.open(&other).unwrap();
+        assert!(matches!(
+            app.panes.get(&app.focused),
+            Some(Pane::Preview(_))
+        ));
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_docs_question_keeps_the_code_pasted_in_it() {

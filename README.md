@@ -37,6 +37,7 @@ That is what this workspace is for:
 - [Your first five minutes](#your-first-five-minutes)
 - [Horizontal and vertical tiles](#horizontal-and-vertical-tiles)
 - [Keyboard reference](#keyboard)
+- [Taking notes in Markdown](#taking-notes-in-markdown)
 - [Markdown preview](#markdown-preview)
 - [Jupyter notebooks](#jupyter-notebooks)
 - [Nmap scan reports](#nmap-scan-reports)
@@ -446,9 +447,11 @@ the history graph appears after you make commits.
 - **Language servers:** diagnostics, hover docs, go-to-definition, completion and
   formatting for Rust, Go, Python, C and C++, TypeScript and JavaScript, shell
   scripts, YAML, JSON and Docker via their standard servers.
-- **Markdown preview:** `.md` files open rendered — headings, lists, task
-  lists, tables, highlighted code blocks, quotes and GitHub alerts — with a live
-  side-by-side preview that follows your cursor while you edit.
+- **Notes in rendered Markdown:** `.md` files open drawn rendered as you write
+  them, like Obsidian's Live Preview: headings, lists, to-dos you tick with a
+  click, tables, highlighted code blocks, quotes and GitHub alerts, the line
+  you're on as Markdown to edit. A read-only preview opens in place or beside it,
+  following your cursor.
 - **Jupyter notebooks:** `.ipynb` files open as their cells, as Jupyter shows them —
   Markdown rendered, code highlighted with `In [3]:`, and each cell's output, error
   and traceback beneath it; `e` edits the notebook's JSON.
@@ -1660,11 +1663,36 @@ that isn't valid is left as it is: the status line says where and why (a missing
 comma, a trailing comma, a comment) and the cursor goes there. Add `"json"` to
 `format_on_save` to format on every save.
 
+### Taking notes in Markdown
+
+A `.md` file opens in the editor **drawn rendered while you write it**, like
+Obsidian's Live Preview: headings in their colors, without their `#`s (`#` a pill,
+`##` with a rule after it), bold, italic, struck and `inline code` without their
+marks, links as underlined text without their address, bullets (`•` `◦` `▪`) and
+numbers, to-dos as `☐` and `☑` (done ones struck out), quotes and callouts with
+their bar and title, code blocks shaded and colored in their language, tables
+lined up in a grid, and rules across the pane. **The line the cursor is on shows
+its Markdown**, so you edit it as text; it's drawn rendered again once you move
+off it, and so are the lines of a selection once it's gone. Long lines wrap at
+words (a list item's under its text), and each line of the file keeps its line
+number.
+
+| Key / command | Action |
+| --- | --- |
+| Click | Puts the cursor on the character you clicked, past the hidden marks |
+| Click a `☐` | Ticks the to-do (and unticks a `☑`), the cursor staying where it is |
+| `:render` or `Ctrl-b R` | This file as written, or rendered again |
+| `Ctrl-b m`, `Ctrl-b M` | The read-only preview in place, or beside it |
+
+The status line says `Markdown · rendered`. `markdown_live = false` in `config.toml`
+draws notes as written, and `.md` files open in the preview, as they used to.
+
 ### Markdown preview
 
-Existing `.md`/`.markdown` files open **rendered**; new or empty ones open as
-source so you can write. The preview is read-only and re-renders on every edit,
-and when an AI or shell tool rewrites the file on disk.
+With `markdown_live = false`, existing `.md`/`.markdown` files open **rendered**
+in the preview; new or empty ones open as source so you can write. `Ctrl-b m`
+opens the preview from a note in any case. It's read-only and re-renders on every
+edit, and when an AI or shell tool rewrites the file on disk.
 
 ![Markdown source on the left with a live rendered preview on the right](docs/raido-markdown.png)
 
@@ -2004,6 +2032,7 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 :themes                   Theme picker with live preview (also Ctrl-b t)
 :theme name               Switch theme directly (e.g. dracula or visual-studio-dark)
 :preview [split]          Rendered Markdown or Nmap report in place / beside the source
+:render                   A Markdown note as written, or drawn rendered again (Ctrl-b R)
 :format                   Format the file with its language server (JSON: by Raido)
 :lsp / :lsp restart       Language server status / restart all servers
 :font [size N|family X|list]  Terminal font: show, save size or family, list fonts
@@ -2357,6 +2386,7 @@ theme immediately. The configuration supports:
 | --- | --- | --- |
 | `theme` | `"visual-studio-dark"` | Any bundled dark or light theme above, `phosphor`/`amber`, or a user theme name |
 | `sidebar_width` | `29` | Columns, clamped to 18–60 |
+| `markdown_live` | `true` | [Markdown notes](#taking-notes-in-markdown) are drawn rendered while you edit them, the cursor's line as written, and open in the editor; `false` draws them as written and opens them in the preview |
 | `auto_hide_sidebar` | `true` | In a [small window](#a-small-window) the sidebar hides by itself (under `sidebar_width` + 70 columns or 16 rows; its Git section under 24 rows) and comes back with room; `false` keeps it, but under 70 columns |
 | `tab_width` | `4` | Indentation width when a file and its language don't decide it, clamped to 1–16 |
 | `line_endings` | `"lf"` | How lines end in saved files: `"lf"` (`\n`; a file with Windows `\r\n` endings, or lines ending in a lone `\r`, opens with `\n` and is saved so, the status bar showing `CRLF→LF` until then), `"crlf"` (`\r\n`) or `"auto"` (each file's own, what most of its lines use). `.bat` / `.cmd` files keep theirs. Pasted text takes the file's line breaks, whatever it came with (a terminal sends a paste's as `\r`), and copied text leaves with `\n` |

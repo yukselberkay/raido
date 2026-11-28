@@ -13,6 +13,11 @@ sidebar_width = 29
 # window is under 16 rows; its Git section under 24 rows. It comes back with room;
 # Ctrl-e opens it meanwhile, Ctrl-b s keeps it. false keeps it but under 70 columns.
 auto_hide_sidebar = true
+# Markdown notes are drawn rendered while you write them (headings, emphasis,
+# lists, to-dos, quotes, code blocks, tables), the line you're on as written, and
+# open in the editor. Ctrl-b R switches a file; false draws them as written and
+# opens them in the preview.
+markdown_live = true
 tab_width = 4
 # Language-aware typing: Enter indents after `def f():` / `{` / `then`, dedents
 # after `return`; closers and Python's else:/except: line up with their opener.

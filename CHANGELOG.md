@@ -10,6 +10,18 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **Markdown notes are drawn rendered while you write them**, like Obsidian's Live
+  Preview: headings in their colors without their `#`s, bold, italic, struck and
+  `inline code` without their marks, links as underlined text, bullets and to-dos
+  (`☐`, `☑`, done ones struck out), quotes and callouts with their bar and title,
+  code blocks shaded and colored in their language, tables lined up in a grid, and
+  rules. The line the cursor is on shows its Markdown, to edit as text, and so do a
+  selection's lines. Long lines wrap at words, a list item's under its text. A click
+  lands on the character drawn there, and a click on a `☐` ticks it. `.md` files
+  now open in the editor this way instead of the read-only preview, which
+  `Ctrl-b m` still opens; `Ctrl-b R` (`:render`) shows a file as written, and
+  `markdown_live = false` brings back the old way.
+
 - **The docs take a question of several lines**, so you can paste a code snippet and
   ask how it works. A paste used to become one line, its line breaks turned into
   spaces and its tabs dropped; now it goes in as it was, and the agent gets the
