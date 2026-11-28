@@ -10,6 +10,15 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **The docs take a question of several lines**, so you can paste a code snippet and
+  ask how it works. A paste used to become one line, its line breaks turned into
+  spaces and its tabs dropped; now it goes in as it was, and the agent gets the
+  question exactly as typed. `Alt-Enter` and `Ctrl-j` start a new line (`Shift-Enter`
+  too, in terminals that tell it from Enter), `Tab` types a tab, and `Ctrl-v` pastes
+  what you copied in Raido. The question grows to half the pane, ↑↓ and Home End
+  move in it, and above the answer the code shows as a block in your file's
+  language, indented as you pasted it; `Ctrl-y` still copies the answer's example.
+
 - **The docs ask which AI answers**, the first time you ask while `docs_ai` is
   still `"auto"` and more than one AI could: two of the AI CLIs, or Ollama or your
   model server with its models. They took the first installed without a word, so

@@ -41,6 +41,9 @@ const HISTORY: usize = 3;
 const HISTORY_ANSWER: usize = 4_000;
 /// How much of a selection goes with the question.
 const MAX_SELECTION: usize = 8_000;
+/// How much of a question goes: a long paste is cut, as Antigravity and OpenCode
+/// take the prompt on their command line.
+const MAX_QUESTION: usize = 12_000;
 /// The answers kept with the project's session.
 const SAVED: usize = 20;
 /// Claude Code's model unless `docs_ai` names one: right about APIs, and quick.
@@ -423,7 +426,7 @@ impl DocsView {
     /// What Enter asks: what you typed, else the name under the cursor or the code
     /// you selected. (shown, asked)
     pub fn question(&self) -> Option<(String, String)> {
-        let typed = self.input.trim();
+        let typed = typed(&self.input);
         if !typed.is_empty() {
             return Some((typed.to_string(), typed.to_string()));
         }
@@ -562,15 +565,17 @@ impl DocsView {
         if fresh {
             return;
         }
-        let (text, starts) = self.transcript();
+        let (text, starts, asked) = self.transcript();
         // Code wraps: the pane can't scroll sideways.
         let document = markdown::render_wrapped(&text, width, theme, syntax);
         let starts = starts
             .into_iter()
             .map(|line| document.line_for_source(line))
             .collect();
+        // The answers' examples, to copy: not the code you asked about.
         let blocks = code_blocks(&text)
             .into_iter()
+            .filter(|(line, _)| !asked.contains(line))
             .map(|(line, code)| (document.line_for_source(line), code))
             .collect();
         self.rendered = Some(Rendered {
@@ -611,19 +616,40 @@ impl DocsView {
             })
             .map(|(_, code)| code.as_str())
     }
-    /// The questions and answers as Markdown, and the source line of each question.
-    fn transcript(&self) -> (String, Vec<usize>) {
+    /// The questions and answers as Markdown, the source line of each question,
+    /// and the source line of each code block a question holds.
+    fn transcript(&self) -> (String, Vec<usize>, Vec<usize>) {
         if self.entries.is_empty() {
-            return (self.intro(), Vec::new());
+            return (self.intro(), Vec::new(), Vec::new());
         }
         let mut text = String::new();
         let mut starts = Vec::new();
+        let mut asked = Vec::new();
+        let line = |text: &str| text.bytes().filter(|b| *b == b'\n').count();
         for (index, entry) in self.entries.iter().enumerate() {
             if index > 0 {
                 text.push_str("\n---\n\n");
             }
-            starts.push(text.bytes().filter(|b| *b == b'\n').count());
-            let _ = writeln!(text, "## ❯ {}\n", one_line(&entry.shown));
+            starts.push(line(&text));
+            // A question of several lines (code pasted in it): its first line as the
+            // heading, the rest as it was typed, tabs and spaces kept.
+            let (first, rest) = match entry.shown.split_once('\n') {
+                Some((first, rest)) => (first, Some(rest.trim_end())),
+                None => (entry.shown.as_str(), None),
+            };
+            let _ = writeln!(text, "## ❯ {}\n", one_line(first));
+            if let Some(rest) = rest.filter(|r| !r.trim().is_empty()) {
+                let fence = "`".repeat(longest_run(rest, '`').max(2) + 1);
+                let language = entry
+                    .about
+                    .as_deref()
+                    .and_then(|a| a.rsplit(" · ").next())
+                    .map(str::to_lowercase)
+                    .filter(|l| l != "plain text" && !l.contains(char::is_whitespace))
+                    .unwrap_or_default();
+                asked.push(line(&text));
+                let _ = writeln!(text, "{fence}{language}\n{rest}\n{fence}\n");
+            }
             if let Some(about) = &entry.about {
                 let _ = writeln!(text, "*{}*\n", escape(about));
             }
@@ -648,7 +674,7 @@ impl DocsView {
                 (None, None) => {}
             }
         }
-        (text, starts)
+        (text, starts, asked)
     }
     /// What the pane says before the first question.
     fn intro(&self) -> String {
@@ -713,15 +739,53 @@ impl DocsView {
         self.input.insert(at, c);
         self.cursor += 1;
     }
-    /// A paste: one line of it, its line breaks as spaces.
+    /// A paste, as it was: its lines, tabs and spaces (a terminal sends its line
+    /// breaks as \r).
     pub fn paste(&mut self, text: &str) {
-        for c in text.chars() {
-            match c {
-                '\n' => self.insert(' '),
-                c if c.is_control() => {}
-                c => self.insert(c),
-            }
-        }
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        let kept: String = text
+            .chars()
+            .filter(|c| matches!(c, '\n' | '\t') || !c.is_control())
+            .collect();
+        let at = byte(&self.input, self.cursor);
+        self.input.insert_str(at, &kept);
+        self.cursor += kept.chars().count();
+    }
+    /// The question has more than one line: ↑↓ move in it.
+    pub fn multiline(&self) -> bool {
+        self.input.contains('\n')
+    }
+    /// The cursor's line and column, in characters.
+    pub fn line_col(&self) -> (usize, usize) {
+        let before: String = self.input.chars().take(self.cursor).collect();
+        let line = before.matches('\n').count();
+        let col = before.rsplit('\n').next().map_or(0, |l| l.chars().count());
+        (line, col)
+    }
+    /// To the line `by` lines up or down, at the same column where it has one.
+    pub fn move_line(&mut self, by: isize) {
+        let (line, col) = self.line_col();
+        let lines: Vec<&str> = self.input.split('\n').collect();
+        let Some(to) = line.checked_add_signed(by).filter(|l| *l < lines.len()) else {
+            return;
+        };
+        let start: usize = lines[..to].iter().map(|l| l.chars().count() + 1).sum();
+        self.cursor = start + col.min(lines[to].chars().count());
+    }
+    /// To the start of the cursor's line.
+    pub fn home(&mut self) {
+        let (_, col) = self.line_col();
+        self.cursor -= col;
+    }
+    /// To the end of the cursor's line.
+    pub fn end(&mut self) {
+        let (line, col) = self.line_col();
+        let length = self
+            .input
+            .split('\n')
+            .nth(line)
+            .map_or(0, |l| l.chars().count());
+        self.cursor += length - col;
     }
     pub fn backspace(&mut self) {
         if self.cursor > 0 {
@@ -742,6 +806,32 @@ impl DocsView {
     pub fn right(&mut self) {
         self.cursor = (self.cursor + 1).min(self.input.chars().count());
     }
+}
+
+/// What you typed, as it goes: without the blank lines before it or the space
+/// after it, the first line's indentation kept when there are more (pasted code).
+fn typed(input: &str) -> &str {
+    let text = input.trim_end();
+    let Some(first) = text.find(|c: char| !c.is_whitespace()) else {
+        return "";
+    };
+    let start = text[..first].rfind('\n').map_or(0, |i| i + 1);
+    let text = &text[start..];
+    if text.contains('\n') {
+        text
+    } else {
+        text.trim_start()
+    }
+}
+
+/// The most `c` in a row in `text`: a fence around it needs one more.
+fn longest_run(text: &str, c: char) -> usize {
+    let (mut most, mut now) = (0, 0);
+    for d in text.chars() {
+        now = if d == c { now + 1 } else { 0 };
+        most = most.max(now);
+    }
+    most
 }
 
 /// The byte where character `at` starts.
@@ -805,7 +895,7 @@ pub fn prompt(
             }
         }
     }
-    let _ = writeln!(text, "\nQuestion: {question}");
+    let _ = writeln!(text, "\nQuestion: {}", cut(question, MAX_QUESTION));
     text
 }
 
@@ -1344,8 +1434,9 @@ mod tests {
         view.insert('Y');
         view.delete();
         assert_eq!(view.input, "how do I sort by keY");
+        // A paste keeps its line breaks.
         view.paste(" in\nPython 3");
-        assert_eq!(view.input, "how do I sort by keY in Python 3");
+        assert_eq!(view.input, "how do I sort by keY in\nPython 3");
     }
 
     #[test]
@@ -1538,6 +1629,80 @@ mod tests {
         assert!(view.entries.is_empty());
     }
 
+    #[test]
+    fn a_pasted_snippet_keeps_its_lines_tabs_and_spaces() {
+        let mut view = DocsView {
+            context: Some(context()),
+            ..DocsView::default()
+        };
+        // A terminal sends a paste's line breaks as \r; other control characters go.
+        view.paste("\r\nhow does this work?\rdef f(x):\r\n\tif x:\r\n\t\treturn  x\u{1b}\n\n");
+        assert_eq!(
+            view.input,
+            "\nhow does this work?\ndef f(x):\n\tif x:\n\t\treturn  x\n\n"
+        );
+        assert!(view.multiline());
+        // Blank lines around it go; the lines, tabs and double spaces stay.
+        let (shown, asked) = view.question().unwrap();
+        assert_eq!(
+            shown,
+            "how does this work?\ndef f(x):\n\tif x:\n\t\treturn  x"
+        );
+        assert_eq!(asked, shown);
+        assert_eq!(typed("   how?  "), "how?");
+        assert_eq!(typed("\n  \n    x = 1\ny = 2\n"), "    x = 1\ny = 2");
+        assert_eq!(typed(" \n\t \n"), "");
+        // ↑↓ keep the column where the line has one; Home End stay on the line.
+        view.input = "ab\ncdef\ng".into();
+        view.cursor = 6; // "cdef", after "cde"
+        assert_eq!(view.line_col(), (1, 3));
+        view.move_line(-1);
+        assert_eq!((view.cursor, view.line_col()), (2, (0, 2)));
+        view.move_line(-1);
+        assert_eq!(view.cursor, 2, "no line above");
+        view.move_line(1);
+        view.move_line(1);
+        assert_eq!(view.line_col(), (2, 1));
+        view.move_line(1);
+        assert_eq!(view.line_col(), (2, 1), "no line below");
+        view.move_line(-1);
+        view.home();
+        assert_eq!(view.line_col(), (1, 0));
+        view.end();
+        assert_eq!(view.line_col(), (1, 4));
+        view.insert('\t');
+        assert_eq!(view.input, "ab\ncdef\t\ng");
+        // Asked: the agent gets it as it was typed.
+        let question = "explain:\nfor i in x:\n\tprint(i)  # ``` fence";
+        let prompt = prompt(question, None, &[], Path::new("/p"), Path::new("/s"));
+        assert!(
+            prompt.ends_with(&format!("Question: {question}\n")),
+            "{prompt}"
+        );
+        // Shown: its first line as the heading, the rest in a block of the file's
+        // language, fenced past the backticks in it; Ctrl-y doesn't copy it.
+        view.entries = vec![Entry {
+            shown: question.into(),
+            asked: question.into(),
+            about: Some("src/app.py:42 · Python".into()),
+            answer: Some("Prints each.\n\n```python\nprint(1)\n```".into()),
+            ..Entry::default()
+        }];
+        let (text, _, asked) = view.transcript();
+        assert!(
+            text.starts_with(
+                "## ❯ explain:\n\n````python\nfor i in x:\n\tprint(i)  # ``` fence\n````\n"
+            ),
+            "{text}"
+        );
+        assert_eq!(asked, [2]);
+        view.changed();
+        let theme = Theme::default();
+        view.layout(60, &theme, &Syntax::new(&theme));
+        view.place(100);
+        assert_eq!(view.example(), Some("print(1)\n"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_next_ai_answers_when_one_cant_and_stopping_asks_none() {
@@ -1563,7 +1728,7 @@ mod tests {
                 "sh: Invalid API key · asked sh instead"
             ]
         );
-        let (text, _) = view.transcript();
+        let (text, ..) = view.transcript();
         assert!(
             text.contains("> [!NOTE]\n> sh: Invalid API key · asked sh instead"),
             "{text}"

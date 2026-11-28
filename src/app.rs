@@ -5944,10 +5944,18 @@ impl App {
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         let page = view.height.saturating_sub(2).max(1) as i64;
         let empty = view.input.is_empty();
         match key.code {
+            // A new line in the question: Alt-Enter, Shift-Enter where the terminal
+            // tells it from Enter, and Ctrl-J everywhere.
+            KeyCode::Enter if alt || shift => view.insert('\n'),
+            KeyCode::Char('j') if ctrl => view.insert('\n'),
             KeyCode::Enter => return self.docs_ask(),
+            KeyCode::Tab => view.insert('\t'),
+            // Raido's clipboard: code copied in its editor.
+            KeyCode::Char('v') if ctrl => view.paste(&self.clipboard.paste().0),
             KeyCode::Esc => {
                 if view.stop() {
                     self.notice("Stopped · Enter asks again");
@@ -5977,8 +5985,11 @@ impl App {
             KeyCode::Right => view.right(),
             KeyCode::Home if empty => view.scroll = 0,
             KeyCode::End if empty => view.scroll = usize::MAX,
-            KeyCode::Home => view.cursor = 0,
-            KeyCode::End => view.cursor = view.input.chars().count(),
+            KeyCode::Home => view.home(),
+            KeyCode::End => view.end(),
+            // In a question of several lines, ↑↓ move in it; PgUp PgDn still scroll.
+            KeyCode::Up if view.multiline() => view.move_line(-1),
+            KeyCode::Down if view.multiline() => view.move_line(1),
             KeyCode::Up => view.scroll_by(-1),
             KeyCode::Down => view.scroll_by(1),
             KeyCode::PageUp => view.scroll_by(-page),
@@ -9358,6 +9369,96 @@ while True:
         let error = app.command("ask anything").unwrap_err().to_string();
         assert!(error.contains("docs_ai"), "{error}");
     }
+    #[cfg(unix)]
+    #[test]
+    fn a_docs_question_keeps_the_code_pasted_in_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("app.py"), "rows = load(path)\n").unwrap();
+        // An agent of its own that keeps what it was asked.
+        let got = root.join("got.txt");
+        let script = root.join("answer.sh");
+        std::fs::write(
+            &script,
+            format!("cat > '{}'\necho answered\n", got.display()),
+        )
+        .unwrap();
+        let mut app = App::new(root.into(), None, false).unwrap();
+        app.config.docs_ai = vec![format!("sh {}", script.display())];
+        app.open(&root.join("app.py")).unwrap();
+        press(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('/'), KeyModifiers::NONE);
+        let docs = app.focused;
+        fn view(app: &App, docs: usize) -> &DocsView {
+            match app.panes.get(&docs) {
+                Some(Pane::Docs(view)) => view,
+                _ => panic!("the docs pane"),
+            }
+        }
+        // Typed, a new line (Alt-Enter), the code pasted (the terminal's \r line
+        // breaks), a tab, more typed; Ctrl-J makes a new line too.
+        for c in "what does this do?".chars() {
+            press(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        press(&mut app, KeyCode::Enter, KeyModifiers::ALT);
+        app.event(Event::Paste("def f(x):\r\treturn  x\r".into()));
+        press(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        for c in "# end".chars() {
+            press(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        press(&mut app, KeyCode::Char('j'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Backspace, KeyModifiers::NONE);
+        let code = "what does this do?\ndef f(x):\n\treturn  x\n\t# end";
+        assert_eq!(view(&app, docs).input, code);
+        assert!(
+            view(&app, docs).entries.is_empty(),
+            "Alt-Enter and Ctrl-J ask nothing"
+        );
+        // ↑↓ move between its lines; Home and End keep to the line.
+        press(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        press(&mut app, KeyCode::Home, KeyModifiers::NONE);
+        assert_eq!(view(&app, docs).line_col(), (2, 0));
+        press(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        press(&mut app, KeyCode::End, KeyModifiers::NONE);
+        assert_eq!(view(&app, docs).line_col(), (3, 6));
+        // Drawn on its lines, tabs as spaces to the next of every 4 columns.
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 36)).unwrap();
+        terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        let rows: Vec<String> = {
+            let buffer = terminal.backend().buffer();
+            (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol().to_string())
+                        .collect()
+                })
+                .collect()
+        };
+        let row = |text: &str| rows.iter().position(|r| r.contains(text));
+        let first = row(" ❯ what does this do?").expect("the question's first line");
+        assert_eq!(row("   def f(x):"), Some(first + 1), "{rows:#?}");
+        assert_eq!(row("       return  x"), Some(first + 2), "{rows:#?}");
+        assert_eq!(row("       # end"), Some(first + 3), "{rows:#?}");
+        assert!(rows[first - 1].contains("Alt-Enter"), "{}", rows[first - 1]);
+        // Asked: the agent gets it as typed, and the pane shows it so.
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        let start = Instant::now();
+        while view(&app, docs).asking.is_some() {
+            app.tick();
+            assert!(start.elapsed() < Duration::from_secs(20), "no answer");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let asked = std::fs::read_to_string(&got).unwrap();
+        assert!(asked.ends_with(&format!("Question: {code}\n")), "{asked}");
+        let entry = &view(&app, docs).entries[0];
+        assert_eq!(
+            (entry.shown.as_str(), entry.answer.as_deref()),
+            (code, Some("answered"))
+        );
+        assert!(view(&app, docs).input.is_empty());
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_docs_ask_once_which_ai_answers_and_keep_to_it() {

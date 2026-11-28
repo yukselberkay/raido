@@ -1048,12 +1048,19 @@ answer comes quickly. Code wraps to the pane's width, however narrow it gets.
 | In the docs pane | |
 | --- | --- |
 | Type, Enter | Ask; follow-ups know what was asked before (`and in reverse?`) |
+| `Alt-Enter`, `Ctrl-j` | A new line in the question (`Shift-Enter` too, where the terminal tells it from Enter) |
+| Paste | Goes in as it was, its lines, tabs and spaces kept: paste code and ask how it works. `Ctrl-v` pastes what you copied in Raido, `Tab` types a tab |
 | Enter on an empty line | Explain the name under the cursor (`read_csv`), or the code you selected, in the file you came from |
-| `Ctrl-y` | Copy the code example on screen |
-| ↑↓ PgUp PgDn, Home End | Scroll the answers |
+| `Ctrl-y` | Copy the code example on screen (an answer's, not the code you asked about) |
+| ↑↓ PgUp PgDn, Home End | Scroll the answers; in a question of several lines, ↑↓ and Home End move in it |
 | `Ctrl-u` | Clear the question |
 | `Esc` | Stop an answer on its way; else back to your code |
 | `Ctrl-b n` | A new topic: the questions before are forgotten |
+
+A question of several lines takes up to half the pane, scrolling when it has more,
+and goes to the agent exactly as typed (cut at 12 KB). Above its answer it shows
+its first line as the heading and the rest as a code block in your file's language,
+indented as you pasted it.
 
 `:ask how do I parse a date?` asks at once. The question goes with where you are:
 the file and its language, the line, and what you selected. While the agent works,

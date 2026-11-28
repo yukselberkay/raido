@@ -1162,8 +1162,14 @@ fn docs_view(
     typing: bool,
     bare: bool,
 ) {
-    // The question at the bottom, what's going on above it when there's room.
-    let rows: u16 = if inner.height >= 4 && !bare { 2 } else { 1 };
+    // The question at the bottom, on as many lines as it has (half the pane at
+    // most), and what's going on above it when there's room.
+    let status: u16 = if inner.height >= 4 && !bare { 1 } else { 0 };
+    let lines = view.input.split('\n').count() as u16;
+    let field_rows = lines
+        .min((inner.height / 2).max(1))
+        .min(inner.height.saturating_sub(status + 1).max(1));
+    let rows = status + field_rows;
     let height = inner.height.saturating_sub(rows) as usize;
     // One column for the scrollbar, at least two of margin per side.
     let room = (inner.width as usize).saturating_sub(5);
@@ -1198,8 +1204,8 @@ fn docs_view(
             }
         }
     }
-    if rows == 2 {
-        let y = inner.bottom() - 2;
+    if status == 1 {
+        let y = inner.bottom() - rows;
         let (status, fg) = match &view.asking {
             _ if view.choosing.is_some() => (
                 fitting(
@@ -1227,11 +1233,20 @@ fn docs_view(
                 ];
                 (fitting(&said, inner.width as usize), &theme.accent)
             }
+            None if view.multiline() => {
+                let said = [
+                    " Enter asks · Alt-Enter or ^J new line · ↑↓ move in it · PgUp PgDn scroll · ^Y copies the example".to_string(),
+                    " Enter asks · Alt-Enter new line · PgUp PgDn scroll · ^Y copies".into(),
+                    " Enter asks · Alt-Enter new line".into(),
+                    " Enter asks".into(),
+                ];
+                (fitting(&said, inner.width as usize), &theme.muted)
+            }
             None => {
                 let said = [
-                    " Enter asks · ↑↓ PgUp PgDn scroll · ^Y copies the example on screen · ^B n new topic".to_string(),
-                    " Enter asks · ↑↓ scroll · ^Y copies the example · ^B n new topic".into(),
-                    " Enter asks · ^Y copies the example · ^B n new".into(),
+                    " Enter asks · Alt-Enter new line · ↑↓ PgUp PgDn scroll · ^Y copies the example on screen · ^B n new topic".to_string(),
+                    " Enter asks · Alt-Enter new line · ↑↓ scroll · ^Y copies the example".into(),
+                    " Enter asks · ↑↓ scroll · ^Y copies the example".into(),
                     " Enter asks · ^Y copies".into(),
                 ];
                 (fitting(&said, inner.width as usize), &theme.muted)
@@ -1244,21 +1259,24 @@ fn docs_view(
             color(fg),
         );
     }
-    // The question being typed, on a line of its own color.
-    let y = inner.bottom() - 1;
-    let line = Rect::new(inner.x, y, inner.width, 1);
+    // The question being typed, on lines of their own color.
+    let top = inner.bottom() - field_rows;
     let field = color(&theme.selection);
-    frame.render_widget(Paragraph::new("").style(Style::default().bg(field)), line);
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            " ❯ ",
-            Style::default()
-                .fg(color(&theme.accent))
-                .bg(field)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Rect::new(inner.x, y, 3.min(inner.width), 1),
-    );
+    let mark = Style::default()
+        .fg(color(&theme.accent))
+        .bg(field)
+        .add_modifier(Modifier::BOLD);
+    for row in 0..field_rows {
+        let line = Rect::new(inner.x, top + row, inner.width, 1);
+        frame.render_widget(Paragraph::new("").style(Style::default().bg(field)), line);
+    }
+    let prompt = |frame: &mut Frame, row: u16, said: &str| {
+        frame.render_widget(
+            Paragraph::new(Span::styled(said.to_string(), mark)),
+            Rect::new(inner.x, top + row, 3.min(inner.width), 1),
+        );
+    };
+    prompt(frame, 0, " ❯ ");
     let x = inner.x + 3;
     let room = inner.width.saturating_sub(4) as usize;
     if room == 0 {
@@ -1270,6 +1288,7 @@ fn docs_view(
                 format!("Enter explains {shown} · or type a question"),
                 format!("Enter explains {shown}"),
                 "Type a question".into(),
+                "Ask".into(),
             ],
             None => {
                 let language = view
@@ -1279,6 +1298,9 @@ fn docs_view(
                     .filter(|l| *l != "Plain text")
                     .unwrap_or("your language");
                 [
+                    format!(
+                        "Ask how to do something in {language}, or paste code and ask how it works"
+                    ),
                     format!("Ask how to do something in {language}, or about this project"),
                     format!("Ask how to do something in {language}"),
                     "Ask a question".into(),
@@ -1291,27 +1313,85 @@ fn docs_view(
                 printable(&hint),
                 Style::default().fg(color(&theme.muted)).bg(field),
             )),
-            Rect::new(x, y, room as u16, 1),
+            Rect::new(x, top, room as u16, 1),
         );
         if typing {
-            frame.set_cursor_position((x, y));
+            frame.set_cursor_position((x, top));
         }
         return;
     }
-    // The part of the question that holds the cursor.
-    let chars: Vec<char> = view.input.chars().collect();
-    let start = view.cursor.saturating_sub(room.saturating_sub(1));
-    let shown: String = chars[start.min(chars.len())..].iter().take(room).collect();
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            printable(&shown),
-            Style::default().fg(color(&theme.foreground)).bg(field),
-        )),
-        Rect::new(x, y, room as u16, 1),
-    );
-    if typing {
-        frame.set_cursor_position((x + (view.cursor - start) as u16, y));
+    // The lines that hold the cursor, scrolled sideways together to keep it in view;
+    // tabs go to the next of every 4 columns, as in the answers' code.
+    let (line, col) = view.line_col();
+    let lines: Vec<&str> = view.input.split('\n').collect();
+    let first = (line + 1).saturating_sub(field_rows as usize);
+    let (_, at) = tab_expanded(lines[line], col);
+    let offset = (at + 1).saturating_sub(room);
+    let style = Style::default().fg(color(&theme.foreground)).bg(field);
+    for (row, text) in lines
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(field_rows as usize)
+    {
+        let (shown, _) = tab_expanded(text, usize::MAX);
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                printable(&columns(&shown, offset, room)),
+                style,
+            )),
+            Rect::new(x, top + (row - first) as u16, room as u16, 1),
+        );
     }
+    // Lines out of view, above and below.
+    if first > 0 {
+        prompt(frame, 0, " ↑ ");
+    }
+    if first + (field_rows as usize) < lines.len() {
+        prompt(frame, field_rows - 1, " ↓ ");
+    }
+    if typing {
+        frame.set_cursor_position((x + (at - offset) as u16, top + (line - first) as u16));
+    }
+}
+
+/// `line` with its tabs as spaces to the next of every 4 columns, and the column
+/// its character `upto` is at (its end, past the last).
+fn tab_expanded(line: &str, upto: usize) -> (String, usize) {
+    let mut out = String::with_capacity(line.len());
+    let mut column = 0;
+    let mut at = None;
+    for (i, c) in line.chars().enumerate() {
+        if i == upto {
+            at = Some(column);
+        }
+        if c == '\t' {
+            let spaces = 4 - column % 4;
+            out.extend(std::iter::repeat_n(' ', spaces));
+            column += spaces;
+        } else {
+            out.push(c);
+            column += c.width().unwrap_or(0);
+        }
+    }
+    (out, at.unwrap_or(column))
+}
+
+/// The part of `text` from column `from`, at most `width` columns of it.
+fn columns(text: &str, from: usize, width: usize) -> String {
+    let mut out = String::new();
+    let mut column = 0;
+    for c in text.chars() {
+        let w = c.width().unwrap_or(0);
+        if column >= from && column + w <= from + width {
+            out.push(c);
+        }
+        column += w;
+        if column >= from + width {
+            break;
+        }
+    }
+    out
 }
 
 /// The docs pane asking which AI answers: the heading, what picking does, then
@@ -4672,7 +4752,7 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
         {
             " Esc stop   ↑↓ PgUp PgDn scroll   type the next question meanwhile"
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Docs(_))) && !app.sidebar_focus {
-            " type a question   Enter ask   ↑↓ PgUp PgDn scroll   ^Y copy the example   ^U clear   ^B n new topic   Esc back to the code"
+            " type or paste a question   Enter ask   Alt-Enter ^J new line   ↑↓ PgUp PgDn scroll   ^Y copy the example   ^U clear   ^B n new topic   Esc back"
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Archive(v)) if v.typing.is_some())
             && !app.sidebar_focus
         {
@@ -5022,6 +5102,10 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         (
             "Enter / ^Y / ^B n / Esc",
             "Ask (empty: the name or selection) / copy example / new / back",
+        ),
+        (
+            "Alt-Enter or ^J / Tab",
+            "A new line / a tab in the question; pastes keep their lines",
         ),
         (
             ":ask-with [ai]",
