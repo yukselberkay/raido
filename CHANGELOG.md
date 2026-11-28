@@ -330,6 +330,14 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Changed
 
+- **When an AI can't answer, the next one does.** The docs (`docs_ai`) and the
+  review's explanations (`review_ai`) asked only the first AI installed of their
+  list, so a Claude Code that was signed out or out of quota gave an error while
+  Codex sat installed beside it. Now each installed AI on the list is asked in turn
+  until one answers, and the answer says who couldn't and why. `"auto"` in a list
+  adds only the AIs the list doesn't name, so `["claude:opus", "auto"]` doesn't ask
+  Claude Code twice. Esc in the docs stops the question without asking the next.
+
 - **The theme picker lists light and dark themes apart**, as VS Code does: the
   light themes under their heading first, then the dark ones, each by name. Your
   own and Omarchy themes join the group their background puts them in, and

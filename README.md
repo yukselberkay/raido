@@ -867,7 +867,7 @@ change did to the code, and at the end it sums up the whole change:
 | --- | --- | --- |
 | `review_summary` | `true` | The outline under each file and at the end; `false` hides it (`i` toggles it in the review) |
 | `review_ai_auto` | `true` | Explain new agent changes by themselves once the agents stop; `false` waits for `s` |
-| `review_ai` | `"auto"` | Who explains the changes, or a list to try in order (the first one installed answers). `"auto"` tries Claude Code, Codex, Gemini, Antigravity, OpenCode, then a local model. Name one with `"claude"`, `"codex"`, `"gemini"`, `"agy"`, `"opencode"` or `"local"`, and a model after a colon, as that CLI names it: `"claude:sonnet"`, `"local:llama3.2"`, `"codex:<model>"`, `"gemini:<model>"`. Also a command that reads the prompt on its input and answers on its output, or `"off"` |
+| `review_ai` | `"auto"` | Who explains the changes, or a list to try in order (the first one installed answers; when it can't, signed out or out of quota, the next one does, and the summary says why). `"auto"` tries Claude Code, Codex, Gemini, Antigravity, OpenCode, then a local model. Name one with `"claude"`, `"codex"`, `"gemini"`, `"agy"`, `"opencode"` or `"local"`, and a model after a colon, as that CLI names it: `"claude:sonnet"`, `"local:llama3.2"`, `"codex:<model>"`, `"gemini:<model>"`. Also a command that reads the prompt on its input and answers on its output, or `"off"` |
 
 Without a model, Claude Code uses Haiku (cheap and quick, which suits a summary;
 `claude:sonnet` explains more carefully for more), Codex and Gemini their own
@@ -1064,7 +1064,10 @@ the pane says what it's doing (`reading app.py`, `searching the web for …`,
 of Claude Code (on Sonnet), Codex, Gemini CLI, Antigravity, OpenCode, then a local
 model. Name one (`docs_ai = "codex"`), one with a model (`"claude:opus"`), a list to
 try in order, a command of yours that reads the question on its input, or `"off"`.
-It runs in the background with your sign-in and subscription, one run per question;
+**When one can't answer** (it isn't signed in, it's out of quota, it fails), the
+next installed one on the list is asked, and the answer says who couldn't and why;
+`"auto"` in a list adds the AIs the list doesn't name (`["claude:opus", "auto"]`).
+Esc stops the question without asking the next one. It runs in the background with your sign-in and subscription, one run per question;
 no skill is needed, as every agent gets the same instructions with the question.
 
 **It changes nothing in your project.** Each agent runs read-only: Claude Code with

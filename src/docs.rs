@@ -121,6 +121,8 @@ pub struct Entry {
     pub error: Option<String>,
     /// Who answered: "Claude (sonnet)".
     pub by: String,
+    /// The AIs asked before it that couldn't answer, why, and who was asked next.
+    pub failed: Vec<String>,
     pub usage: Option<Usage>,
     pub took: Option<Duration>,
 }
@@ -129,6 +131,11 @@ pub struct Entry {
 enum Update {
     /// What the agent is doing: "reading app.py", "running python3 example.py".
     Progress(String),
+    /// The agent couldn't answer (`failed` says why): `by` is asked instead.
+    Next {
+        by: String,
+        failed: String,
+    },
     Done(Result<Answer, String>),
 }
 
@@ -265,13 +272,19 @@ impl DocsView {
             ),
         ))
     }
-    /// Ask `agent`; the answer comes in `poll`. Asking while an answer is on its way
-    /// stops that one.
-    pub fn ask(&mut self, shown: String, asked: String, agent: Agent, root: &Path) {
+    /// Ask the first of `agents`, and the next when one can't answer; the answer
+    /// comes in `poll`. Asking while an answer is on its way stops that one.
+    pub fn ask(&mut self, shown: String, asked: String, agents: Vec<Agent>, root: &Path) {
         self.stop();
-        let agent = match agent {
-            Agent::Claude(None) => Agent::Claude(Some(CLAUDE_MODEL.into())),
-            agent => agent,
+        let agents: Vec<Agent> = agents
+            .into_iter()
+            .map(|agent| match agent {
+                Agent::Claude(None) => Agent::Claude(Some(CLAUDE_MODEL.into())),
+                agent => agent,
+            })
+            .collect();
+        let Some(first) = agents.first() else {
+            return;
         };
         let scratch = scratch(root);
         let answered: Vec<&Entry> = self.entries.iter().filter(|e| e.answer.is_some()).collect();
@@ -281,10 +294,10 @@ impl DocsView {
             shown,
             asked,
             about: self.context.as_ref().map(Context::label),
-            by: agent.name(),
+            by: first.name(),
             ..Entry::default()
         });
-        self.asking = Some(start(agent, prompt, root.to_path_buf(), scratch));
+        self.asking = Some(start(agents, prompt, root.to_path_buf(), scratch));
         self.input.clear();
         self.cursor = 0;
         self.jump = Some(self.entries.len() - 1);
@@ -300,6 +313,14 @@ impl DocsView {
             match asking.updates.try_recv() {
                 Ok(Update::Progress(progress)) => {
                     asking.progress = progress;
+                    moved = true;
+                }
+                Ok(Update::Next { by, failed }) => {
+                    if let Some(entry) = self.entries.last_mut() {
+                        entry.failed.push(format!("{failed} · asked {by} instead"));
+                        let was = std::mem::replace(&mut entry.by, by);
+                        asking.progress = format!("{was} couldn't answer");
+                    }
                     moved = true;
                 }
                 Ok(Update::Done(result)) => break Some(result),
@@ -431,6 +452,9 @@ impl DocsView {
             let _ = writeln!(text, "## ❯ {}\n", one_line(&entry.shown));
             if let Some(about) = &entry.about {
                 let _ = writeln!(text, "*{}*\n", escape(about));
+            }
+            for failed in &entry.failed {
+                let _ = writeln!(text, "> [!NOTE]\n> {}\n", one_line(failed));
             }
             match (&entry.answer, &entry.error) {
                 (Some(answer), _) => {
@@ -668,14 +692,27 @@ fn code_blocks(markdown: &str) -> Vec<(usize, String)> {
     blocks
 }
 
-/// Start asking `agent`, off the UI thread.
-fn start(agent: Agent, prompt: String, root: PathBuf, scratch: PathBuf) -> Asking {
+/// Start asking `agents`, off the UI thread: the first, then the next while one
+/// can't answer (signed out, out of quota, an error), until one does or you stop it.
+fn start(agents: Vec<Agent>, prompt: String, root: PathBuf, scratch: PathBuf) -> Asking {
     let (sender, updates) = mpsc::channel();
     let child = Arc::new(Mutex::new(None));
     let stopped = Arc::new(AtomicBool::new(false));
     let (slot, stop) = (child.clone(), stopped.clone());
     thread::spawn(move || {
-        let answer = run(&agent, &prompt, &root, &scratch, &slot, &stop, &sender);
+        let mut answer = Err("No AI to answer with".to_string());
+        for (index, agent) in agents.iter().enumerate() {
+            answer = run(agent, &prompt, &root, &scratch, &slot, &stop, &sender);
+            let next = agents.get(index + 1);
+            match (&answer, next) {
+                (Err(error), Some(next)) if !stop.load(Ordering::SeqCst) && error != STOPPED => {
+                    let failed = crate::summary::said_by(&agent.name(), error.clone());
+                    let by = next.name();
+                    let _ = sender.send(Update::Next { by, failed });
+                }
+                _ => break,
+            }
+        }
         let _ = sender.send(Update::Done(answer));
     });
     Asking {
@@ -1273,7 +1310,7 @@ mod tests {
         view.ask(
             "q".into(),
             "how do I sort by key?".into(),
-            echo.clone(),
+            vec![echo.clone()],
             dir.path(),
         );
         assert!(view.asking.is_some() && view.input.is_empty());
@@ -1288,7 +1325,12 @@ mod tests {
         assert_eq!(first.about.as_deref(), Some("src/app.py:42 · Python"));
         assert!(first.took.is_some() && first.error.is_none());
         // A follow-up carries the question before it.
-        view.ask("q2".into(), "and in reverse?".into(), echo, dir.path());
+        view.ask(
+            "q2".into(),
+            "and in reverse?".into(),
+            vec![echo],
+            dir.path(),
+        );
         answer(&mut view);
         let said = view.entries[1].answer.as_deref().unwrap();
         assert!(said.contains("Q: how do I sort by key?"), "{said}");
@@ -1298,7 +1340,7 @@ mod tests {
             "-c".into(),
             "echo broken >&2; exit 3".into(),
         ]);
-        view.ask("q3".into(), "x".into(), failing, dir.path());
+        view.ask("q3".into(), "x".into(), vec![failing], dir.path());
         answer(&mut view);
         assert_eq!(view.entries[2].error.as_deref(), Some("sh: broken"));
         assert!(runs_examples(&Agent::Claude(None)) && runs_examples(&Agent::Codex(None)));
@@ -1310,7 +1352,7 @@ mod tests {
         assert_eq!(failure("Codex", ""), "Codex failed");
         // Stopping kills the agent at once.
         let slow = Agent::Command(vec!["sleep".into(), "30".into()]);
-        view.ask("q4".into(), "x".into(), slow, dir.path());
+        view.ask("q4".into(), "x".into(), vec![slow], dir.path());
         thread::sleep(Duration::from_millis(100));
         let start = Instant::now();
         assert!(view.stop());
@@ -1320,5 +1362,59 @@ mod tests {
         // A new topic forgets them.
         view.clear();
         assert!(view.entries.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_next_ai_answers_when_one_cant_and_stopping_asks_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let command =
+            |script: &str| Agent::Command(["sh", "-c", script].map(String::from).to_vec());
+        let signed_out = command("echo 'Invalid API key' >&2; exit 1");
+        let echo = command("echo answered");
+        let mut view = DocsView::default();
+        view.ask(
+            "q".into(),
+            "x".into(),
+            vec![signed_out.clone(), signed_out.clone(), echo.clone()],
+            dir.path(),
+        );
+        answer(&mut view);
+        let entry = &view.entries[0];
+        assert_eq!(entry.answer.as_deref(), Some("answered"));
+        assert_eq!(
+            entry.failed,
+            [
+                "sh: Invalid API key · asked sh instead",
+                "sh: Invalid API key · asked sh instead"
+            ]
+        );
+        let (text, _) = view.transcript();
+        assert!(
+            text.contains("> [!NOTE]\n> sh: Invalid API key · asked sh instead"),
+            "{text}"
+        );
+        // None can: the last one's error, after those before it.
+        view.ask(
+            "q2".into(),
+            "x".into(),
+            vec![signed_out.clone(), signed_out],
+            dir.path(),
+        );
+        answer(&mut view);
+        assert_eq!(view.entries[1].failed.len(), 1);
+        assert_eq!(
+            view.entries[1].error.as_deref(),
+            Some("sh: Invalid API key")
+        );
+        // Stopped, the next isn't asked.
+        let slow = Agent::Command(vec!["sleep".into(), "30".into()]);
+        view.ask("q3".into(), "x".into(), vec![slow, echo], dir.path());
+        thread::sleep(Duration::from_millis(100));
+        assert!(view.stop());
+        thread::sleep(Duration::from_millis(200));
+        view.poll();
+        assert_eq!(view.entries[2].error.as_deref(), Some(STOPPED));
+        assert!(view.entries[2].failed.is_empty() && view.asking.is_none());
     }
 }

@@ -55,6 +55,8 @@ pub struct Summary {
     pub left_out: Vec<String>,
     /// What the last request cost, when the AI says.
     pub usage: Option<Usage>,
+    /// The AIs asked before `by` that couldn't answer, and why.
+    pub failed: Vec<String>,
 }
 
 /// Tokens a request used, and its price when the AI tells it.
@@ -143,15 +145,22 @@ impl Agent {
     /// The first of config's `review_ai` entries installed here (`"auto"`: Claude
     /// Code, Codex, Gemini, a local model). `None` when they're off.
     pub fn choose(entries: &[String]) -> Result<Option<Self>, String> {
-        Self::choose_for(entries, "review_ai", "explain with")
+        Ok(Self::candidates(entries)?.map(|mut all| all.remove(0)))
+    }
+    /// Every one of config's `review_ai` entries installed here, in the order to
+    /// ask them: the first answers, and when it can't (signed out, out of quota, an
+    /// error) the next does. `None` when they're off.
+    pub fn candidates(entries: &[String]) -> Result<Option<Vec<Self>>, String> {
+        Self::candidates_for(entries, "review_ai", "explain with")
     }
     /// The same for another setting (`docs_ai`), named in the error with what the
-    /// AI is for ("answer with").
-    pub fn choose_for(
+    /// AI is for ("answer with"). `"auto"` adds the AIs the list doesn't name
+    /// already: with `["claude:opus", "auto"]`, Claude Code is asked on Opus only.
+    pub fn candidates_for(
         entries: &[String],
         setting: &str,
         purpose: &str,
-    ) -> Result<Option<Self>, String> {
+    ) -> Result<Option<Vec<Self>>, String> {
         let entries: Vec<&str> = entries
             .iter()
             .map(|e| e.trim())
@@ -164,27 +173,40 @@ impl Agent {
         {
             return Ok(None);
         }
-        let tried: Vec<&str> = entries
+        let named: Vec<Self> = entries
             .iter()
-            .flat_map(|e| {
-                if *e == "auto" {
-                    AUTO.to_vec()
-                } else {
-                    vec![*e]
-                }
-            })
-            .collect();
-        tried
-            .iter()
+            .filter(|e| **e != "auto")
             .map(|e| Self::parse(e))
-            .find(Self::installed)
-            .map(Some)
-            .ok_or_else(|| {
-                format!(
-                    "No AI to {purpose}: {} not installed · set {setting} in config.toml",
-                    tried.join(", ")
-                )
-            })
+            .collect();
+        let mut tried: Vec<&str> = Vec::new();
+        let mut agents: Vec<Self> = Vec::new();
+        for entry in &entries {
+            let expanded: Vec<&str> = match *entry {
+                "auto" => AUTO
+                    .into_iter()
+                    .filter(|a| {
+                        let program = Self::parse(a).program().to_string();
+                        !named.iter().any(|n| n.program() == program)
+                    })
+                    .collect(),
+                entry => vec![entry],
+            };
+            for entry in expanded {
+                let agent = Self::parse(entry);
+                if !agents.contains(&agent) {
+                    tried.push(entry);
+                    agents.push(agent);
+                }
+            }
+        }
+        agents.retain(Self::installed);
+        if agents.is_empty() {
+            return Err(format!(
+                "No AI to {purpose}: {} not installed · set {setting} in config.toml",
+                tried.join(", ")
+            ));
+        }
+        Ok(Some(agents))
     }
     pub(crate) fn program(&self) -> &str {
         match self {
@@ -197,7 +219,7 @@ impl Agent {
             Self::Command(words) => words.first().map_or("", String::as_str),
         }
     }
-    fn installed(&self) -> bool {
+    pub(crate) fn installed(&self) -> bool {
         // Tests never pick a real AI, which would spend tokens: the review explains
         // agent changes by itself, and tests read your config. Only commands of
         // their own answer there (the real one is `real_ai_summarizes_a_real_change`).
@@ -355,10 +377,11 @@ OVERALL: <two to four short sentences about the whole change, every file listed 
     (out, fits)
 }
 
-/// Ask `agent` about the changes, off the UI thread: only the files whose changes
-/// aren't the ones `before` explained. `None` when there's nothing new to explain.
+/// Ask `agents` about the changes, off the UI thread, one after another until one
+/// answers: only the files whose changes aren't the ones `before` explained.
+/// `None` when there's nothing new to explain.
 pub fn start(
-    agent: Agent,
+    agents: Vec<Agent>,
     files: &[FileDiff],
     before: Option<&Summary>,
 ) -> Option<Receiver<Result<Summary, String>>> {
@@ -388,7 +411,18 @@ pub fn start(
         .collect();
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
-        let answer = ask(&agent, &prompt).map(|(text, usage, by)| {
+        let mut failed = Vec::new();
+        let answer = agents
+            .iter()
+            .find_map(|agent| match ask(agent, &prompt) {
+                Ok(answer) => Some(answer),
+                Err(error) => {
+                    failed.push(said_by(&agent.name(), error));
+                    None
+                }
+            })
+            .ok_or_else(|| failed.join(" · "));
+        let answer = answer.map(|(text, usage, by)| {
             let paths: Vec<String> = keys.iter().map(|(p, ..)| p.clone()).collect();
             let (said, overall) = parse(&text, &paths);
             let files = keys
@@ -411,11 +445,22 @@ pub fn start(
                 sent: keys.len(),
                 left_out,
                 usage,
+                failed,
             }
         });
         let _ = sender.send(answer);
     });
     Some(receiver)
+}
+
+/// `error` saying who it's from: "Codex: rate limited", unless it says already.
+pub(crate) fn said_by(name: &str, error: String) -> String {
+    let who = name.split(' ').next().unwrap_or(name);
+    if error.starts_with(who) {
+        error
+    } else {
+        format!("{name}: {error}")
+    }
 }
 
 /// Run the agent outside the project, in an empty folder, so it reads nothing but
@@ -765,7 +810,7 @@ mod tests {
         let agent = Agent::parse(&std::env::var("RAIDO_AI").unwrap_or("claude".into()));
         let (_dir, root, mut changes) = crate::review::tests::project();
         crate::review::tests::feature(&mut changes, &root);
-        let summary = start(agent, &changes.files, None)
+        let summary = start(vec![agent], &changes.files, None)
             .unwrap()
             .recv_timeout(TIMEOUT)
             .unwrap()
@@ -849,6 +894,50 @@ mod tests {
         );
         let error = Agent::choose(&list(&["no-such-ai-here"])).unwrap_err();
         assert!(error.contains("no-such-ai-here not installed"), "{error}");
+        // Every one installed, in order, for when the first can't answer; "auto"
+        // adds those the list doesn't name, and the same AI isn't asked twice.
+        #[cfg(unix)]
+        assert_eq!(
+            Agent::candidates(&list(&[
+                "sh -c cat",
+                "no-such-ai-here",
+                "auto",
+                "sh -c cat",
+                "sh"
+            ])),
+            Ok(Some(vec![Agent::parse("sh -c cat"), Agent::parse("sh")]))
+        );
+        let named = |entries: &[&str]| {
+            let mut tried = Vec::new();
+            let error =
+                Agent::candidates_for(&list(entries), "docs_ai", "answer with").unwrap_err();
+            for name in error
+                .trim_start_matches("No AI to answer with: ")
+                .split(" not installed")
+                .next()
+                .unwrap()
+                .split(", ")
+            {
+                tried.push(name.to_string());
+            }
+            tried
+        };
+        // Tests find no real AI installed, so the error lists what was tried.
+        assert_eq!(
+            named(&["claude:opus", "auto"]),
+            ["claude:opus", "codex", "gemini", "agy", "opencode", "local"]
+        );
+        assert_eq!(
+            named(&["local:qwen3", "auto"]),
+            [
+                "local:qwen3",
+                "claude",
+                "codex",
+                "gemini",
+                "agy",
+                "opencode"
+            ]
+        );
     }
 
     #[test]
@@ -933,11 +1022,46 @@ mod tests {
         assert!(again.contains("unchanged since:\nFILE x.txt: Adds b.\n"));
         assert!(again.contains("=== y.txt") && !again.contains("=== x.txt"));
         assert!(start(
-            Agent::Claude(None),
+            vec![Agent::Claude(None)],
             std::slice::from_ref(&file),
             Some(&before)
         )
         .is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_next_ai_explains_when_the_first_cant() {
+        let (_dir, root, mut changes) = crate::review::tests::project();
+        crate::review::tests::feature(&mut changes, &root);
+        let broken = Agent::Command(
+            ["sh", "-c", "echo signed out >&2; exit 1"]
+                .map(String::from)
+                .to_vec(),
+        );
+        let echo = Agent::parse("sh -c cat");
+        let summary = start(vec![broken.clone(), echo], &changes.files, None)
+            .unwrap()
+            .recv_timeout(Duration::from_secs(20))
+            .unwrap()
+            .unwrap();
+        assert_eq!(summary.by, "sh");
+        assert_eq!(summary.failed, ["sh: signed out"]);
+        // None answers: each says why.
+        let error = start(vec![broken.clone(), broken], &changes.files, None)
+            .unwrap()
+            .recv_timeout(Duration::from_secs(20))
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error, "sh: signed out · sh: signed out");
+        assert_eq!(
+            said_by("Codex", "rate limited".into()),
+            "Codex: rate limited"
+        );
+        assert_eq!(
+            said_by("Claude (haiku)", "Claude: over".into()),
+            "Claude: over"
+        );
     }
 
     #[test]

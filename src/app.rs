@@ -5769,25 +5769,38 @@ impl App {
     }
     /// Enter in the docs pane: ask its question.
     fn docs_ask(&mut self) -> Result<()> {
-        let Some(Pane::Docs(view)) = self.panes.get(&self.focused) else {
+        if !matches!(self.panes.get(&self.focused), Some(Pane::Docs(_))) {
             return Ok(());
+        }
+        let by = self.docs_send()?;
+        self.notice(format!("Asking {by} · Esc stops"));
+        Ok(())
+    }
+    /// Ask the docs pane's question of the AIs `docs_ai` names, in order: who's
+    /// asked first.
+    fn docs_send(&mut self) -> Result<String> {
+        let Some(Pane::Docs(view)) = self.panes.get(&self.focused) else {
+            bail!("No docs pane here");
         };
         let Some((shown, asked)) = view.question() else {
             bail!("Type a question, or open the docs (Ctrl-b /) on a name or a selection in your code");
         };
-        let agent =
-            crate::summary::Agent::choose_for(&self.config.docs_ai, "docs_ai", "answer with")
+        let agents =
+            crate::summary::Agent::candidates_for(&self.config.docs_ai, "docs_ai", "answer with")
                 .map_err(anyhow::Error::msg)?
                 .context(
                     "The interactive documentation is off (docs_ai = \"off\" in config.toml)",
                 )?;
-        let by = agent.name();
         let root = self.root.clone();
-        if let Some(Pane::Docs(view)) = self.panes.get_mut(&self.focused) {
-            view.ask(shown, asked, agent, &root);
-        }
-        self.notice(format!("Asking {by} · Esc stops"));
-        Ok(())
+        let Some(Pane::Docs(view)) = self.panes.get_mut(&self.focused) else {
+            bail!("No docs pane here");
+        };
+        view.ask(shown, asked, agents, &root);
+        Ok(view
+            .entries
+            .last()
+            .map(|e| e.by.clone())
+            .unwrap_or_default())
     }
     fn docs_key(&mut self, key: KeyEvent) -> Result<()> {
         let Some(Pane::Docs(view)) = self.panes.get_mut(&self.focused) else {

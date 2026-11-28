@@ -1046,15 +1046,15 @@ impl Changes {
         if let Some((_, by)) = &self.summary_job {
             return Ok(format!("{by} is still reading the changes…"));
         }
-        let Some(agent) = crate::summary::Agent::choose(setting)? else {
+        let Some(agents) = crate::summary::Agent::candidates(setting)? else {
             return Err(
                 "AI summaries are off (review_ai = \"off\" in config.toml); the outline needs no AI"
                     .into(),
             );
         };
-        let name = agent.name();
+        let name = agents[0].name();
         let before = self.summary.as_ref().filter(|_| !afresh);
-        let Some(job) = crate::summary::start(agent, &self.files, before) else {
+        let Some(job) = crate::summary::start(agents, &self.files, before) else {
             return Ok("Nothing new since the last explanation · S explains it all again".into());
         };
         self.summary_error = None;
@@ -1710,6 +1710,10 @@ impl ChangesView {
                 }
                 when.push_str(" · s asks again");
                 out.push((Tone::Faint, when));
+                // The ones on the list before it, which couldn't answer.
+                for failed in &summary.failed {
+                    out.push((Tone::Faint, format!("  {failed} · asked the next AI")));
+                }
                 // What it cost, when the AI says, and all the asking since Raido started.
                 if let Some(usage) = summary.usage {
                     let mut cost = format!("  {}", usage.describe());
@@ -2204,6 +2208,7 @@ pub(crate) mod tests {
                 output: 120,
                 cost: Some(0.004),
             }),
+            failed: Vec::new(),
         });
         changes.version += 1;
         view.sync(&changes);
