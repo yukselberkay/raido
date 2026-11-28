@@ -5767,10 +5767,22 @@ impl App {
         ));
         Ok(())
     }
-    /// Enter in the docs pane: ask its question.
+    /// Enter in the docs pane: ask its question. The first time, while `docs_ai` is
+    /// still "auto" and more than one AI could answer, it asks which one first.
     fn docs_ask(&mut self) -> Result<()> {
-        if !matches!(self.panes.get(&self.focused), Some(Pane::Docs(_))) {
+        let Some(Pane::Docs(view)) = self.panes.get(&self.focused) else {
             return Ok(());
+        };
+        if view.question().is_none() {
+            bail!("Type a question, or open the docs (Ctrl-b /) on a name or a selection in your code");
+        }
+        let unchosen = self.config.docs_ai.iter().map(|e| e.trim()).eq(["auto"]);
+        if unchosen {
+            let (programs, local) = docs_installed();
+            if docs::Chooser::worth_asking(programs.len(), local) {
+                self.docs_choose(true);
+                return Ok(());
+            }
         }
         let by = self.docs_send()?;
         self.notice(format!("Asking {by} · Esc stops"));
@@ -5802,10 +5814,134 @@ impl App {
             .map(|e| e.by.clone())
             .unwrap_or_default())
     }
+    /// Ask in the focused docs pane which AI answers: the CLIs installed, and your
+    /// local models once listed. `asking`: a question waits for the answer.
+    fn docs_choose(&mut self, asking: bool) {
+        let (programs, local) = docs_installed();
+        let local = local.then(|| {
+            let (send, listing) = mpsc::channel();
+            let server = crate::model_server::name();
+            let on_server = server.is_some();
+            std::thread::spawn(move || {
+                let models = match on_server {
+                    true => crate::model_server::model_ids(),
+                    false => crate::local_ai::ollama_models(),
+                };
+                let _ = send.send(models.map_err(|e| format!("{e:#}")));
+            });
+            (server.unwrap_or_else(|| "Ollama".into()), listing)
+        });
+        let mut chooser = docs::Chooser::new(&programs, local);
+        chooser.asking = asking;
+        if chooser.offers.is_empty() && !chooser.listing() {
+            chooser.problem = Some(
+                "None is installed: Claude Code, Codex, Gemini CLI, Antigravity, OpenCode or Ollama"
+                    .into(),
+            );
+        }
+        // On the AI that answers now, when it's offered.
+        let now = self.config.docs_ai.first().map(|e| e.trim().to_string());
+        if let Some(row) = chooser
+            .offers
+            .iter()
+            .position(|o| Some(&o.setting) == now.as_ref())
+        {
+            chooser.selected = row;
+        }
+        if let Some(Pane::Docs(view)) = self.panes.get_mut(&self.focused) {
+            view.choosing = Some(chooser);
+            view.changed();
+        }
+        self.notice("Which AI answers? · ↑↓ Enter picks · 1–9 · Esc back");
+    }
+    /// Keys while the docs pane asks which AI answers.
+    fn docs_chooser_key(&mut self, key: KeyEvent) -> Result<()> {
+        let Some(Pane::Docs(view)) = self.panes.get_mut(&self.focused) else {
+            return Ok(());
+        };
+        let Some(chooser) = view.choosing.as_mut() else {
+            return Ok(());
+        };
+        let row = match key.code {
+            KeyCode::Esc => {
+                let asking = chooser.asking;
+                view.choosing = None;
+                view.changed();
+                self.notice(match asking {
+                    true => "Not asked · Enter asks, once you pick which AI answers",
+                    false => "docs_ai stays as it was",
+                });
+                return Ok(());
+            }
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::BackTab => {
+                chooser.up();
+                return Ok(());
+            }
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
+                chooser.down();
+                return Ok(());
+            }
+            KeyCode::Enter => chooser.selected,
+            KeyCode::Char(c @ '1'..='9') if (c as usize - '1' as usize) < chooser.offers.len() => {
+                c as usize - '1' as usize
+            }
+            _ => return Ok(()),
+        };
+        let asking = chooser.asking;
+        let Some(offer) = chooser.offers.get(row).cloned() else {
+            if chooser.listing() {
+                self.notice("Still looking for your models…");
+                return Ok(());
+            }
+            // Nothing to pick: "auto" says what's missing.
+            view.choosing = None;
+            view.changed();
+            if asking {
+                let by = self.docs_send()?;
+                self.notice(format!("Asking {by} · Esc stops"));
+            }
+            return Ok(());
+        };
+        view.choosing = None;
+        view.changed();
+        let value = vec![offer.setting.clone(), "auto".to_string()];
+        self.config.docs_ai = value.clone();
+        let saved = match config::save_docs_ai(&value) {
+            Ok(_) => "saved in config.toml (:ask-with changes it)".to_string(),
+            Err(error) => format!("not saved: {error:#}"),
+        };
+        if asking {
+            let by = self.docs_send()?;
+            self.notice(format!("Asking {by} · {saved} · Esc stops"));
+        } else {
+            self.notice(format!("The docs answer with {} · {saved}", offer.label));
+        }
+        Ok(())
+    }
+    /// `:ask-with`: pick which AI answers in the docs (saved as `docs_ai`); with an
+    /// AI named (`:ask-with codex`, `claude:opus`, `auto`, `off`), that one.
+    fn ask_with(&mut self, arg: &str) -> Result<()> {
+        self.docs("")?;
+        if arg.is_empty() {
+            self.docs_choose(false);
+            return Ok(());
+        }
+        let value: Vec<String> = match arg {
+            "auto" | "off" => vec![arg.into()],
+            _ => vec![arg.into(), "auto".into()],
+        };
+        config::save_docs_ai(&value).context("Not saved")?;
+        self.config.docs_ai = value;
+        self.notice(format!("The docs answer with {arg} · saved in config.toml"));
+        Ok(())
+    }
     fn docs_key(&mut self, key: KeyEvent) -> Result<()> {
         let Some(Pane::Docs(view)) = self.panes.get_mut(&self.focused) else {
             return Ok(());
         };
+        if view.choosing.is_some() {
+            return self.docs_chooser_key(key);
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let page = view.height.saturating_sub(2).max(1) as i64;
@@ -7323,6 +7459,7 @@ impl App {
             }
             "theme" | "themes" => self.open_picker(),
             "ask" => self.docs(arg)?,
+            "ask-with" => self.ask_with(arg)?,
             "mention" => self.mention()?,
             "image" | "screenshot" => self.attach_image()?,
             "explain" => self.explain_commit(arg)?,
@@ -7443,6 +7580,17 @@ const SIDEBAR_PAGE: isize = 5;
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
 /// A `.json` file: `:format` lays it out without a language server.
+/// The CLIs "auto" tries for the docs that are installed here, in its order, and
+/// whether a local model (Ollama, or your model server) is too.
+fn docs_installed() -> (Vec<&'static str>, bool) {
+    use crate::summary::Agent;
+    let programs = ["claude", "codex", "gemini", "agy", "opencode"]
+        .into_iter()
+        .filter(|p| Agent::parse(p).installed())
+        .collect();
+    (programs, Agent::Local(None).installed())
+}
+
 fn is_json(buffer: &Buffer) -> bool {
     buffer
         .path
@@ -9209,6 +9357,118 @@ while True:
         app.config.docs_ai = vec!["off".into()];
         let error = app.command("ask anything").unwrap_err().to_string();
         assert!(error.contains("docs_ai"), "{error}");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn the_docs_ask_once_which_ai_answers_and_keep_to_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let script = |name: &str| {
+            let path = root.join(format!("{name}.sh"));
+            std::fs::write(&path, format!("echo {name} answered\n")).unwrap();
+            format!("sh {}", path.display())
+        };
+        let (first, second) = (script("first"), script("second"));
+        let mut app = App::new(root.into(), None, false).unwrap();
+        app.config.docs_ai = vec!["auto".into()];
+        app.command("ask").unwrap();
+        let docs = app.focused;
+        fn view(app: &App, docs: usize) -> &DocsView {
+            match app.panes.get(&docs) {
+                Some(Pane::Docs(view)) => view,
+                _ => panic!("the docs pane"),
+            }
+        }
+        let wait = |app: &mut App| {
+            let start = Instant::now();
+            while matches!(app.panes.get(&docs), Some(Pane::Docs(v)) if v.asking.is_some()) {
+                app.tick();
+                assert!(start.elapsed() < Duration::from_secs(20), "no answer");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        // What the first question opens when more than one AI is installed (tests
+        // find none installed, so it's put there).
+        let choose = |app: &mut App| {
+            let mut chooser = docs::Chooser::new(&[], None);
+            chooser.offers = [&first, &second]
+                .map(|setting| docs::Offer {
+                    setting: setting.clone(),
+                    label: format!("Script {}", if *setting == first { 1 } else { 2 }),
+                    note: "answers at once".into(),
+                })
+                .to_vec();
+            chooser.asking = true;
+            if let Some(Pane::Docs(view)) = app.panes.get_mut(&docs) {
+                view.choosing = Some(chooser);
+            }
+        };
+        for c in "hello".chars() {
+            press(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        choose(&mut app);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+        terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(screen.contains("WHICH AI ANSWERS?"), "{screen}");
+        assert!(
+            screen.contains("[2] Script 2 — answers at once"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("↑↓ Enter picks · 1–9 · Esc back"),
+            "{screen}"
+        );
+        // Letters don't type into the question meanwhile; Esc asks nothing.
+        press(&mut app, KeyCode::Char('j'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        let shown = view(&app, docs);
+        assert!(shown.choosing.is_none() && shown.entries.is_empty());
+        assert_eq!(shown.input, "hello");
+        assert_eq!(app.config.docs_ai, ["auto"]);
+        // Picked (2): kept as docs_ai, "auto" after it, and the question asked.
+        choose(&mut app);
+        press(&mut app, KeyCode::Char('2'), KeyModifiers::NONE);
+        assert_eq!(app.config.docs_ai, [second.clone(), "auto".into()]);
+        assert!(
+            app.message.contains("saved in config.toml"),
+            "{}",
+            app.message
+        );
+        wait(&mut app);
+        let shown = view(&app, docs);
+        assert_eq!(shown.entries[0].answer.as_deref(), Some("second answered"));
+        // Asked again, it isn't asked which.
+        for c in "again".chars() {
+            press(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(view(&app, docs).choosing.is_none());
+        wait(&mut app);
+        let shown = view(&app, docs);
+        assert_eq!(shown.entries[1].answer.as_deref(), Some("second answered"));
+        // :ask-with asks again; with none installed, it says so.
+        app.command("ask-with").unwrap();
+        let chooser = view(&app, docs).choosing.as_ref().unwrap();
+        assert!(chooser
+            .problem
+            .as_deref()
+            .unwrap()
+            .starts_with("None is installed"));
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert!(app.message.contains("docs_ai stays as it was"));
+        // Or it names one.
+        app.command("ask-with codex").unwrap();
+        assert_eq!(app.config.docs_ai, ["codex", "auto"]);
+        app.command("ask-with off").unwrap();
+        assert_eq!(app.config.docs_ai, ["off"]);
     }
     #[test]
     fn browsing_past_files_open_already_keeps_to_one_preview_pane() {

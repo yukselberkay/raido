@@ -447,6 +447,22 @@ fn save_font_size_in(path: &Path, size: Option<f32>) -> Result<()> {
     })
 }
 
+/// Remember which AI answers in the interactive documentation (`docs_ai`).
+pub fn save_docs_ai(value: &[String]) -> Result<PathBuf> {
+    let path = config_dir().join("config.toml");
+    if !cfg!(test) {
+        save_docs_ai_in(&path, value)?;
+    }
+    Ok(path)
+}
+
+fn save_docs_ai_in(path: &Path, value: &[String]) -> Result<()> {
+    let list = toml::Value::Array(value.iter().cloned().map(toml::Value::String).collect());
+    set_top_level(path, "docs_ai", Some(&list.to_string()), |c| {
+        c.docs_ai == value
+    })
+}
+
 /// Rewrite only the top-level `key = ...` line (add one, or with `None` remove it),
 /// keeping every other setting and comment as the user wrote it. `took` checks the
 /// result loads back as meant.
@@ -748,6 +764,31 @@ mod tests {
         fs::write(&path, "theme = [\n").unwrap();
         assert!(save_font_size_in(&path, Some(13.0)).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "theme = [\n");
+    }
+    #[test]
+    fn the_docs_ai_chosen_is_saved_over_auto() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("raido/config.toml");
+        let pick = ["local:hf.co/x/y:Q4_K_M".to_string(), "auto".into()];
+        save_docs_ai_in(&path, &pick).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "docs_ai = [\"local:hf.co/x/y:Q4_K_M\", \"auto\"]\n"
+        );
+        let original =
+            "theme = \"nord\"\ndocs_ai = \"auto\"\n\n[plugins.test]\nprogram = \"cargo\"\n";
+        fs::write(&path, original).unwrap();
+        let pick = ["claude:opus".to_string(), "auto".into()];
+        save_docs_ai_in(&path, &pick).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            text,
+            original.replace(
+                "docs_ai = \"auto\"",
+                "docs_ai = [\"claude:opus\", \"auto\"]"
+            )
+        );
+        assert_eq!(toml::from_str::<Config>(&text).unwrap().docs_ai, pick);
     }
     #[test]
     fn icons_accept_booleans_and_names() {

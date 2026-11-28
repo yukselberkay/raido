@@ -1171,7 +1171,10 @@ fn docs_view(
     let left = inner.x + 2 + ((room - width) / 2) as u16;
     view.layout(width, theme, syntax);
     view.place(height);
-    if let Some(rendered) = &view.rendered {
+    if let Some(chooser) = &view.choosing {
+        let area = Rect::new(left, inner.y, width as u16, height as u16);
+        docs_chooser(frame, area, theme, chooser);
+    } else if let Some(rendered) = &view.rendered {
         let lines = &rendered.document.lines;
         for (offset, line) in lines.iter().skip(view.scroll).take(height).enumerate() {
             frame.render_widget(
@@ -1198,6 +1201,18 @@ fn docs_view(
     if rows == 2 {
         let y = inner.bottom() - 2;
         let (status, fg) = match &view.asking {
+            _ if view.choosing.is_some() => (
+                fitting(
+                    &[
+                        " ↑↓ Enter picks · 1–9 · Esc back · saved as docs_ai in config.toml"
+                            .to_string(),
+                        " ↑↓ Enter picks · 1–9 · Esc back".into(),
+                        " Enter picks · Esc back".into(),
+                    ],
+                    inner.width as usize,
+                ),
+                &theme.muted,
+            ),
             Some(asking) => {
                 let by = view.entries.last().map_or("", |e| e.by.as_str());
                 let doing = match asking.progress.as_str() {
@@ -1297,6 +1312,86 @@ fn docs_view(
     if typing {
         frame.set_cursor_position((x + (view.cursor - start) as u16, y));
     }
+}
+
+/// The docs pane asking which AI answers: the heading, what picking does, then
+/// one row per AI, scrolled to keep the selected one in view.
+fn docs_chooser(frame: &mut Frame, area: Rect, theme: &Theme, chooser: &crate::docs::Chooser) {
+    let fg = Style::default().fg(color(&theme.foreground));
+    let muted = Style::default().fg(color(&theme.muted));
+    let accent = Style::default()
+        .fg(color(&theme.accent))
+        .add_modifier(Modifier::BOLD);
+    let width = area.width as usize;
+    let mut head = vec![Line::styled("WHICH AI ANSWERS?", accent)];
+    let about = "Picked once and saved in config.toml; :ask-with changes it. When it can't \
+                 answer (signed out, out of quota), the next one installed does.";
+    for line in crate::sheet::wrap_text(about, width) {
+        head.push(Line::styled(line, muted));
+    }
+    head.push(Line::from(""));
+    let mut rows: Vec<Line> = Vec::new();
+    for (n, offer) in chooser.offers.iter().enumerate() {
+        let key = if n < 9 {
+            (n + 1).to_string()
+        } else {
+            "·".into()
+        };
+        let on = n == chooser.selected;
+        let bg = |style: Style| match on {
+            true => style.bg(color(&theme.selection)),
+            false => style,
+        };
+        let mut line = Line::from(vec![
+            Span::styled(format!("[{key}] "), bg(muted)),
+            Span::styled(offer.label.clone(), bg(fg.add_modifier(Modifier::BOLD))),
+            Span::styled(format!(" — {}", offer.note), bg(muted)),
+        ]);
+        if on {
+            line = line.style(Style::default().bg(color(&theme.selection)));
+        }
+        rows.push(line);
+    }
+    let mut tail = Vec::new();
+    if let Some(from) = &chooser.listing_from {
+        tail.push(Line::styled(
+            format!("Looking for the models on {from}…"),
+            muted,
+        ));
+    }
+    if let Some(problem) = &chooser.problem {
+        tail.push(Line::styled(problem.clone(), muted));
+    }
+    // The rows come first: the heading's text goes when there's no room for them,
+    // then the rows scroll to keep the selected one in view, saying how many are out.
+    let height = area.height as usize;
+    let room = height.saturating_sub(tail.len());
+    let head_shown = head
+        .len()
+        .min(room.saturating_sub(rows.len()))
+        .max(1.min(room));
+    let mut window = room.saturating_sub(head_shown);
+    let cut = rows.len() > window;
+    if cut {
+        window = window.saturating_sub(1);
+    }
+    let first = (chooser.selected + 1).saturating_sub(window);
+    let shown = rows.len().saturating_sub(first).min(window);
+    let more = rows.len() - first - shown;
+    let mut lines: Vec<Line> = head.into_iter().take(head_shown).collect();
+    lines.extend(rows.into_iter().skip(first).take(window));
+    if cut {
+        lines.push(Line::styled(
+            match (first, more) {
+                (0, more) => format!("↓ {more} more"),
+                (above, 0) => format!("↑ {above} more"),
+                (above, more) => format!("↑ {above} more · ↓ {more} more"),
+            },
+            muted,
+        ));
+    }
+    lines.extend(tail);
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 /// A terminal cell's colors and attributes in the theme.
@@ -4568,6 +4663,10 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
             && !app.sidebar_focus
         {
             " j k move   n N next change   ] [ file   y keep   x undo   Y X whole file   A keep all   U undo all   Enter open   s/S AI explains new/all   i notes   q close"
+        } else if matches!(app.panes.get(&app.focused), Some(Pane::Docs(v)) if v.choosing.is_some())
+            && !app.sidebar_focus
+        {
+            " ↑↓ j k move   Enter pick   1–9 that one   Esc back   :ask-with asks again later"
         } else if matches!(app.panes.get(&app.focused), Some(Pane::Docs(v)) if v.asking.is_some())
             && !app.sidebar_focus
         {
@@ -4923,6 +5022,10 @@ fn help(frame: &mut Frame, app: &mut App, rect: Rect) {
         (
             "Enter / ^Y / ^B n / Esc",
             "Ask (empty: the name or selection) / copy example / new / back",
+        ),
+        (
+            ":ask-with [ai]",
+            "Which AI answers there (asked the first time, saved)",
         ),
         ("HEX", "Files that aren't text open read-only as hex"),
         (

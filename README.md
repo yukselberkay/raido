@@ -1060,9 +1060,17 @@ the file and its language, the line, and what you selected. While the agent work
 the pane says what it's doing (`reading app.py`, `searching the web for …`,
 `running python3 example.py`).
 
-**Which agent:** `docs_ai` in `config.toml`, `"auto"` by default: the first installed
-of Claude Code (on Sonnet), Codex, Gemini CLI, Antigravity, OpenCode, then a local
-model. Name one (`docs_ai = "codex"`), one with a model (`"claude:opus"`), a list to
+**Which AI answers:** the first time you ask, when more than one could (two of the
+AI CLIs installed, or Ollama or your model server with its models), the pane asks
+which: Claude Code on Sonnet (Raido's pick), Opus or Haiku, Codex, Gemini CLI,
+Antigravity and OpenCode on their own models, and each of your local models. ↑↓ and
+Enter, or its number, picks one and the question goes; Esc asks nothing. The pick
+is saved as `docs_ai` in `config.toml` with `"auto"` after it, for when it can't
+answer (`docs_ai = ["claude:opus", "auto"]`), so it's asked once. `:ask-with` asks
+again, and `:ask-with codex` names one. With one AI installed, it doesn't ask.
+
+**`docs_ai`** is `"auto"` until then: the first installed of Claude Code (on
+Sonnet), Codex, Gemini CLI, Antigravity, OpenCode, then a local model. Name one (`docs_ai = "codex"`), one with a model (`"claude:opus"`), a list to
 try in order, a command of yours that reads the question on its input, or `"off"`.
 **When one can't answer** (it isn't signed in, it's out of quota, it fails), the
 next installed one on the list is asked, and the answer says who couldn't and why;
@@ -1985,6 +1993,7 @@ Set `restore_session = false` in `config.toml` to turn sessions off everywhere.
 :ai local [model]         Your local LLM ([ai.local], else your model server, else Ollama / LM Studio)
 :ai <name> [model]        A launcher you defined as [ai.<name>]
 :ask [question]           Interactive documentation beside the code; a question is asked at once (Ctrl-b /)
+:ask-with [ai]            Which AI answers in the docs: pick from a list, or name one (codex, claude:opus, auto, off); saved in config.toml
 :themes                   Theme picker with live preview (also Ctrl-b t)
 :theme name               Switch theme directly (e.g. dracula or visual-studio-dark)
 :preview [split]          Rendered Markdown or Nmap report in place / beside the source
@@ -2361,7 +2370,7 @@ theme immediately. The configuration supports:
 | `review_changes` | `true` | Track the files AI panes change, to [review, keep or undo](#review-ai-changes) them (`Ctrl-b v`) |
 | `review_summary` | `true` | In the review, list what each file's change added, changed and removed, and sum it up at the end, read from the code without AI |
 | `review_ai_auto` | `true` | Explain new agent changes in the review by themselves once the agents stop (`false`: only on `s`) |
-| `docs_ai` | `"auto"` | Which AI answers in the [interactive documentation](#interactive-documentation), or a list to try in order: `"auto"`, `"claude"`, `"codex"`, `"gemini"`, `"agy"`, `"opencode"`, `"local"`, each with an optional `:model`, a command, or `"off"` |
+| `docs_ai` | `"auto"` | Which AI answers in the [interactive documentation](#interactive-documentation), or a list to try in order: `"auto"`, `"claude"`, `"codex"`, `"gemini"`, `"agy"`, `"opencode"`, `"local"`, each with an optional `:model`, a command, or `"off"`. With more than one AI installed, the docs ask which the first time and save it here (`:ask-with` asks again) |
 | `paste_screenshots` | `true` | macOS: [⌘V pastes a screenshot into an AI pane](#screenshots-and-images-in-ai-panes): while one is open, a screenshot on the clipboard is saved and, while Raido is in front, its path added beside the image as text |
 | `review_ignored` | `["*.md", "*.txt"]` | [Gitignored files](#review-ai-changes) the review tracks anyway, by name (`"*.md"`) or path (`"plans/*.md"`); not over 2 MB or in dependency and build folders; `[]` for none |
 | `review_ai` | `"auto"` | Which AI explains the changes in the review, or a list to try in order: `"auto"`, `"claude"`, `"codex"`, `"gemini"`, `"agy"`, `"opencode"`, `"local"`, each with an optional `:model`, a command, or `"off"` |

@@ -201,6 +201,179 @@ pub struct DocsView {
     /// The question to scroll to the top when next drawn.
     jump: Option<usize>,
     pub rendered: Option<Rendered>,
+    /// Which AI answers, being chosen.
+    pub choosing: Option<Chooser>,
+}
+
+/// An AI the chooser offers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Offer {
+    /// What `docs_ai` names it: "claude:sonnet", "codex", "local:qwen3:8b".
+    pub setting: String,
+    /// "Claude Code · Sonnet".
+    pub label: String,
+    /// What it's like here: "the most capable; slower".
+    pub note: String,
+}
+
+/// Which AI answers the docs' questions: asked the first time you ask when more
+/// than one could (`docs_ai` still "auto"), and by `:ask-with`. The pick is saved
+/// as `docs_ai`, the rest of "auto" after it for when it can't answer.
+#[derive(Default)]
+pub struct Chooser {
+    pub offers: Vec<Offer>,
+    pub selected: usize,
+    /// Opened by asking: the question goes once an AI is picked.
+    pub asking: bool,
+    /// Where the local models are listed from ("Ollama", your model server's name),
+    /// while they're on their way.
+    pub listing_from: Option<String>,
+    /// Why the local models can't be offered.
+    pub problem: Option<String>,
+    listing: Option<Models>,
+}
+
+/// Your local models' names, listed in the background, or why they can't be.
+pub type Models = Receiver<Result<Vec<String>, String>>;
+
+/// A CLI the chooser offers: its program, its name, and its models with a note on
+/// each (`None`: the model it's set to use).
+type Offered = (
+    &'static str,
+    &'static str,
+    &'static [(Option<&'static str>, &'static str)],
+);
+
+/// The CLIs "auto" tries that the chooser offers, in its order, before the local
+/// models: (program, name, its models as (model, note)). `None`: the CLI's own.
+const OFFERED: [Offered; 5] = [
+    (
+        "claude",
+        "Claude Code",
+        &[
+            (Some("sonnet"), "right about APIs, and quick (Raido's pick)"),
+            (
+                Some("opus"),
+                "the most capable; slower, uses more of your plan",
+            ),
+            (Some("haiku"), "the quickest; for simple questions"),
+        ],
+    ),
+    (
+        "codex",
+        "Codex",
+        &[(None, "the model in Codex's own settings")],
+    ),
+    (
+        "gemini",
+        "Gemini CLI",
+        &[(None, "shows the output it expects; runs nothing")],
+    ),
+    (
+        "agy",
+        "Antigravity",
+        &[(None, "shows the output it expects; runs nothing")],
+    ),
+    ("opencode", "OpenCode", &[(None, "the model it used last")]),
+];
+
+impl Chooser {
+    /// The choice among `programs` (installed CLIs "auto" tries); with `local`,
+    /// your local models too, listed in the background from `listing_from`.
+    pub fn new(programs: &[&str], local: Option<(String, Models)>) -> Self {
+        let mut offers = Vec::new();
+        for (program, name, models) in OFFERED {
+            if !programs.contains(&program) {
+                continue;
+            }
+            for (model, note) in models {
+                offers.push(Offer {
+                    setting: match model {
+                        Some(model) => format!("{program}:{model}"),
+                        None => program.to_string(),
+                    },
+                    label: match model {
+                        Some(model) => format!("{name} · {}", capitalized(model)),
+                        None => format!("{name} · its own model"),
+                    },
+                    note: note.to_string(),
+                });
+            }
+        }
+        let (listing_from, listing) = match local {
+            Some((from, listing)) => (Some(from), Some(listing)),
+            None => (None, None),
+        };
+        Self {
+            offers,
+            listing_from,
+            listing,
+            ..Self::default()
+        }
+    }
+    /// Whether to ask before the first question: more than one AI could answer.
+    /// `programs` are the CLIs installed; local models count as several, as each
+    /// is an AI of its own.
+    pub fn worth_asking(programs: usize, local: bool) -> bool {
+        programs >= 2 || local
+    }
+    /// The local models are still on their way.
+    pub fn listing(&self) -> bool {
+        self.listing.is_some()
+    }
+    /// Take the local models if they've arrived; true when they did.
+    pub fn poll(&mut self) -> bool {
+        let Some(listing) = &self.listing else {
+            return false;
+        };
+        let models = match listing.try_recv() {
+            Ok(models) => models,
+            Err(TryRecvError::Empty) => return false,
+            Err(TryRecvError::Disconnected) => Err("the listing stopped".into()),
+        };
+        self.listing = None;
+        let from = self.listing_from.take().unwrap_or_else(|| "Ollama".into());
+        match models {
+            Ok(models) if models.is_empty() => {
+                self.problem = Some(format!(
+                    "{from} has no models yet · pull one: ollama pull qwen3"
+                ));
+            }
+            Ok(models) => {
+                let note = match from.as_str() {
+                    "Ollama" => {
+                        "on this computer; shows the output it expects, runs nothing".to_string()
+                    }
+                    _ => "on your model server; shows the output it expects, runs nothing"
+                        .to_string(),
+                };
+                self.offers.extend(models.into_iter().map(|model| Offer {
+                    label: format!("{from} · {model}"),
+                    setting: format!("local:{model}"),
+                    note: note.clone(),
+                }));
+            }
+            Err(error) => self.problem = Some(format!("{from}: {error}")),
+        }
+        true
+    }
+    pub fn up(&mut self) {
+        let rows = self.offers.len().max(1);
+        self.selected = (self.selected + rows - 1) % rows;
+    }
+    pub fn down(&mut self) {
+        let rows = self.offers.len().max(1);
+        self.selected = (self.selected + 1) % rows;
+    }
+}
+
+/// "sonnet" → "Sonnet".
+fn capitalized(word: &str) -> String {
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 impl DocsView {
@@ -305,10 +478,11 @@ impl DocsView {
     }
     /// Take what the agent sent; true when there's something new to draw.
     pub fn poll(&mut self) -> bool {
+        let listed = self.choosing.as_mut().is_some_and(Chooser::poll);
         let Some(asking) = &mut self.asking else {
-            return false;
+            return listed;
         };
-        let mut moved = false;
+        let mut moved = listed;
         let done = loop {
             match asking.updates.try_recv() {
                 Ok(Update::Progress(progress)) => {
@@ -1416,5 +1590,50 @@ mod tests {
         view.poll();
         assert_eq!(view.entries[2].error.as_deref(), Some(STOPPED));
         assert!(view.entries[2].failed.is_empty() && view.asking.is_none());
+    }
+
+    #[test]
+    fn the_chooser_offers_each_ai_installed_and_the_local_models() {
+        // Claude Code on each of its models, the others on their own.
+        let chooser = Chooser::new(&["codex", "claude"], None);
+        let settings: Vec<&str> = chooser.offers.iter().map(|o| o.setting.as_str()).collect();
+        assert_eq!(
+            settings,
+            ["claude:sonnet", "claude:opus", "claude:haiku", "codex"]
+        );
+        assert_eq!(chooser.offers[0].label, "Claude Code · Sonnet");
+        assert!(chooser.offers[0].note.contains("Raido's pick"));
+        assert_eq!(chooser.offers[3].label, "Codex · its own model");
+        // Asked when there's a choice: two CLIs, or local models (each is an AI).
+        assert!(!Chooser::worth_asking(1, false) && !Chooser::worth_asking(0, false));
+        assert!(Chooser::worth_asking(2, false) && Chooser::worth_asking(0, true));
+        // The local models come in the background, after the CLIs.
+        let (send, listing) = mpsc::channel();
+        let mut chooser = Chooser::new(&["gemini"], Some(("Ollama".into(), listing)));
+        assert!(chooser.listing() && !chooser.poll());
+        send.send(Ok(vec!["qwen3:8b".into(), "gemma3".into()]))
+            .unwrap();
+        assert!(chooser.poll() && !chooser.listing());
+        let settings: Vec<&str> = chooser.offers.iter().map(|o| o.setting.as_str()).collect();
+        assert_eq!(settings, ["gemini", "local:qwen3:8b", "local:gemma3"]);
+        assert_eq!(chooser.offers[1].label, "Ollama · qwen3:8b");
+        assert_eq!(
+            Agent::parse(&chooser.offers[1].setting),
+            Agent::Local(Some("qwen3:8b".into()))
+        );
+        chooser.up();
+        assert_eq!(chooser.selected, 2);
+        chooser.down();
+        assert_eq!(chooser.selected, 0);
+        // None, or Ollama not running: it says so.
+        let (send, listing) = mpsc::channel();
+        let mut chooser = Chooser::new(&[], Some(("gpu-box".into(), listing)));
+        send.send(Err("connection refused".into())).unwrap();
+        assert!(chooser.poll());
+        assert_eq!(
+            chooser.problem.as_deref(),
+            Some("gpu-box: connection refused")
+        );
+        assert!(chooser.offers.is_empty());
     }
 }

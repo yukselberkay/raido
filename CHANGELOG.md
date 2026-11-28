@@ -10,6 +10,16 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Added
 
+- **The docs ask which AI answers**, the first time you ask while `docs_ai` is
+  still `"auto"` and more than one AI could: two of the AI CLIs, or Ollama or your
+  model server with its models. They took the first installed without a word, so
+  Claude Code answered even with Codex beside it, and a local model was whichever
+  Ollama had pulled last. The pane lists Claude Code on Sonnet, Opus and Haiku,
+  Codex, Gemini CLI, Antigravity and OpenCode on their own models, and each local
+  model, with a note on each; the pick is saved in `config.toml` as
+  `docs_ai = ["<pick>", "auto"]`, so it's asked once and the others still stand in
+  for it. `:ask-with` asks again, and `:ask-with codex` names one.
+
 - **The sidebar hides by itself in a small window**, so the code isn't squeezed
   beside it, and comes back when the window grows: the explorer and the Git section
   when the panes would have under 70 columns beside them (under 99 at the default

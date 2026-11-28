@@ -59,6 +59,8 @@ ai_auto_mode = true
 # one of those ("claude", "codex", "gemini", "agy", "opencode", "local"), with
 # ":model" if you like ("claude:opus"), a list to try in order, or "off". When one
 # can't answer (signed out, out of quota), the next installed one on the list does.
+# With more than one AI installed, the docs ask which the first time and save it
+# here; :ask-with asks again.
 docs_ai = "auto"
 # A sound when an AI pane finishes a prompt (or stops to ask you something):
 # "default" (macOS Glass, the desktop's "complete" sound on Linux, Windows' notify
