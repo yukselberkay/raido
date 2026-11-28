@@ -1177,7 +1177,8 @@ the bar counts them ("3 of 12"). Typing replaces the filled-in text.
 | `Ctrl-u` / `Ctrl-v` | Clear the field / paste into it |
 | Esc | Close; `n` / `N` keep going, `:noh` clears the highlights |
 
-**`Ctrl-h`** opens the bar with the replace field ready. Searches ignore case until
+**`Ctrl-h`** opens the bar with the replace field ready (in a terminal whose
+Backspace sends ^H, Ctrl-h is Backspace: `Ctrl-f` then Tab). Searches ignore case until
 you type a capital letter (`Count` then matches only `Count`; the bar shows `Aa`).
 
 Character movement is UTF-8-aware, not grapheme-cluster-aware. This is a documented
@@ -2485,6 +2486,7 @@ plugins are intentionally not part of v0.1.
 | Need a specific Raido executable | `command -v raido` shows which installation your shell selects. |
 | “Raido needs an interactive terminal” | Launch directly in Terminal, iTerm2, a Linux terminal emulator or an SSH terminal; do not pipe stdout. |
 | No syntax colors / monochrome UI | Use a color-capable terminal. If you intentionally inherited `NO_COLOR`, `env -u NO_COLOR raido .` enables normal colors for this run. |
+| Backspace does nothing, or opens find and replace | Your terminal sends ^H for Backspace, the code Ctrl-H sends (`raido --keys` shows `Ctrl+h`). Raido asks the terminal (`stty`) at start, and where its erase key is ^H it reads ^H as Backspace everywhere; there, find and replace is `Ctrl-f` then Tab. A terminal that sends ^H but says ^? won't be caught: set it to send DEL (`^?`) for Backspace. |
 | Ctrl-C does nothing | Raido turns off xterm's modifyOtherKeys and kitty's keyboard mode when it starts, which an earlier program may have left on. `raido --keys` shows what your terminal really sends: a key that prints nothing there never reaches Raido; fix it in the terminal's settings. |
 | Sidebar missing or tiny panes | In a [small window](#a-small-window) the sidebar hides by itself: widen the terminal, `Ctrl-e` opens the explorer, `Ctrl-b s` keeps the sidebar, `auto_hide_sidebar = false` stops it. Ctrl-b z zooms a pane. |
 | A split shortcut does nothing | Release Ctrl-b before the second key. Use `:vsplit` or `:split` if your keyboard makes `%`/`"` awkward. |

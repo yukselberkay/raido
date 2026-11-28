@@ -292,6 +292,8 @@ fn main() -> Result<()> {
             }
         });
     }
+    // A terminal whose Backspace sends ^H has Raido read that as Backspace.
+    app.backspace_sends_ctrl_h = platform::erase_is_ctrl_h();
     // Raido's own font for this window while it runs; the terminal's comes back on exit.
     let _font = textsize::WindowFont::apply(&app.config.font, app.config.font_size);
     // Restore the user's terminal even on panic; no shell or raw escape output survives.
@@ -395,6 +397,9 @@ fn wait(redraw: bool, since_frame: Duration, since_lively: Duration) -> Duration
 fn show_keys() -> Result<()> {
     use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
     println!("Press keys, paste or click to see what reaches Raido; Ctrl-c twice to stop.");
+    if platform::erase_is_ctrl_h() {
+        println!("This terminal's Backspace sends ^H (Ctrl+h below): Raido reads it as Backspace.");
+    }
     enable_raw_mode()?;
     let held = |modifiers: KeyModifiers| {
         let mut name = String::new();

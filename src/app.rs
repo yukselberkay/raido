@@ -574,6 +574,9 @@ pub struct App {
     pub previews: Previews,
     /// Markdown notes as drawn rendered.
     pub live: crate::livemd::Cache,
+    /// The terminal's Backspace sends ^H (see `platform::erase_is_ctrl_h`): Ctrl-H
+    /// is read as Backspace, as that's the key you pressed.
+    pub backspace_sends_ctrl_h: bool,
     pub buffers: Vec<Buffer>,
     pub panes: BTreeMap<usize, Pane>,
     pub tiles: Tile,
@@ -787,6 +790,7 @@ impl App {
             syntax: Syntax::new(&theme),
             previews: Previews::default(),
             live: crate::livemd::Cache::default(),
+            backspace_sends_ctrl_h: false,
             root: root.clone(),
             config,
             theme,
@@ -3300,6 +3304,14 @@ impl App {
     }
     fn key(&mut self, key: KeyEvent) -> Result<()> {
         self.grab = None;
+        // Backspace, in a terminal that sends ^H for it: everywhere, a terminal pane
+        // included (its program then gets DEL, as Raido's panes erase with).
+        let ctrl_h = key.code == KeyCode::Char('h') && key.modifiers == KeyModifiers::CONTROL;
+        let key = if ctrl_h && self.backspace_sends_ctrl_h {
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)
+        } else {
+            key
+        };
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         // F1 opens the guide focused, refocuses an open one, and closes a focused one.
         // Everything else keeps working while it is open.
@@ -9926,6 +9938,44 @@ while True:
         let mut args = Vec::new();
         in_raido("gemini", &mut args);
         assert!(args.is_empty());
+    }
+
+    #[test]
+    fn backspace_sent_as_ctrl_h_deletes_only_where_the_terminal_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, "").unwrap();
+        let mut app = App::new(dir.path().into(), Some(path), false).unwrap();
+        let id = app.buffer_id().unwrap();
+        let ctrl_h = |app: &mut App| press(app, KeyCode::Char('h'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('i'), KeyModifiers::NONE);
+        for c in "abc".chars() {
+            press(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        // A terminal whose Backspace sends ^H: that's Backspace, everywhere.
+        app.backspace_sends_ctrl_h = true;
+        ctrl_h(&mut app);
+        assert_eq!(app.buffers[id].line(0), "ab");
+        assert!(app.find.is_none(), "not find and replace");
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char(':'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('w'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('x'), KeyModifiers::NONE);
+        ctrl_h(&mut app);
+        assert_eq!(app.input.as_ref().unwrap().text, "w");
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        // In the find bar it deletes too (Tab still opens replace).
+        press(&mut app, KeyCode::Char('f'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('q'), KeyModifiers::NONE);
+        ctrl_h(&mut app);
+        let find = app.find.as_ref().unwrap();
+        assert!(find.query.is_empty() && !find.replacing);
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        // A terminal whose Backspace sends DEL: Ctrl-H is find and replace, as ever.
+        app.backspace_sends_ctrl_h = false;
+        ctrl_h(&mut app);
+        assert!(app.find.as_ref().is_some_and(|f| f.replacing));
+        assert_eq!(app.buffers[id].line(0), "ab");
     }
 
     #[test]

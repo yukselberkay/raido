@@ -297,6 +297,12 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
 
 ### Fixed
 
+- **Backspace deletes in a terminal that sends ^H for it.** There (xterm as it
+  comes, some QTerminal and Konsole set-ups) Backspace arrived as Ctrl-H, Raido's
+  find and replace, so it opened the find bar instead of deleting. Raido now asks
+  the terminal for its erase key when it starts (`stty`), and where that's ^H,
+  reads ^H as Backspace everywhere, terminal panes included (their program gets
+  DEL). Elsewhere Ctrl-H is find and replace, as before.
 - **An AI agent in a Raido pane answers questions about Raido from its skill.**
   Agents found the skill but weren't told they run inside Raido, so a question
   like "how do I split this pane?" didn't make them load it unless you said "in

@@ -106,6 +106,44 @@ pub fn detached(program: &Path) -> std::process::Command {
     command
 }
 
+/// Whether the terminal's Backspace sends ^H, the code Ctrl-H sends, rather than
+/// DEL: its erase character, as `stty` reports it (terminals keep the two the same
+/// so the shell's line editing works). Some do as they come (xterm; QTerminal and
+/// Konsole with some keyboard set-ups). Never on Windows, whose console says which
+/// key it was.
+pub fn erase_is_ctrl_h() -> bool {
+    #[cfg(unix)]
+    {
+        let Ok(tty) = std::fs::File::open("/dev/tty") else {
+            return false;
+        };
+        let Ok(out) = std::process::Command::new("stty")
+            .arg("-a")
+            .stdin(tty)
+            .stderr(std::process::Stdio::null())
+            .output()
+        else {
+            return false;
+        };
+        erase_in(&String::from_utf8_lossy(&out.stdout)) == Some("^H")
+    }
+    #[cfg(not(unix))]
+    false
+}
+
+/// The erase character in `stty -a`'s output: `^?` from `erase = ^?;` (not the
+/// `werase` after it).
+#[cfg_attr(not(unix), allow(dead_code))]
+fn erase_in(stty: &str) -> Option<&str> {
+    let (at, found) = stty
+        .match_indices("erase = ")
+        .find(|(at, _)| !stty[..*at].ends_with('w'))?;
+    stty[at + found.len()..]
+        .split([';', ' ', '\n'])
+        .next()
+        .filter(|e| !e.is_empty())
+}
+
 /// Program to run: resolved to a full path when found, so Windows `.cmd` shims work.
 pub fn resolve(program: &str) -> String {
     which(program)
@@ -207,6 +245,22 @@ pub fn config_base() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_erase_character_is_read_from_stty() {
+        let linux = "speed 38400 baud; rows 20; columns 120; line = 0;\n\
+                     intr = ^C; quit = ^\\; erase = ^H; kill = ^U; eof = ^D; eol = <undef>;\n\
+                     eol2 = <undef>; swtch = <undef>; start = ^Q; stop = ^S; susp = ^Z; rprnt = ^R;\n\
+                     werase = ^W; lnext = ^V; discard = ^O; min = 1; time = 0;\n";
+        assert_eq!(erase_in(linux), Some("^H"));
+        assert_eq!(erase_in(&linux.replace("^H", "^?")), Some("^?"));
+        let macos = "cchars: discard = ^O; dsusp = ^Y; eof = ^D; eol = <undef>;\n\
+                     \teol2 = <undef>; erase = ^?; intr = ^C; kill = ^U; lnext = ^V;\n\
+                     \tmin = 1; quit = ^\\; reprint = ^R; start = ^Q; status = ^T;\n\
+                     \tstop = ^S; susp = ^Z; time = 0; werase = ^W;\n";
+        assert_eq!(erase_in(macos), Some("^?"));
+        assert_eq!(erase_in("werase = ^W;"), None);
+    }
 
     /// A detached program leads a session of its own, with no terminal to open.
     #[cfg(target_os = "linux")]
