@@ -28,7 +28,8 @@ release (0.2 → 0.3) may change keys, settings or behavior, and a patch release
   their code. **asm-lsp** adds hover docs for instructions and registers,
   completion, go to definition and the assembler's errors: Raido starts it for the
   files it reads right without settings (GNU as for this computer's CPU), and for
-  the others `:lsp` says what to put in `.asm-lsp.toml`.
+  the others `:lsp` says what to put in `.asm-lsp.toml`. The install scripts set it
+  up (Homebrew, else `cargo install`).
 
 - **Operators reach as far as relative numbers show**, as in Vim: `d3j` deletes the
   cursor's line and the 3 below it, `y3k` copies it and the 3 above, `gc3j`

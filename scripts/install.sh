@@ -3,8 +3,8 @@
 # a C compiler and linker, Git, curl, Rust (via rustup), the language servers for
 # the languages Raido's editor understands (rust-analyzer, clangd, gopls when Go is
 # installed, a Python server, TypeScript's, bash-language-server with ShellCheck and
-# shfmt, YAML's and JSON's; Docker's when Docker and Go are) from the system's package
-# manager,
+# shfmt, YAML's and JSON's; Docker's when Docker and Go are; asm-lsp for assembly)
+# from the system's package manager,
 # JetBrains Mono Nerd
 # Font, Raido itself (~/.cargo/bin/raido, made runnable by name from PATH), and the
 # Raido skill that teaches AI agents how to use Raido. On Omarchy, packages come
@@ -23,7 +23,7 @@ Raido and its AI agent skill on macOS or Linux.
   --no-font      skip JetBrains Mono Nerd Font
   --no-lsp       skip the language servers (rust-analyzer, clangd, gopls, Python,
                  TypeScript, bash-language-server with ShellCheck and shfmt,
-                 YAML, JSON, Docker)
+                 YAML, JSON, Docker, asm-lsp)
   --no-skill     skip the Raido skill for AI agents
   --no-launcher  Omarchy: skip Raido's app launcher entry (SUPER + SPACE)"
 
@@ -267,8 +267,9 @@ pm_install() {
 why() { tail -n 1 "$scratch/packages.log" 2>/dev/null; }
 
 # Folders Raido also finds a server in when it isn't on PATH (off_path in
-# src/lsp.rs): go install's for gopls, shfmt and docker-language-server; Homebrew's
-# LLVM and Apple's Command Line Tools for clangd on macOS.
+# src/lsp.rs): go install's for gopls, shfmt and docker-language-server; cargo
+# install's for asm-lsp; Homebrew's LLVM and Apple's Command Line Tools for clangd on
+# macOS.
 off_path() {
     case "$1" in
         gopls | shfmt | docker-language-server)
@@ -276,6 +277,7 @@ off_path() {
             [ -n "${GOPATH:-}" ] && echo "${GOPATH%%:*}/bin"
             echo "$HOME/go/bin"
             ;;
+        asm-lsp) echo "$cargo_bin" ;;
         clangd)
             if [ "$os" = Darwin ]; then
                 echo /opt/homebrew/opt/llvm/bin
@@ -321,6 +323,7 @@ package_for() {
         yaml-language-server:pacman | yaml-language-server:brew) echo yaml-language-server ;;
         vscode-json-language-server:pacman) echo vscode-json-languageserver ;;
         vscode-json-language-server:brew) echo vscode-langservers-extracted ;;
+        asm-lsp:brew) echo asm-lsp ;;
     esac
 }
 
@@ -371,7 +374,7 @@ python_server() {
 
 install_language_servers() {
     pm="$(package_manager)"
-    step "Language servers for Rust, C/C++, Go, Python, TypeScript, shell, YAML, JSON and Docker ($(system_name)${pm:+, $(pm_name)})"
+    step "Language servers for Rust, C/C++, Go, Python, TypeScript, shell, YAML, JSON, Docker and assembly ($(system_name)${pm:+, $(pm_name)})"
     if [ -z "$pm" ]; then
         if [ "$os" = Darwin ]; then
             note "Homebrew (https://brew.sh) is missing: only rust-analyzer and servers already here"
@@ -489,6 +492,20 @@ install_language_servers() {
         ok "docker-language-server (Dockerfile, Docker Compose)"
     else
         note "docker-language-server skipped ($(why)); later: go install $docker_server"
+    fi
+
+    # Assembly (x86, ARM, RISC-V): asm-lsp. Homebrew has it; no Linux distribution
+    # does, so cargo builds it from crates.io there, with the Rust installed above.
+    if found asm-lsp; then
+        ok "asm-lsp (assembly)"
+    elif from_packages "$(package_for asm-lsp)" && found asm-lsp; then
+        ok "asm-lsp (assembly)"
+    elif have cargo && note "building asm-lsp with cargo install (a minute or two)" &&
+        cargo install asm-lsp --locked >"$scratch/packages.log" 2>&1 &&
+        found asm-lsp; then
+        ok "asm-lsp (assembly)"
+    else
+        note "asm-lsp skipped ($(why)); later: cargo install asm-lsp --locked"
     fi
 }
 

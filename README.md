@@ -96,6 +96,7 @@ It installs, skipping whatever is already there:
    | YAML | yaml-language-server | npm | npm | `yaml-language-server` | npm | npm | `yaml-language-server` |
    | JSON | vscode-json-language-server | npm | npm | `vscode-json-languageserver` | npm | npm | `vscode-langservers-extracted` |
    | Dockerfile, Docker Compose | docker-language-server | `go install` | `go install` | `go install` | `go install` | `go install` | `go install` |
+   | Assembly (x86, ARM, RISC-V) | asm-lsp | `cargo install` | `cargo install` | `cargo install` | `cargo install` | `cargo install` | `asm-lsp` |
 
    gopls only where Go is installed (it needs Go itself), falling back to
    `go install`. Docker's server is in no package, so `go install` builds it, which
@@ -106,7 +107,8 @@ It installs, skipping whatever is already there:
    typescript@6`: it drives TypeScript 6's `tsserver`, which TypeScript 7 doesn't
    have, and Homebrew's comes with 7); for the shell, YAML and JSON servers, `npm install -g bash-language-server`,
    `yaml-language-server` and `vscode-langservers-extracted` (Node.js 20 or later);
-   and for shfmt, `go install` where Go is.
+   and for shfmt, `go install` where Go is. asm-lsp is in no Linux distribution's
+   packages, so `cargo install asm-lsp` builds it there (a minute or two).
    A server already there is kept; one that can't be installed is noted and
    skipped, never failing the install (`--no-lsp` skips them all).
 4. **JetBrains Mono Nerd Font**, Raido's [font](#fonts) and the source of the explorer's
@@ -191,7 +193,8 @@ LLVM's winget package; gopls through `go install` when Go is installed; pyright 
 npm, else basedpyright from uv or python-lsp-server from pipx; bash-language-server
 from npm with ShellCheck and shfmt from winget; yaml-language-server and VS Code's
 JSON server from npm; docker-language-server
-through `go install` when Docker and Go are installed), JetBrains Mono Nerd Font (for your
+through `go install` when Docker and Go are installed; asm-lsp through `cargo
+install`), JetBrains Mono Nerd Font (for your
 user, no administrator rights), Raido, the AI-agent skill, and `%USERPROFILE%\.cargo\bin`
 on your user PATH, so `raido` runs in that window at once and in every new one:
 

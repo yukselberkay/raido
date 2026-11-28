@@ -4,7 +4,8 @@ Build and install Raido on Windows with everything it needs: Git, the Visual Stu
 C++ build tools (Rust's linker), Rust (via rustup), the language servers for the
 languages Raido's editor understands (rust-analyzer, clangd from LLVM, gopls when Go
 is installed, a Python server, TypeScript's, bash-language-server with ShellCheck and
-shfmt, YAML's and JSON's, Docker's when Docker and Go are), JetBrains Mono Nerd Font,
+shfmt, YAML's and JSON's, Docker's when Docker and Go are, asm-lsp for assembly),
+JetBrains Mono Nerd Font,
 Raido itself
 (%USERPROFILE%\.cargo\bin\raido.exe, put on your PATH), and the Raido skill that
 teaches AI agents how to use Raido.
@@ -23,7 +24,7 @@ winget (App Installer, built into Windows 10 and 11).
 Skip JetBrains Mono Nerd Font.
 .PARAMETER NoLsp
 Skip the language servers (rust-analyzer, clangd, gopls, Python, TypeScript,
-bash-language-server with ShellCheck and shfmt, YAML, JSON, Docker).
+bash-language-server with ShellCheck and shfmt, YAML, JSON, Docker, asm-lsp).
 .PARAMETER NoSkill
 Skip the Raido skill for AI agents.
 #>
@@ -141,7 +142,7 @@ function Install-Rust {
 
 # --- Language servers: diagnostics, completion and hover in Raido's editor ---
 # One for each language Raido knows: Rust, C and C++, Go, Python, TypeScript and
-# JavaScript, shell, YAML, JSON, Docker. Each is optional:
+# JavaScript, shell, YAML, JSON, Docker, assembly. Each is optional:
 # one that can't be installed is noted and skipped, and Raido works without it.
 
 # Run a program quietly; true when it succeeds. Windows PowerShell 5.1 would stop on
@@ -152,8 +153,8 @@ function Invoke-Quietly([scriptblock]$Command) {
 }
 
 # Whether Raido can start a server: on PATH, or where Raido also looks (off_path in
-# src/lsp.rs): go install's folder for gopls and docker-language-server, the LLVM
-# installer's for clangd.
+# src/lsp.rs): go install's folder for gopls and docker-language-server, cargo
+# install's for asm-lsp, the LLVM installer's for clangd.
 function Test-Server([string]$Name) {
     if (Have $Name) { return $true }
     $dirs = @()
@@ -163,6 +164,10 @@ function Test-Server([string]$Name) {
         $dirs += (Join-Path $env:USERPROFILE 'go\bin')
     }
     if ($Name -eq 'clangd' -and $env:ProgramFiles) { $dirs += (Join-Path $env:ProgramFiles 'LLVM\bin') }
+    if ($Name -eq 'asm-lsp') {
+        $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE '.cargo' }
+        $dirs += (Join-Path $cargoHome 'bin')
+    }
     foreach ($dir in $dirs) {
         if (Test-Path (Join-Path $dir "$Name.exe")) { return $true }
     }
@@ -176,7 +181,7 @@ function Get-PythonServer {
 }
 
 function Install-LanguageServers {
-    Step 'Language servers for Rust, C/C++, Go, Python, TypeScript, shell, YAML, JSON and Docker (Windows, winget)'
+    Step 'Language servers for Rust, C/C++, Go, Python, TypeScript, shell, YAML, JSON, Docker and assembly (Windows, winget)'
 
     # Rust: rustup's own. Its rust-analyzer command is there before the component
     # is, failing until it's added.
@@ -285,6 +290,21 @@ function Install-LanguageServers {
             Ok 'docker-language-server (Dockerfile, Docker Compose)'
         } else {
             Note 'docker-language-server could not be installed; later: go install github.com/docker/docker-language-server/cmd/docker-language-server@latest'
+        }
+    }
+
+    # Assembly (x86, ARM, RISC-V): asm-lsp. No winget package has it, so cargo builds
+    # it from crates.io, with the Rust installed above.
+    if (Test-Server 'asm-lsp') {
+        Ok 'asm-lsp (assembly)'
+    } elseif (-not (Have 'cargo')) {
+        Note 'asm-lsp skipped: cargo is missing; later: cargo install asm-lsp --locked'
+    } else {
+        Note 'building asm-lsp with cargo install (a minute or two)'
+        if ((Invoke-Quietly { cargo install asm-lsp --locked }) -and (Test-Server 'asm-lsp')) {
+            Ok 'asm-lsp (assembly)'
+        } else {
+            Note 'asm-lsp could not be installed; later: cargo install asm-lsp --locked'
         }
     }
 }
